@@ -1,0 +1,19 @@
+# Secrets
+group_vars/vault.yml
+ssh/
+.env
+
+# macOS
+.DS_Store
+
+# Ansible
+*.retry
+
+# Playwright MCP logs
+.playwright-mcp/
+
+# IDE / editors
+.vscode/
+*.swp
+*.swo
+*~
