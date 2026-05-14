@@ -75,7 +75,7 @@ Secrets are loaded from:
 
 The vault password file is configured in `ansible.cfg` and stored locally at:
 
-- `~/.config/stratecode-lab/ansible-vault-pass`
+- `~/.config/ia-lab/ansible-vault-pass` (default, configurable via `ANSIBLE_VAULT_PASSWORD_FILE` in `.env`)
 
 Sensitive values moved to vault:
 
@@ -111,7 +111,7 @@ Current alert coverage:
 
 `OpenClaw` is no longer part of this project.
 
-The host is ready for manual testing against the local `llama.cpp` endpoints:
+The host exposes local `llama.cpp` endpoints for testing:
 
 - `http://127.0.0.1:8080/v1` for code
 - `http://127.0.0.1:8081/v1` for chat

@@ -1,50 +1,50 @@
-# WireGuard en el lab
+# WireGuard
 
-## Qué monta Ansible
+## What Ansible configures
 
-- Instala `wireguard`, `wireguard-tools` y `qrencode`.
-- Activa reenvío IPv4 en el servidor.
-- Genera claves del servidor si no existen.
-- Genera un primer cliente llamado `primary`.
-- Crea la configuración del servidor en `/etc/wireguard/wg0.conf`.
-- Crea la configuración del cliente en `/etc/wireguard/clients/primary.conf`.
-- Arranca `wg-quick@wg0`.
+- Installs `wireguard`, `wireguard-tools`, and `qrencode`.
+- Enables IPv4 forwarding on the server.
+- Generates server keys if they don't exist.
+- Generates an initial client named `primary`.
+- Creates the server configuration at `/etc/wireguard/wg0.conf`.
+- Creates the client configuration at `/etc/wireguard/clients/primary.conf`.
+- Starts `wg-quick@wg0`.
 
-## Qué hace falta fuera del servidor
+## What's needed outside the server
 
-1. Abrir en el router el puerto `51820/udp`.
-2. Redirigirlo a la IP LAN del servidor.
-3. Instalar WireGuard en el dispositivo cliente.
+1. Open port `51820/udp` on the router.
+2. Forward it to the server's LAN IP.
+3. Install WireGuard on the client device.
 
-## Perfil de red
+## Network profile
 
-- Subred VPN: `10.66.66.0/24`
-- Servidor VPN: `10.66.66.1`
-- Cliente inicial: `10.66.66.2`
-- Modo: split tunnel
+- VPN subnet: `10.66.66.0/24`
+- VPN server: `10.66.66.1`
+- Initial client: `10.66.66.2`
+- Mode: split tunnel
 
-Eso significa que el cliente solo enviará por la VPN:
+This means the client will only route through the VPN:
 
 - `10.66.66.0/24`
 - `192.168.0.0/24`
 
-Tu tráfico general de Internet seguirá saliendo por la conexión local del cliente.
+General internet traffic will continue to use the client's local connection.
 
-## Cómo importar el cliente
+## Importing the client profile
 
-En el servidor:
+On the server:
 
 ```bash
 sudo cat /etc/wireguard/clients/primary.conf
 ```
 
-O, si quieres QR para móvil:
+Or, for a mobile QR code:
 
 ```bash
 sudo qrencode -t ansiutf8 < /etc/wireguard/clients/primary.conf
 ```
 
-## Cómo comprobar el estado
+## Checking status
 
 ```bash
 sudo systemctl status wg-quick@wg0
@@ -52,20 +52,20 @@ sudo wg show
 ip addr show wg0
 ```
 
-## Qué deberías poder hacer al conectarte
+## What you should be able to reach once connected
 
-- Llegar a `https://<cockpit_domain>`
-- Llegar a `https://<observability_domain>`
-- Llegar a cualquier servicio de tu LAN que acepte tráfico desde `10.66.66.0/24`
+- `https://<cockpit_domain>`
+- `https://<observability_domain>`
+- Any LAN service that accepts traffic from `10.66.66.0/24`
 
-## Si quieres más clientes
+## Adding more clients
 
-Hay que añadir otro bloque en `wireguard_clients` con:
+Add another entry to `wireguard_clients` with:
 
 - `name`
 - `address`
 
-Y volver a ejecutar:
+Then re-run:
 
 ```bash
 ansible-playbook playbooks/bootstrap.yml

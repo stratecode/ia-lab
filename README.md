@@ -1,41 +1,50 @@
 # StrateCode Lab
 
-Infraestructura de homelab gestionada con Ansible. Provisiona y configura un servidor Ubuntu como plataforma de desarrollo con IA local, VPN, observabilidad y hardening básico.
+Ansible-managed homelab infrastructure. Provisions and configures an Ubuntu server as a self-hosted platform for local AI inference, VPN access, observability, and basic hardening.
 
-## Requisitos previos
+## Prerequisites
 
-- Ansible (core + `community.general`)
-- Acceso SSH al host con la clave en `ssh/lab`
-- Fichero de contraseña del vault en `~/.config/stratecode-lab/ansible-vault-pass`
-- Perfil AWS `route53-dns` configurado en el host para DDNS y certificados Let's Encrypt
-- Fichero `.env` con la configuración del entorno (copiar de `.env.example`)
+### Control machine (where you run Ansible)
 
-## Inicio rápido
+- Python 3.10+
+- Ansible core 2.15+ with the `community.general` collection
+- SSH access to the target host (keypair in `ssh/lab`)
+- Vault password file — path configured via `ANSIBLE_VAULT_PASSWORD_FILE` in `.env` (defaults to `~/.config/ia-lab/ansible-vault-pass`)
+- `.env` file with environment configuration (copy from `.env.example`)
+
+### Target host
+
+- **Ubuntu Server 22.04 or 24.04** — the playbooks use `apt`, `systemd`, `netplan`, and LVM tooling specific to Debian/Ubuntu. Other distributions are not supported.
+- AMD GPU with Vulkan drivers (for llama.cpp inference). NVIDIA/CUDA is not currently configured.
+- At least 16 GB RAM recommended (AI models + Docker services)
+- AWS CLI profile `route53-dns` configured for DDNS and Let's Encrypt DNS challenge (only needed if `route53_ddns_enabled` and `monitor_tls_mode` are active)
+
+## Quick start
 
 ```bash
-# Copiar y rellenar la configuración del entorno
+# Copy and fill in environment configuration
 cp .env.example .env
-# Editar .env con tus valores
+# Edit .env with your values
 
-# Cargar variables de entorno
+# Load environment variables
 set -a && source .env && set +a
 
-# Comprobar conectividad
+# Test connectivity
 ansible all -m ping
 
-# Ejecutar el playbook completo
+# Run the full playbook
 ansible-playbook playbooks/bootstrap.yml
 
-# Dry-run con diff
+# Dry-run with diff
 ansible-playbook playbooks/bootstrap.yml --check --diff
 
-# Ejecutar un solo role
+# Run a single role
 ansible-playbook playbooks/bootstrap.yml --tags wireguard
 ```
 
-## Arquitectura
+## Architecture
 
-Un único host Ubuntu Server en una LAN doméstica con GPU AMD (Vulkan).
+A single Ubuntu Server host on a home LAN with an AMD GPU (Vulkan).
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -59,97 +68,98 @@ Un único host Ubuntu Server en una LAN doméstica con GPU AMD (Vulkan).
 
 ## Roles
 
-Los roles se aplican en orden de dependencia:
+Roles are applied in dependency order:
 
-| # | Role | Descripción |
+| # | Role | Description |
 |---|------|-------------|
-| 1 | `server_baseline` | Paquetes base, Docker, fail2ban, LVM, red, node_exporter |
-| 2 | `route53_ddns` | Actualización dinámica de DNS en Route53 (systemd timer) |
-| 3 | `wireguard` | Servidor VPN WireGuard + perfiles de cliente |
-| 4 | `llama_cpp` | Compilación de llama.cpp con Vulkan, servicios systemd |
+| 1 | `server_baseline` | Base packages, Docker, fail2ban, LVM, networking, node_exporter |
+| 2 | `route53_ddns` | Dynamic DNS update via Route53 (systemd timer) |
+| 3 | `wireguard` | WireGuard VPN server + client profiles |
+| 4 | `llama_cpp` | Build llama.cpp with Vulkan, systemd services |
 | 5 | `monitor` | Cockpit + Nginx reverse proxy + TLS (Let's Encrypt) |
-| 6 | `observability` | Prometheus, Grafana (Docker), Alertmanager, reglas de alerta |
+| 6 | `observability` | Prometheus, Grafana (Docker), Alertmanager, alert rules |
 
-## Estructura del proyecto
+## Project structure
 
 ```
 .
-├── ansible.cfg              # Configuración de Ansible
-├── inventory.yml            # Inventario (host único)
-├── .env.example             # Plantilla de variables de entorno
-├── .env                     # Variables de entorno reales (excluido de git)
+├── ansible.cfg              # Ansible configuration
+├── inventory.yml            # Inventory (single host)
+├── .env.example             # Environment variables template
+├── .env                     # Real environment values (git-ignored)
 ├── group_vars/
-│   ├── all.yml              # Variables globales (lee de env vars)
-│   └── vault.yml            # Secretos cifrados (ansible-vault)
+│   ├── all.yml              # Global variables (reads from env vars)
+│   └── vault.yml            # Encrypted secrets (ansible-vault)
 ├── host_vars/
-│   └── lab.yml              # Overrides del host (lee de env vars)
+│   └── lab.yml              # Host overrides (reads from env vars)
 ├── playbooks/
-│   └── bootstrap.yml        # Playbook principal
-├── roles/                   # Un directorio por role (tasks + handlers)
-├── docs/                    # Documentación por subsistema
-└── ssh/                     # Par de claves SSH (excluido de git)
+│   └── bootstrap.yml        # Main playbook
+├── roles/                   # One directory per role (tasks + handlers)
+├── docs/                    # Per-subsystem documentation
+└── ssh/                     # SSH keypair (git-ignored)
 ```
 
-## Servicios expuestos
+## Exposed services
 
-| URL | Servicio | Acceso |
-|-----|----------|--------|
+| URL | Service | Access |
+|-----|---------|--------|
 | `https://<cockpit_domain>` | Cockpit | LAN + VPN |
 | `https://<observability_domain>` | Grafana | LAN + VPN |
 | `https://<observability_domain>/prometheus/` | Prometheus | LAN + VPN |
 | `http://127.0.0.1:8080/v1` | llama.cpp (code) | localhost |
 | `http://127.0.0.1:8081/v1` | llama.cpp (chat) | localhost |
 
-Los dominios se configuran en `group_vars/all.yml` (`cockpit_domain`, `observability_domain`).
+Domains are configured in `group_vars/all.yml` (`cockpit_domain`, `observability_domain`).
 
 ## VPN (WireGuard)
 
-Split tunnel que enruta solo el tráfico hacia la subred VPN (`10.66.66.0/24`) y la LAN (`192.168.0.0/24`).
+Split tunnel routing only VPN subnet (`10.66.66.0/24`) and LAN (`192.168.0.0/24`) traffic.
 
-- Puerto: `51820/udp` (requiere port forward en el router)
-- Endpoint dinámico: configurado en `route53_ddns_record_name` (actualizado por DDNS)
-- Perfiles de cliente generados en `/etc/wireguard/clients/`
+- Port: `51820/udp` (requires port forward on the router)
+- Dynamic endpoint: configured via `route53_ddns_record_name` (updated by DDNS)
+- Client profiles generated at `/etc/wireguard/clients/`
 
-Más detalles en [docs/wireguard.md](docs/wireguard.md).
+More details in [docs/wireguard.md](docs/wireguard.md).
 
-## IA local (llama.cpp)
+## Local AI (llama.cpp)
 
-Dos instancias con backend Vulkan (AMD GPU):
+Two instances with Vulkan backend (AMD GPU):
 
-| Instancia | Puerto | Modelo | Uso |
-|-----------|--------|--------|-----|
-| `llama-cpp-code` | 8080 | Qwen2.5-Coder-3B-Instruct (Q4_K_M) | Asistencia de código |
-| `llama-cpp-chat` | 8081 | Qwen2.5-Coder-3B-Instruct (Q4_K_M) | Chat / orquestación |
+| Instance | Port | Model | Purpose |
+|----------|------|-------|---------|
+| `llama-cpp-code` | 8080 | Qwen2.5-Coder-3B-Instruct (Q4_K_M) | Code assistance |
+| `llama-cpp-chat` | 8081 | Qwen2.5-Coder-3B-Instruct (Q4_K_M) | Chat / orchestration |
 
-API compatible con OpenAI (`/v1/chat/completions`, `/v1/completions`).
+OpenAI-compatible API (`/v1/chat/completions`, `/v1/completions`).
 
-## Observabilidad
+## Observability
 
-- **Prometheus** — métricas del sistema vía node_exporter
-- **Grafana** — dashboards (Docker, puerto 3000)
-- **Alertmanager** — alertas a Slack (opcional, requiere webhook en vault)
-- **PCP** — Performance Co-Pilot para métricas avanzadas
-- **Cockpit** — consola web de administración
+- **Prometheus** — system metrics via node_exporter
+- **Grafana** — dashboards (Docker, port 3000)
+- **Alertmanager** — Slack alerts (optional, requires webhook in vault)
+- **PCP** — Performance Co-Pilot for advanced metrics
+- **Cockpit** — web administration console
 
-Alertas configuradas: nodo caído, CPU alta, memoria alta, disco lleno, presión I/O, temperatura elevada.
+Configured alerts: node down, high CPU, high memory, root filesystem full, disk I/O pressure, high temperature.
 
-## Gestión de secretos
+## Secrets management
 
 ```bash
-# Ver secretos
+# View secrets
 ansible-vault view group_vars/vault.yml
 
-# Editar secretos
+# Edit secrets
 ansible-vault edit group_vars/vault.yml
 ```
 
-Variables sensibles en el vault:
+Sensitive variables in the vault:
 - `vault_grafana_admin_password`
 - `vault_alertmanager_slack_webhook_url`
-- Credenciales AWS para Route53
-- Claves de WireGuard
+- AWS credentials for Route53
+- WireGuard keys
 
-## Documentación adicional
+## Additional documentation
 
-- [Server Baseline](docs/server-baseline.md) — detalle de la configuración base
-- [WireGuard](docs/wireguard.md) — configuración VPN y guía de clientes
+- [Getting Started](docs/getting-started.md) — full setup guide from scratch (SSH keys, vault, first run)
+- [Server Baseline](docs/server-baseline.md) — base configuration details
+- [WireGuard](docs/wireguard.md) — VPN setup and client guide
