@@ -1,0 +1,30 @@
+- name: Restart docker
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted
+    enabled: true
+
+- name: Restart fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    state: restarted
+    enabled: true
+
+- name: Restart prometheus
+  ansible.builtin.systemd:
+    name: snap.prometheus.prometheus
+    state: restarted
+    enabled: true
+
+- name: Restart smartmontools
+  ansible.builtin.systemd:
+    name: smartmontools
+    state: restarted
+    enabled: true
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Apply netplan
+  ansible.builtin.command: netplan apply

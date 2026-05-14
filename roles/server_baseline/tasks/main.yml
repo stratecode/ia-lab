@@ -1,0 +1,172 @@
+- name: Expand root logical volume to use free disk space
+  community.general.lvol:
+    vg: "{{ server_root_lv_path.split('/')[2] }}"
+    lv: "{{ server_root_lv_path.split('/')[3] }}"
+    size: "{{ server_root_lv_size }}"
+    resizefs: true
+  when: server_baseline_enabled and server_root_lv_expand
+
+- name: Install baseline server packages
+  ansible.builtin.apt:
+    name: "{{ server_packages }}"
+    state: present
+  when: server_baseline_enabled
+
+- name: Ensure lab directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /srv/ai-lab
+    - /srv/containers
+    - "{{ docker_data_root }}"
+  when: server_baseline_enabled
+
+- name: Configure Docker daemon
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+    content: |
+      {
+        "data-root": "{{ docker_data_root }}",
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "10m",
+          "max-file": "3"
+        }
+      }
+  notify: Restart docker
+  when: server_baseline_enabled
+
+- name: Ensure docker group exists
+  ansible.builtin.group:
+    name: docker
+    state: present
+  when: server_baseline_enabled
+
+- name: Add primary user to docker group
+  ansible.builtin.user:
+    name: "{{ docker_user }}"
+    groups: docker
+    append: true
+  when: server_baseline_enabled and not ansible_check_mode
+
+- name: Configure smartd
+  ansible.builtin.copy:
+    dest: /etc/smartd.conf
+    mode: "0644"
+    content: |
+      DEVICESCAN -a -o on -S on -s (S/../.././02|L/../../6/03)
+  notify: Restart smartmontools
+  when: server_baseline_enabled
+
+- name: Configure fail2ban jail
+  ansible.builtin.copy:
+    dest: /etc/fail2ban/jail.d/lab.local
+    mode: "0644"
+    content: |
+      [DEFAULT]
+      bantime = 1h
+      findtime = 10m
+      maxretry = 5
+      ignoreip = 127.0.0.1/8 ::1 {{ server_lan_cidr }}
+
+      [sshd]
+      enabled = true
+  notify: Restart fail2ban
+  when: server_baseline_enabled
+
+- name: Tune netplan to prefer ethernet over wifi
+  ansible.builtin.copy:
+    dest: /etc/netplan/90-lab-network.yaml
+    mode: "0644"
+    content: |
+      network:
+        version: 2
+        ethernets:
+          eno1:
+            dhcp4: true
+            optional: true
+            dhcp4-overrides:
+              route-metric: 110
+          enp3s0:
+            dhcp4: true
+            optional: true
+            dhcp4-overrides:
+              route-metric: 100
+      {% if server_wifi_enabled %}
+        wifis:
+          {{ server_wifi_interface }}:
+            dhcp4-overrides:
+              route-metric: 600
+      {% endif %}
+  notify: Apply netplan
+  when: server_baseline_enabled
+
+- name: Install service to keep Wi-Fi disabled
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/lab-disable-wifi.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Disable Wi-Fi interface for lab server
+      After=network-pre.target
+      Before=network.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/sh -c '/usr/sbin/rfkill block wifi || true; /sbin/ip link set {{ server_wifi_interface }} down || true'
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Reload systemd
+  when:
+    - server_baseline_enabled
+    - not server_wifi_enabled
+
+- name: Ensure Wi-Fi disable service is enabled and started
+  ansible.builtin.systemd:
+    name: lab-disable-wifi.service
+    enabled: true
+    state: started
+  when:
+    - server_baseline_enabled
+    - not server_wifi_enabled
+
+- name: Remove Wi-Fi disable service when Wi-Fi is enabled
+  ansible.builtin.file:
+    path: /etc/systemd/system/lab-disable-wifi.service
+    state: absent
+  notify: Reload systemd
+  when:
+    - server_baseline_enabled
+    - server_wifi_enabled
+
+- name: Unblock Wi-Fi when feature is enabled
+  ansible.builtin.command: /usr/sbin/rfkill unblock wifi
+  changed_when: false
+  failed_when: false
+  when:
+    - server_baseline_enabled
+    - server_wifi_enabled
+
+- name: Enable and start baseline services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop:
+    - docker
+    - fail2ban
+    - prometheus-node-exporter
+    - smartmontools
+  when: server_baseline_enabled
+
+- name: Detect sensor chips
+  ansible.builtin.command: sensors-detect --auto
+  register: sensors_detect
+  changed_when: "'Driver' in sensors_detect.stdout or 'driver' in sensors_detect.stdout"
+  failed_when: false
+  when: server_baseline_enabled

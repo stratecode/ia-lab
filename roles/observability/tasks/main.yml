@@ -1,0 +1,323 @@
+- name: Ensure observability directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /srv/ai-lab/observability
+    - /srv/ai-lab/observability/grafana
+    - /srv/ai-lab/observability/grafana/provisioning
+    - /srv/ai-lab/observability/grafana/provisioning/datasources
+    - /srv/ai-lab/observability/grafana/provisioning/dashboards
+    - /srv/ai-lab/observability/grafana/dashboards
+    - /etc/alertmanager
+    - /var/snap/prometheus/current/promreg
+  when: grafana_enabled or alertmanager_enabled
+
+- name: Configure Alertmanager
+  ansible.builtin.copy:
+    dest: /etc/alertmanager/alertmanager.yml
+    mode: "0644"
+    content: |
+      global:
+        resolve_timeout: 5m
+
+      route:
+        receiver: default
+        group_by: ['alertname']
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 4h
+
+      receivers:
+        - name: default
+      {% if alertmanager_slack_webhook_url | length > 0 %}
+          slack_configs:
+            - api_url: {{ alertmanager_slack_webhook_url | to_json }}
+              send_resolved: true
+              username: "alertmanager"
+              title: >-
+                [{{ '{{' }} .Status | toUpper {{ '}}' }}]
+                {{ '{{' }} .CommonLabels.alertname {{ '}}' }}
+              text: >-
+                {{ '{{' }} range .Alerts {{ '}}' }}
+                *Summary:* {{ '{{' }} .Annotations.summary {{ '}}' }}
+                *Description:* {{ '{{' }} .Annotations.description {{ '}}' }}
+                {{ '{{' }} end {{ '}}' }}
+      {% endif %}
+  notify: Restart alertmanager
+  when: alertmanager_enabled
+
+- name: Configure Prometheus alert rules
+  ansible.builtin.copy:
+    dest: /var/snap/prometheus/current/promreg/lab-alerts.yml
+    mode: "0644"
+    content: |
+      groups:
+        - name: lab-host
+          rules:
+            - alert: NodeDown
+              expr: up{job="node"} == 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: Node exporter is down
+                description: The node exporter target is not responding.
+
+            - alert: HighCPUUsage
+              expr: 100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle",job="node"}[5m])) * 100) > 85
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: High CPU usage
+                description: CPU usage is above 85% for more than 10 minutes.
+
+            - alert: HighMemoryUsage
+              expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: High memory usage
+                description: Memory usage is above 90% for more than 10 minutes.
+
+            - alert: RootFilesystemHighUsage
+              expr: 100 * (1 - (node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"})) > 85
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: Root filesystem usage is high
+                description: Root filesystem usage is above 85%.
+
+            - alert: DiskIOPressure
+              expr: max(rate(node_disk_io_time_seconds_total{device!~"^(loop|ram|zram|dm-|md).*"}[5m])) > 0.6
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: Disk IO pressure
+                description: Disk IO time on a physical block device is sustained above 60%.
+
+            - alert: HostTemperatureHigh
+              expr: max(node_hwmon_temp_celsius) > 80
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: Host temperature is high
+                description: A hardware sensor is reporting above 80C.
+  notify: Restart prometheus
+  when: alertmanager_enabled
+
+- name: Configure Prometheus for alertmanager and rules
+  ansible.builtin.copy:
+    dest: /var/snap/prometheus/current/prometheus.yml
+    mode: "0644"
+    content: |
+      global:
+        scrape_interval: 15s
+        evaluation_interval: 15s
+
+      alerting:
+        alertmanagers:
+          - static_configs:
+              - targets: ["localhost:{{ alertmanager_port }}"]
+
+      rule_files:
+        - /var/snap/prometheus/current/promreg/*.yml
+
+      scrape_configs:
+        - job_name: "node"
+          static_configs:
+            - targets: ["localhost:9100"]
+
+        - job_name: "prometheus"
+          metrics_path: /prometheus/metrics
+          static_configs:
+            - targets: ["localhost:9090"]
+  notify: Restart prometheus
+  when: alertmanager_enabled
+
+- name: Configure Prometheus web external URL
+  ansible.builtin.copy:
+    dest: /var/snap/prometheus/current/daemon_arguments
+    mode: "0644"
+    content: |
+      ARGS="--web.external-url=https://{{ observability_domain }}/prometheus/ --web.route-prefix=/prometheus/"
+  notify: Restart prometheus
+  when: alertmanager_enabled
+
+- name: Provision Grafana datasource
+  ansible.builtin.copy:
+    dest: /srv/ai-lab/observability/grafana/provisioning/datasources/prometheus.yml
+    mode: "0644"
+    content: |
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          access: proxy
+          url: http://host.docker.internal:9090/prometheus
+          isDefault: true
+          editable: false
+  when: grafana_enabled
+
+- name: Provision Grafana dashboards provider
+  ansible.builtin.copy:
+    dest: /srv/ai-lab/observability/grafana/provisioning/dashboards/dashboards.yml
+    mode: "0644"
+    content: |
+      apiVersion: 1
+      providers:
+        - name: 'lab'
+          orgId: 1
+          folder: 'Lab'
+          type: file
+          disableDeletion: false
+          updateIntervalSeconds: 30
+          options:
+            path: /var/lib/grafana/dashboards
+  when: grafana_enabled
+
+- name: Install Grafana dashboard
+  ansible.builtin.copy:
+    dest: /srv/ai-lab/observability/grafana/dashboards/lab-overview.json
+    mode: "0644"
+    content: |
+      {
+        "annotations": {"list": []},
+        "editable": true,
+        "graphTooltip": 0,
+        "panels": [
+          {
+            "type": "timeseries",
+            "title": "CPU Usage %",
+            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+            "targets": [
+              {"expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\",job=\"node\"}[5m])) * 100)", "legendFormat": "CPU"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Memory Usage %",
+            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+            "targets": [
+              {"expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100", "legendFormat": "Memory"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Root Filesystem Usage %",
+            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+            "targets": [
+              {"expr": "100 * (1 - (node_filesystem_avail_bytes{mountpoint=\"/\",fstype!=\"tmpfs\"} / node_filesystem_size_bytes{mountpoint=\"/\",fstype!=\"tmpfs\"}))", "legendFormat": "/"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Load Average",
+            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+            "targets": [
+              {"expr": "node_load1", "legendFormat": "load1"},
+              {"expr": "node_load5", "legendFormat": "load5"},
+              {"expr": "node_load15", "legendFormat": "load15"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Disk IO Time",
+            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+            "targets": [
+              {"expr": "rate(node_disk_io_time_seconds_total{device!~\"^(loop|ram|zram|dm-|md).*\"}[5m])", "legendFormat": "{% raw %}{{device}}{% endraw %}"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Temperature C",
+            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+            "targets": [
+              {"expr": "node_hwmon_temp_celsius", "legendFormat": "{% raw %}{{sensor}}{% endraw %}"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Network Errors",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+            "targets": [
+              {"expr": "rate(node_network_receive_errs_total{device!=\"lo\"}[5m])", "legendFormat": "{% raw %}{{device}}{% endraw %} rx"},
+              {"expr": "rate(node_network_transmit_errs_total{device!=\"lo\"}[5m])", "legendFormat": "{% raw %}{{device}}{% endraw %} tx"}
+            ]
+          },
+          {
+            "type": "stat",
+            "title": "Targets Up",
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+            "targets": [
+              {"expr": "sum(up)", "legendFormat": "up"}
+            ]
+          }
+        ],
+        "schemaVersion": 39,
+        "style": "dark",
+        "tags": ["lab"],
+        "templating": {"list": []},
+        "time": {"from": "now-6h", "to": "now"},
+        "timezone": "browser",
+        "title": "Lab Overview",
+        "uid": "lab-overview",
+        "version": 1
+      }
+  when: grafana_enabled
+
+- name: Install Grafana compose file
+  ansible.builtin.copy:
+    dest: /srv/ai-lab/observability/docker-compose.yml
+    mode: "0644"
+    content: |
+      services:
+        grafana:
+          image: grafana/grafana-oss:latest
+          container_name: grafana
+          restart: unless-stopped
+          ports:
+            - "127.0.0.1:{{ grafana_port }}:3000"
+          extra_hosts:
+            - "host.docker.internal:host-gateway"
+          env_file:
+            - /srv/ai-lab/observability/grafana.env
+          environment:
+            GF_SERVER_DOMAIN: "{{ observability_domain }}"
+            GF_SERVER_ROOT_URL: "https://{{ observability_domain }}/"
+          volumes:
+            - grafana-data:/var/lib/grafana
+            - /srv/ai-lab/observability/grafana/provisioning:/etc/grafana/provisioning
+            - /srv/ai-lab/observability/grafana/dashboards:/var/lib/grafana/dashboards
+
+      volumes:
+        grafana-data:
+  when: grafana_enabled
+
+- name: Install Grafana environment file
+  ansible.builtin.copy:
+    dest: /srv/ai-lab/observability/grafana.env
+    mode: "0600"
+    content: |
+      GF_SECURITY_ADMIN_USER={{ grafana_admin_user }}
+      GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password }}
+  when: grafana_enabled
+
+- name: Start Grafana stack
+  ansible.builtin.command: docker compose up -d
+  args:
+    chdir: /srv/ai-lab/observability
+  when: grafana_enabled
+
+- name: Enable and start alertmanager
+  ansible.builtin.systemd:
+    name: prometheus-alertmanager
+    state: started
+    enabled: true
+  when: alertmanager_enabled

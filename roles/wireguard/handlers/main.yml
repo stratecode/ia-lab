@@ -1,0 +1,9 @@
+- name: Reload systemd for wireguard
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart wireguard
+  ansible.builtin.systemd:
+    name: "wg-quick@{{ wireguard_interface }}"
+    state: restarted
+    enabled: true

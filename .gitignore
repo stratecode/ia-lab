@@ -2,6 +2,7 @@
 group_vars/vault.yml
 ssh/
 .env
+.kiro
 
 # macOS
 .DS_Store

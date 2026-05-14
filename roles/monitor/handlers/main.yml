@@ -1,0 +1,25 @@
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart cockpit socket
+  ansible.builtin.systemd:
+    name: cockpit.socket
+    state: restarted
+    enabled: true
+
+- name: Reload nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: restarted
+
+- name: Restart PCP services
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: restarted
+    enabled: true
+  loop:
+    - pmcd
+    - pmproxy
+    - pmie
+    - pmlogger

@@ -1,0 +1,307 @@
+- name: Install monitoring and proxy packages
+  ansible.builtin.apt:
+    name:
+      - cockpit
+      - nginx
+      - openssl
+      - certbot
+      - python3-certbot-nginx
+      - python3-certbot-dns-route53
+    state: present
+
+- name: Remove unsupported monitoring packages
+  ansible.builtin.apt:
+    name: "{{ monitor_absent_packages }}"
+    state: absent
+    purge: true
+    autoremove: true
+
+- name: Reset failed state for removed legacy services
+  ansible.builtin.command: systemctl reset-failed openipmi.service
+  changed_when: false
+  failed_when: false
+
+- name: Read enabled PMIE rules
+  ansible.builtin.command: pmieconf -c rules enabled
+  register: monitor_pmie_enabled_rules
+  changed_when: false
+
+- name: Disable PMIE groups that do not apply to this host
+  ansible.builtin.command: "pmieconf -c disable {{ item }}"
+  loop: "{{ monitor_pmie_disabled_groups }}"
+  when: item in monitor_pmie_enabled_rules.stdout
+  notify: Restart PCP services
+
+- name: Ensure cockpit config directory exists
+  ansible.builtin.file:
+    path: /etc/cockpit
+    state: directory
+    mode: "0755"
+
+- name: Ensure cockpit socket override directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/cockpit.socket.d
+    state: directory
+    mode: "0755"
+
+- name: Configure cockpit socket port for local reverse proxy
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/cockpit.socket.d/listen.conf
+    mode: "0644"
+    content: |
+      [Socket]
+      ListenStream=
+      ListenStream=127.0.0.1:{{ monitor_backend_port }}
+  notify:
+    - Reload systemd
+    - Restart cockpit socket
+
+- name: Configure cockpit trusted origins
+  ansible.builtin.copy:
+    dest: /etc/cockpit/cockpit.conf
+    mode: "0644"
+    content: |
+      [WebService]
+      Origins = https://{{ cockpit_domain }} wss://{{ cockpit_domain }}
+      ProtocolHeader = X-Forwarded-Proto
+  notify: Restart cockpit socket
+
+- name: Ensure self-signed certificate directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /etc/ssl/private
+    - /etc/ssl/certs
+
+- name: Generate self-signed certificate for nginx
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -x509
+      - -nodes
+      - -newkey
+      - rsa:4096
+      - -days
+      - "365"
+      - -keyout
+      - "/etc/ssl/private/{{ cockpit_domain }}.key"
+      - -out
+      - "/etc/ssl/certs/{{ cockpit_domain }}.crt"
+      - -subj
+      - "/CN={{ cockpit_domain }}"
+  args:
+    creates: "/etc/ssl/certs/{{ cockpit_domain }}.crt"
+  when: monitor_tls_mode in ["selfsigned", "letsencrypt"]
+
+- name: Issue Let's Encrypt certificate with Route53 DNS challenge
+  ansible.builtin.command:
+    argv: >-
+      {{
+        [
+          'certbot',
+          'certonly',
+          '--dns-route53',
+          '--non-interactive',
+          '--agree-tos',
+          '--expand',
+          '--keep-until-expiring',
+          '-d', cockpit_domain,
+          '-d', observability_domain
+        ]
+        + (
+          ['-m', monitor_letsencrypt_email]
+          if monitor_letsencrypt_email | length > 0
+          else ['--register-unsafely-without-email']
+        )
+      }}
+  register: monitor_certbot
+  changed_when: >-
+    ('Certificate not yet due for renewal' not in monitor_certbot.stdout)
+    and ('not yet due for renewal' not in monitor_certbot.stdout)
+  environment:
+    AWS_PROFILE: "{{ monitor_letsencrypt_aws_profile }}"
+    AWS_SHARED_CREDENTIALS_FILE: /root/.aws/credentials
+    AWS_CONFIG_FILE: /root/.aws/config
+  when:
+    - monitor_tls_mode == "letsencrypt"
+    - monitor_letsencrypt_challenge == "dns-route53"
+
+- name: Select nginx certificate paths
+  ansible.builtin.set_fact:
+    monitor_nginx_ssl_certificate: >-
+      {{
+        '/etc/letsencrypt/live/' ~ cockpit_domain ~ '/fullchain.pem'
+        if monitor_tls_mode == 'letsencrypt'
+        else '/etc/ssl/certs/' ~ cockpit_domain ~ '.crt'
+      }}
+    monitor_nginx_ssl_certificate_key: >-
+      {{
+        '/etc/letsencrypt/live/' ~ cockpit_domain ~ '/privkey.pem'
+        if monitor_tls_mode == 'letsencrypt'
+        else '/etc/ssl/private/' ~ cockpit_domain ~ '.key'
+      }}
+
+- name: Configure nginx reverse proxy for cockpit
+  ansible.builtin.copy:
+    dest: /etc/nginx/sites-available/monitor.conf
+    mode: "0644"
+    content: |
+      server {
+          listen 80;
+          listen [::]:80;
+          server_name {{ cockpit_domain }};
+
+          location /.well-known/acme-challenge/ {
+              root /var/www/html;
+          }
+
+          location / {
+              return 301 https://$host$request_uri;
+          }
+      }
+
+      server {
+          listen 443 ssl;
+          listen [::]:443 ssl;
+          http2 on;
+          server_name {{ cockpit_domain }};
+
+          ssl_certificate {{ monitor_nginx_ssl_certificate }};
+          ssl_certificate_key {{ monitor_nginx_ssl_certificate_key }};
+
+          allow 127.0.0.1;
+          allow ::1;
+          allow {{ server_lan_cidr }};
+      {% if wireguard_enabled %}
+          allow {{ wireguard_subnet }};
+      {% endif %}
+          deny all;
+
+          location / {
+              proxy_pass https://127.0.0.1:{{ monitor_backend_port }};
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_http_version 1.1;
+              proxy_buffering off;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection "upgrade";
+              gzip off;
+          }
+      }
+
+      server {
+          listen 80;
+          listen [::]:80;
+          server_name {{ observability_domain }};
+
+          location /.well-known/acme-challenge/ {
+              root /var/www/html;
+          }
+
+          location / {
+              return 301 https://$host$request_uri;
+          }
+      }
+
+      server {
+          listen 443 ssl;
+          listen [::]:443 ssl;
+          http2 on;
+          server_name {{ observability_domain }};
+
+          ssl_certificate {{ monitor_nginx_ssl_certificate }};
+          ssl_certificate_key {{ monitor_nginx_ssl_certificate_key }};
+
+          allow 127.0.0.1;
+          allow ::1;
+          allow {{ server_lan_cidr }};
+      {% if wireguard_enabled %}
+          allow {{ wireguard_subnet }};
+      {% endif %}
+          deny all;
+
+          location /prometheus/ {
+              proxy_pass http://127.0.0.1:9090/prometheus/;
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header X-Forwarded-Host $host;
+          }
+
+          location / {
+              proxy_pass http://127.0.0.1:{{ grafana_port }}/;
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header X-Forwarded-Host $host;
+          }
+      }
+  notify: Reload nginx
+
+- name: Check whether nginx monitor site exists
+  ansible.builtin.stat:
+    path: /etc/nginx/sites-available/monitor.conf
+  register: monitor_nginx_site
+
+- name: Enable monitor nginx site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/monitor.conf
+    dest: /etc/nginx/sites-enabled/monitor.conf
+    state: link
+  notify: Reload nginx
+  when: monitor_nginx_site.stat.exists
+
+- name: Disable default nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload nginx
+
+- name: Flush handlers before starting services
+  ansible.builtin.meta: flush_handlers
+
+- name: Gather service facts
+  ansible.builtin.service_facts:
+
+- name: Ensure PCP services are enabled and started
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: started
+    enabled: true
+  loop: "{{ monitor_pcp_services }}"
+  when: not ansible_check_mode or (item ~ '.service') in ansible_facts.services
+
+- name: Ensure cockpit socket is enabled and started
+  ansible.builtin.systemd:
+    name: cockpit.socket
+    state: started
+    enabled: true
+    daemon_reload: true
+  when: not ansible_check_mode or 'cockpit.socket' in ansible_facts.services
+
+- name: Ensure nginx is enabled and started
+  ansible.builtin.systemd:
+    name: nginx
+    state: started
+    enabled: true
+  when: not ansible_check_mode or 'nginx.service' in ansible_facts.services
+
+- name: Flush handlers before certificate issuance
+  ansible.builtin.meta: flush_handlers
+
+- name: Check public DNS for monitor domain
+  ansible.builtin.command: getent ahostsv4 {{ cockpit_domain }}
+  register: monitor_dns_lookup
+  failed_when: false
+  changed_when: false
+
+- name: Warn when Let's Encrypt prerequisites are missing
+  ansible.builtin.debug:
+    msg: >-
+      Let's Encrypt not attempted for {{ cockpit_domain }}, {{ observability_domain }}.
+      For dns-route53, ensure AWS profile {{ monitor_letsencrypt_aws_profile }}
+      can edit Route53. For HTTP challenge, public DNS and ports 80/443 must
+      point to this server.
+  when:
+    - monitor_tls_mode != "letsencrypt"

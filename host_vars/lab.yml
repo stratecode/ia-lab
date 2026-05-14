@@ -1,0 +1,5 @@
+hostname: "{{ lookup('env', 'LAB_HOSTNAME') | default('localhost', true) }}"
+
+static_ip: "{{ lookup('env', 'LAB_STATIC_IP') | default('192.168.1.100', true) }}"
+
+gpu_type: "{{ lookup('env', 'LAB_GPU_TYPE') | default('amd', true) }}"

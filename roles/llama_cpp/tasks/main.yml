@@ -1,0 +1,184 @@
+- name: Install llama.cpp build dependencies
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - cmake
+      - git
+      - ninja-build
+      - pkg-config
+      - libssl-dev
+      - libvulkan-dev
+      - glslc
+      - spirv-headers
+      - vulkan-tools
+      - libvulkan-dev
+      - mesa-vulkan-drivers
+      - libopenblas-dev
+    state: present
+  when: llama_cpp_enabled
+
+- name: Ensure llama.cpp group exists
+  ansible.builtin.group:
+    name: "{{ llama_cpp_group }}"
+    state: present
+  when: llama_cpp_enabled
+
+- name: Ensure llama.cpp user exists
+  ansible.builtin.user:
+    name: "{{ llama_cpp_user }}"
+    group: "{{ llama_cpp_group }}"
+    create_home: true
+    home: "/home/{{ llama_cpp_user }}"
+    shell: /bin/bash
+    groups:
+      - render
+      - video
+    append: true
+    state: present
+  when: llama_cpp_enabled
+
+- name: Ensure llama.cpp directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ llama_cpp_root_dir }}", owner: "root", group: "root", mode: "0755" }
+    - { path: "{{ llama_cpp_cache_dir }}", owner: "{{ llama_cpp_user }}", group: "{{ llama_cpp_group }}", mode: "0755" }
+  when: llama_cpp_enabled
+
+- name: Clone llama.cpp source
+  ansible.builtin.git:
+    repo: https://github.com/ggml-org/llama.cpp.git
+    dest: "{{ llama_cpp_src_dir }}"
+    depth: 1
+    single_branch: true
+    version: master
+  when: llama_cpp_enabled
+
+- name: Configure llama.cpp build
+  ansible.builtin.command:
+    argv:
+      - cmake
+      - -S
+      - "{{ llama_cpp_src_dir }}"
+      - -B
+      - "{{ llama_cpp_build_dir }}"
+      - -G
+      - Ninja
+      - -DGGML_VULKAN=ON
+      - -DLLAMA_OPENSSL=ON
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DGGML_NATIVE=ON
+      - -DGGML_BLAS=ON
+      - -DGGML_BLAS_VENDOR=OpenBLAS
+  notify: Restart llama.cpp services
+  when: llama_cpp_enabled
+
+- name: Build llama.cpp
+  ansible.builtin.command:
+    argv:
+      - cmake
+      - --build
+      - "{{ llama_cpp_build_dir }}"
+      - -j16
+      - --config
+      - Release
+      - --parallel
+  notify: Restart llama.cpp services
+  when: llama_cpp_enabled
+
+- name: Validate Vulkan detection before service install
+  ansible.builtin.command:
+    argv:
+      - vulkaninfo
+      - --summary
+  changed_when: false
+  when: llama_cpp_enabled
+
+- name: Install llama.cpp systemd service
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.service_name }}.service"
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=llama.cpp Vulkan inference server ({{ item.alias }})
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User={{ llama_cpp_user }}
+      Group={{ llama_cpp_group }}
+      WorkingDirectory={{ llama_cpp_root_dir }}
+      Environment=HOME=/home/{{ llama_cpp_user }}
+      Environment=HF_HOME={{ llama_cpp_cache_dir }}
+      Environment=XDG_CACHE_HOME={{ llama_cpp_cache_dir }}
+      ExecStart={{ llama_cpp_build_dir }}/bin/llama-server \
+        -hf {{ item.hf_repo }} \
+        --alias {{ item.alias }} \
+        --host 0.0.0.0 \
+        --port {{ item.port }} \
+        --ctx-size {{ item.ctx_size }} \
+        --threads {{ item.threads }} \
+        --parallel {{ item.parallel }} \
+        --n-gpu-layers {{ item.n_gpu_layers }} \
+        --batch-size 512 \
+        --ubatch-size 512 \
+        --flash-attn auto \
+        --temp 0.5 \
+        --top-p 0.9 \
+        --repeat-penalty 1.15 \
+        --jinja \
+        --metrics
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+  loop: "{{ llama_cpp_instances }}"
+  notify:
+    - Reload systemd for llama.cpp
+    - Restart llama.cpp services
+  when: llama_cpp_enabled
+
+- name: Stop legacy llama.cpp service when present
+  ansible.builtin.systemd:
+    name: llama-cpp
+    state: stopped
+    enabled: false
+  failed_when: false
+  when: llama_cpp_enabled
+
+- name: Remove legacy llama.cpp unit
+  ansible.builtin.file:
+    path: /etc/systemd/system/llama-cpp.service
+    state: absent
+  when: llama_cpp_enabled
+
+- name: Flush llama.cpp handlers before service validation
+  ansible.builtin.meta: flush_handlers
+  when: llama_cpp_enabled
+
+- name: Ensure llama.cpp service is enabled and started
+  ansible.builtin.systemd:
+    name: "{{ item.service_name }}"
+    enabled: true
+    state: started
+  loop: "{{ llama_cpp_instances }}"
+  when: llama_cpp_enabled
+
+- name: Wait for llama.cpp API
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item.port }}/v1/models"
+    return_content: true
+    headers:
+      Authorization: "Bearer {{ item.api_key }}"
+  register: llama_cpp_models
+  retries: 90
+  delay: 5
+  until: llama_cpp_models.status == 200
+  loop: "{{ llama_cpp_instances }}"
+  when: llama_cpp_enabled

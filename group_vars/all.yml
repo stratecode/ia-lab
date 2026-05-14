@@ -1,0 +1,124 @@
+# ─── Environment-driven variables ────────────────────────────────────────────
+# Load with: set -a && source .env && set +a
+# Then run: ansible-playbook playbooks/bootstrap.yml
+
+# ─── Host & System ──────────────────────────────────────────────────────────
+timezone: "{{ lookup('env', 'LAB_TIMEZONE') | default('Europe/Madrid', true) }}"
+docker_user: "{{ lookup('env', 'LAB_USER') | default('admin', true) }}"
+domain: "{{ lookup('env', 'LAB_DOMAIN') | default('localhost', true) }}"
+docker_data_root: /opt/docker
+enable_ipv6: false
+
+# ─── Server Baseline ────────────────────────────────────────────────────────
+server_baseline_enabled: true
+server_root_lv_expand: true
+server_root_lv_path: /dev/ubuntu-vg/ubuntu-lv
+server_root_lv_size: +100%FREE
+server_lan_cidr: "{{ lookup('env', 'LAB_LAN_CIDR') | default('192.168.0.0/24', true) }}"
+server_wifi_enabled: false
+server_wifi_interface: wlp2s0
+server_packages:
+  - acl
+  - bash-completion
+  - docker.io
+  - docker-compose-v2
+  - ethtool
+  - fail2ban
+  - lm-sensors
+  - mesa-vulkan-drivers
+  - nvme-cli
+  - prometheus-alertmanager
+  - prometheus-node-exporter
+  - smartmontools
+  - tcpdump
+  - vulkan-tools
+
+# ─── Domains ────────────────────────────────────────────────────────────────
+cockpit_domain: "{{ lookup('env', 'LAB_COCKPIT_DOMAIN') | default('lab.localhost', true) }}"
+observability_domain: "{{ lookup('env', 'LAB_OBSERVABILITY_DOMAIN') | default('monitor.localhost', true) }}"
+
+# ─── Monitor / Nginx / TLS ──────────────────────────────────────────────────
+monitor_backend_port: 9091
+monitor_tls_mode: "{{ lookup('env', 'LAB_TLS_MODE') | default('selfsigned', true) }}"
+monitor_letsencrypt_email: "{{ lookup('env', 'LAB_LETSENCRYPT_EMAIL') | default('', true) }}"
+monitor_letsencrypt_challenge: "{{ lookup('env', 'LAB_LETSENCRYPT_CHALLENGE') | default('dns-route53', true) }}"
+monitor_letsencrypt_aws_profile: "{{ lookup('env', 'LAB_LETSENCRYPT_AWS_PROFILE') | default('route53-dns', true) }}"
+monitor_absent_packages:
+  - openipmi
+monitor_pcp_services:
+  - pmcd
+  - pmproxy
+  - pmie
+  - pmlogger
+monitor_pmie_disabled_groups:
+  - dmthin
+  - mssql
+
+# ─── Grafana ────────────────────────────────────────────────────────────────
+grafana_enabled: true
+grafana_port: 3000
+grafana_admin_user: admin
+grafana_admin_password: "{{ vault_grafana_admin_password }}"
+
+# ─── Alertmanager ───────────────────────────────────────────────────────────
+alertmanager_enabled: true
+alertmanager_port: 9093
+alertmanager_slack_webhook_url: "{{ vault_alertmanager_slack_webhook_url | default('') }}"
+
+# ─── llama.cpp (AI inference) ───────────────────────────────────────────────
+llama_cpp_enabled: true
+llama_cpp_user: llama-cpp
+llama_cpp_group: llama-cpp
+llama_cpp_root_dir: /opt/llama.cpp
+llama_cpp_src_dir: /opt/llama.cpp/src
+llama_cpp_build_dir: /opt/llama.cpp/build
+llama_cpp_cache_dir: /srv/ai-lab/llama.cpp/cache
+llama_cpp_instances:
+  - service_name: llama-cpp-code
+    port: "{{ lookup('env', 'LAB_LLAMA_CODE_PORT') | default('8080', true) | int }}"
+    hf_repo: "{{ lookup('env', 'LAB_LLAMA_CODE_MODEL') | default('Qwen/Qwen2.5-Coder-3B-Instruct-GGUF:Q4_K_M', true) }}"
+    alias: coder
+    ctx_size: "{{ lookup('env', 'LAB_LLAMA_CODE_CTX_SIZE') | default('32000', true) | int }}"
+    threads: "{{ lookup('env', 'LAB_LLAMA_CODE_THREADS') | default('6', true) | int }}"
+    parallel: "{{ lookup('env', 'LAB_LLAMA_CODE_PARALLEL') | default('2', true) | int }}"
+    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_CODE_GPU_LAYERS') | default('99', true) | int }}"
+    api_key: "{{ lookup('env', 'LAB_LLAMA_CODE_API_KEY') | default('local-code', true) }}"
+  - service_name: llama-cpp-chat
+    port: "{{ lookup('env', 'LAB_LLAMA_CHAT_PORT') | default('8081', true) | int }}"
+    hf_repo: "{{ lookup('env', 'LAB_LLAMA_CHAT_MODEL') | default('Qwen/Qwen2.5-Coder-3B-Instruct-GGUF:Q4_K_M', true) }}"
+    alias: orchestrator
+    ctx_size: "{{ lookup('env', 'LAB_LLAMA_CHAT_CTX_SIZE') | default('32000', true) | int }}"
+    threads: "{{ lookup('env', 'LAB_LLAMA_CHAT_THREADS') | default('6', true) | int }}"
+    parallel: "{{ lookup('env', 'LAB_LLAMA_CHAT_PARALLEL') | default('2', true) | int }}"
+    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_CHAT_GPU_LAYERS') | default('99', true) | int }}"
+    api_key: "{{ lookup('env', 'LAB_LLAMA_CHAT_API_KEY') | default('local-chat', true) }}"
+
+# ─── Route53 DDNS ───────────────────────────────────────────────────────────
+route53_ddns_enabled: true
+route53_ddns_zone_name: "{{ lookup('env', 'LAB_DNS_ZONE_NAME') | default('example.com', true) }}"
+route53_ddns_hosted_zone_id: "{{ lookup('env', 'LAB_DNS_HOSTED_ZONE_ID') | default('', true) }}"
+route53_ddns_record_name: "{{ lookup('env', 'LAB_DNS_RECORD_NAME') | default('vpn.example.com', true) }}"
+route53_ddns_ttl: 300
+route53_ddns_interval: "5min"
+route53_ddns_aws_profile: "{{ lookup('env', 'LAB_DNS_AWS_PROFILE') | default('route53-dns', true) }}"
+aws_cli_profiles: "{{ vault_aws_cli_profiles | default({}) }}"
+
+# ─── WireGuard ──────────────────────────────────────────────────────────────
+wireguard_enabled: true
+wireguard_interface: wg0
+wireguard_listen_port: "{{ lookup('env', 'LAB_WG_PORT') | default('51820', true) | int }}"
+wireguard_subnet: "{{ lookup('env', 'LAB_WG_SUBNET') | default('10.66.66.0/24', true) }}"
+wireguard_server_address: "{{ lookup('env', 'LAB_WG_SERVER_ADDRESS') | default('10.66.66.1/24', true) }}"
+wireguard_server_ip: "{{ lookup('env', 'LAB_WG_SERVER_IP') | default('10.66.66.1', true) }}"
+wireguard_endpoint: "{{ route53_ddns_record_name }}"
+wireguard_endpoint_port: "{{ wireguard_listen_port }}"
+wireguard_dns_servers:
+  - 1.1.1.1
+  - 1.0.0.1
+wireguard_allowed_ips:
+  - "{{ wireguard_subnet }}"
+  - "{{ server_lan_cidr }}"
+wireguard_persistent_keepalive: 25
+wireguard_clients:
+  - name: primary
+    address: "{{ lookup('env', 'LAB_WG_CLIENT_ADDRESS') | default('10.66.66.2/32', true) }}"
