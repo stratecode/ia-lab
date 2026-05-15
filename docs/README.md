@@ -6,67 +6,68 @@ This index lists all documentation artifacts for the Local AI Agents Platform, g
 
 Platform architecture, design decisions, and operational constraints.
 
-- [Architecture Overview](architecture/overview.md) — Architecture Overview
-- [Task Types Taxonomy](architecture/task-types.md) — Task Types Taxonomy
-- [Operational Limits](architecture/operational-limits.md) — Operational Limits
-- [Resource Scheduling](architecture/resource-scheduling.md) — Resource Scheduling and Model Allocation
-- [Workspace Isolation](architecture/workspace-isolation.md) — Workspace Isolation
-- [Governance Framework](architecture/governance.md) — Governance Framework
+- [Architecture Overview](architecture/overview.md)
+- [Task Types Taxonomy](architecture/task-types.md)
+- [Operational Limits](architecture/operational-limits.md)
+- [Resource Scheduling](architecture/resource-scheduling.md)
+- [Workspace Isolation](architecture/workspace-isolation.md)
+- [Governance Framework](architecture/governance.md)
 
 ### Architecture Decision Records
 
-- [ADR-0001: Use Nginx over Traefik](architecture/adr/0001-use-nginx-over-traefik.md) — ADR-0001: Use Nginx over Traefik
+- [0001. Use Nginx Over Traefik as Reverse Proxy](architecture/adr/0001-use-nginx-over-traefik.md)
 
 ## Agents
 
 Agent definitions, responsibilities, and interaction patterns.
 
-- [Agent Catalog](agents/catalog.md) — Agent Catalog
+- [Agent Catalog](agents/catalog.md)
 
 ## Flows
 
 Interaction flows and communication patterns between agents and the orchestrator.
 
-- [Task Execution Flow](flows/task-execution.md) — Task Execution Flow
-- [Multi-Agent Collaboration](flows/multi-agent-collaboration.md) — Multi-Agent Collaboration Flow
-- [Error Handling Flow](flows/error-handling.md) — Error Handling Flow
-- [Human Overrides](flows/human-overrides.md) — Human Override Controls
+- [Task Execution Flow](flows/task-execution.md)
+- [Multi-Agent Collaboration Flow](flows/multi-agent-collaboration.md)
+- [Error Handling Flow](flows/error-handling.md)
+- [Human Overrides Flow](flows/human-overrides.md)
 
 ## Security
 
 Permission boundaries and approval models.
 
-- [Permissions Model](security/permissions.md) — Permissions Model
-- [Approval Model](security/approval-model.md) — Approval Model
+- [Permissions Model](security/permissions.md)
+- [Approval Model](security/approval-model.md)
 
 ## Events
 
 Event taxonomy, schemas, and severity classification.
 
-- [Event Taxonomy](events/taxonomy.md) — Event Taxonomy
-- [Event Schemas](events/schemas.md) — Event Schemas
-- [Severity Levels](events/severity-levels.md) — Event Severity Classification
+- [Event Taxonomy](events/taxonomy.md)
+- [Event Schemas](events/schemas.md)
+- [Event Severity Levels](events/severity-levels.md)
 
 ## Models
 
 Model registry and inference configuration.
 
-- [Model Registry](models/registry.md) — Model Registry
+- [Model Registry](models/registry.md)
 
 ## Tools
 
 Tool registry and MCP integrations.
 
-- [Tool Registry](tools/registry.md) — Tool Registry
+- [Tool Registry](tools/registry.md)
 
 ## General
 
-- [Getting Started](getting-started.md) — Getting Started
-- [Server Baseline](server-baseline.md) — Server Baseline
-- [WireGuard](wireguard.md) — WireGuard
+- [Getting Started](getting-started.md)
+- [Server Baseline](server-baseline.md)
+- [WireGuard](wireguard.md)
 
 ## Revision History
 
 | Date | Author | Change Description |
 |------|--------|--------------------|
 | 2025-07-14 | Platform Architect | Initial documentation index skeleton creation |
+| 2025-07-15 | Platform Architect | Final index update with all documents, verified links and headings |

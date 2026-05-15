@@ -98,6 +98,155 @@
   changed_when: false
   when: llama_cpp_enabled
 
+# ─── Configuration Validation Phase ─────────────────────────────────────────
+# Validates: required fields, context limits, RAM budget, thread budget,
+# VRAM budget, lifecycle policy (Requirements 1.7, 4.2, 4.3, 5.3, 5.4,
+# 16.2, 16.3, 17.6, 22.3)
+
+- name: Build validation config JSON
+  ansible.builtin.set_fact:
+    llama_cpp_validation_config: >-
+      {{
+        {
+          "instances": llama_cpp_instances,
+          "ram_budget_mb": llama_cpp_ram_budget_mb | int,
+          "ram_budget_hard_limit_percent": llama_cpp_ram_budget_hard_limit_percent | int,
+          "thread_budget": llama_cpp_thread_budget | int,
+          "vram_total_mb": llama_cpp_vram_total_mb | int,
+          "ram_estimation_factors": llama_cpp_ram_estimation_factors
+        } | to_json
+      }}
+  when: llama_cpp_enabled
+
+- name: Copy validation script to remote host
+  ansible.builtin.copy:
+    src: "{{ role_path }}/files/validate_config.py"
+    dest: /opt/llama.cpp/validate_config.py
+    mode: "0755"
+    owner: root
+    group: root
+  when: llama_cpp_enabled
+
+- name: Run configuration validation
+  ansible.builtin.command:
+    argv:
+      - python3
+      - /opt/llama.cpp/validate_config.py
+    stdin: "{{ llama_cpp_validation_config }}"
+  register: llama_cpp_validation_result
+  changed_when: false
+  failed_when: llama_cpp_validation_result.rc > 2
+  when: llama_cpp_enabled
+
+- name: Fail on configuration validation errors
+  ansible.builtin.fail:
+    msg: >-
+      Configuration validation failed:
+      {{ (llama_cpp_validation_result.stdout | from_json).errors | join('; ') }}
+  when:
+    - llama_cpp_enabled
+    - llama_cpp_validation_result is not skipped
+    - llama_cpp_validation_result.stdout | default('') | length > 0
+    - llama_cpp_validation_result.rc == 2
+
+- name: Emit configuration validation warnings
+  ansible.builtin.debug:
+    msg: >-
+      Configuration validation warning:
+      {{ item }}
+  loop: >-
+    {{ ((llama_cpp_validation_result.stdout | from_json).warnings | default([]))
+       if (llama_cpp_validation_result is not skipped and llama_cpp_validation_result.stdout | default('') | length > 0)
+       else [] }}
+  when:
+    - llama_cpp_enabled
+    - llama_cpp_validation_result is not skipped
+    - llama_cpp_validation_result.rc == 1
+
+# ─── Stale Instance Cleanup ──────────────────────────────────────────────────
+- name: Discover existing llama-cpp service files
+  ansible.builtin.find:
+    paths: /etc/systemd/system
+    patterns: "llama-cpp-*.service"
+    file_type: file
+  register: llama_cpp_discovered_services
+  when: llama_cpp_enabled
+
+- name: Compute stale instance set
+  ansible.builtin.set_fact:
+    llama_cpp_stale_services: >-
+      {{ llama_cpp_discovered_services.files
+         | map(attribute='path')
+         | map('basename')
+         | map('regex_replace', '\.service$', '')
+         | difference(llama_cpp_instances | map(attribute='service_name') | list)
+         | list }}
+  when: llama_cpp_enabled
+
+- name: Stop stale llama.cpp instances
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+  loop: "{{ llama_cpp_stale_services }}"
+  when:
+    - llama_cpp_enabled
+    - llama_cpp_stale_services | length > 0
+
+- name: Disable stale llama.cpp instances
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop: "{{ llama_cpp_stale_services }}"
+  when:
+    - llama_cpp_enabled
+    - llama_cpp_stale_services | length > 0
+
+- name: Remove stale llama.cpp unit files
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}.service"
+    state: absent
+  loop: "{{ llama_cpp_stale_services }}"
+  register: llama_cpp_stale_removed
+  when:
+    - llama_cpp_enabled
+    - llama_cpp_stale_services | length > 0
+
+- name: Reload systemd daemon after stale cleanup
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when:
+    - llama_cpp_enabled
+    - llama_cpp_stale_services | length > 0
+
+# ─── Logging Infrastructure (must be before service deploy) ──────────────────
+- name: Create llama.cpp log directory
+  ansible.builtin.file:
+    path: /var/log/llama-cpp
+    state: directory
+    owner: "{{ llama_cpp_user }}"
+    group: "{{ llama_cpp_group }}"
+    mode: "0755"
+  when: llama_cpp_enabled
+
+- name: Deploy llama.cpp logrotate configuration
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/llama-cpp
+    mode: "0644"
+    content: |
+      /var/log/llama-cpp/*.log {
+          daily
+          maxsize 100M
+          rotate 7
+          compress
+          delaycompress
+          missingok
+          notifempty
+          create 0644 llama-cpp llama-cpp
+      }
+  when: llama_cpp_enabled
+
+# ─── Deploy Instances ────────────────────────────────────────────────────────
 - name: Install llama.cpp systemd service
   ansible.builtin.copy:
     dest: "/etc/systemd/system/{{ item.service_name }}.service"
@@ -116,32 +265,35 @@
       Environment=HOME=/home/{{ llama_cpp_user }}
       Environment=HF_HOME={{ llama_cpp_cache_dir }}
       Environment=XDG_CACHE_HOME={{ llama_cpp_cache_dir }}
+      MemoryAccounting=yes
+      MemoryMax={{ (item.model_size_mb | int + ((item.ctx_size | int * item.parallel | int * 2) / 1024) | int + 512) }}M
+      MemorySwapMax={{ llama_cpp_memory_swap_max | default('256M') }}
+      StandardOutput=append:/var/log/llama-cpp/{{ item.service_name }}.log
+      StandardError=append:/var/log/llama-cpp/{{ item.service_name }}.log
       ExecStart={{ llama_cpp_build_dir }}/bin/llama-server \
-        -hf {{ item.hf_repo }} \
-        --alias {{ item.alias }} \
         --host 0.0.0.0 \
         --port {{ item.port }} \
-        --ctx-size {{ item.ctx_size }} \
-        --threads {{ item.threads }} \
-        --parallel {{ item.parallel }} \
-        --n-gpu-layers {{ item.n_gpu_layers }} \
-        --batch-size 512 \
-        --ubatch-size 512 \
-        --flash-attn auto \
-        --temp 0.5 \
-        --top-p 0.9 \
-        --repeat-penalty 1.15 \
-        --jinja \
-        --metrics
+        --alias {{ item.alias }} \
+        --hf-repo {{ item.hf_repo }} \
+        -c {{ item.ctx_size }} \
+        -t {{ item.threads }} \
+        -np {{ item.parallel }} \
+        -ngl {{ item.n_gpu_layers }} \
+        --api-key {{ item.api_key }} \
+        --metrics{% if item.embedding_mode | default(false) %} \
+        --embedding{% else %} \
+        --temp 0.7 --top-p 0.9 --repeat-penalty 1.1 --jinja{% endif %}
+
       Restart=on-failure
       RestartSec=5
 
       [Install]
       WantedBy=multi-user.target
   loop: "{{ llama_cpp_instances }}"
+  loop_control:
+    label: "{{ item.service_name }}"
   notify:
     - Reload systemd for llama.cpp
-    - Restart llama.cpp services
   when: llama_cpp_enabled
 
 - name: Stop legacy llama.cpp service when present
@@ -162,23 +314,258 @@
   ansible.builtin.meta: flush_handlers
   when: llama_cpp_enabled
 
-- name: Ensure llama.cpp service is enabled and started
+- name: Enable and start llama.cpp instance
   ansible.builtin.systemd:
     name: "{{ item.service_name }}"
-    enabled: true
     state: started
+    enabled: true
+    daemon_reload: true
   loop: "{{ llama_cpp_instances }}"
-  when: llama_cpp_enabled
+  loop_control:
+    label: "{{ item.service_name }}"
+  when:
+    - llama_cpp_enabled
+    - not ansible_check_mode
 
-- name: Wait for llama.cpp API
+- name: Wait for llama.cpp instance API
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ item.port }}/v1/models"
     return_content: true
     headers:
       Authorization: "Bearer {{ item.api_key }}"
-  register: llama_cpp_models
+  register: llama_cpp_health
   retries: 90
   delay: 5
-  until: llama_cpp_models.status == 200
+  until: llama_cpp_health.status == 200
   loop: "{{ llama_cpp_instances }}"
+  loop_control:
+    label: "{{ item.service_name }}"
+  when:
+    - llama_cpp_enabled
+    - not ansible_check_mode
+
+- name: Validate embeddings endpoint availability
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item.port }}/v1/embeddings"
+    method: POST
+    body_format: json
+    body:
+      input: "healthcheck"
+    headers:
+      Authorization: "Bearer {{ item.api_key }}"
+    return_content: true
+  register: llama_cpp_embeddings_health
+  retries: 90
+  delay: 5
+  until: llama_cpp_embeddings_health.status == 200
+  loop: "{{ llama_cpp_instances | selectattr('embedding_mode', 'equalto', true) | list }}"
+  loop_control:
+    label: "{{ item.service_name }}"
+  when:
+    - llama_cpp_enabled
+    - not ansible_check_mode
+
+# ─── Monitoring Infrastructure ───────────────────────────────────────────────
+# Validates: Requirements 23.1, 23.2, 23.3, 23.4, 23.5
+
+- name: Create Prometheus textfile collector directory
+  ansible.builtin.file:
+    path: /var/lib/prometheus/node-exporter
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
   when: llama_cpp_enabled
+
+- name: Deploy llama.cpp monitoring config
+  ansible.builtin.copy:
+    dest: /opt/llama.cpp/monitor-config.json
+    mode: "0644"
+    content: >-
+      {{ {
+        "instances": llama_cpp_instances | map('dict2items') | map('selectattr', 'key', 'in', ['service_name', 'port', 'api_key', 'ram_suspend_threshold_percent', 'vram_suspend_threshold_percent', 'priority']) | map('items2dict') | list,
+        "thresholds": llama_cpp_monitoring.thresholds,
+        "check_interval_seconds": llama_cpp_monitoring.check_interval_seconds
+      } | to_json }}
+  when: llama_cpp_enabled
+
+- name: Deploy llama.cpp resource monitoring script
+  ansible.builtin.copy:
+    dest: /opt/llama.cpp/monitor-resources.sh
+    mode: "0755"
+    owner: root
+    group: root
+    content: |
+      #!/usr/bin/env bash
+      # llama.cpp resource monitoring script
+      # Queries cgroup memory, /metrics endpoint, and compares against thresholds
+      # Outputs Prometheus textfile collector format
+
+      set -euo pipefail
+
+      CONFIG_FILE="/opt/llama.cpp/monitor-config.json"
+      OUTPUT_FILE="/var/lib/prometheus/node-exporter/llama_cpp.prom"
+      TEMP_FILE="${OUTPUT_FILE}.tmp"
+
+      if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo "ERROR: Config file not found: $CONFIG_FILE" >&2
+        exit 1
+      fi
+
+      # Read thresholds from config
+      WARNING_RAM=$(jq -r '.thresholds.warning_ram_percent' "$CONFIG_FILE")
+      THROTTLE_RAM=$(jq -r '.thresholds.throttle_ram_percent' "$CONFIG_FILE")
+      SUSPEND_RAM=$(jq -r '.thresholds.suspend_ram_percent' "$CONFIG_FILE")
+      CRITICAL_RAM=$(jq -r '.thresholds.critical_ram_percent' "$CONFIG_FILE")
+      WARNING_VRAM=$(jq -r '.thresholds.warning_vram_percent' "$CONFIG_FILE")
+      SUSPEND_VRAM=$(jq -r '.thresholds.suspend_vram_percent' "$CONFIG_FILE")
+
+      INSTANCE_COUNT=$(jq '.instances | length' "$CONFIG_FILE")
+
+      # Start output
+      cat > "$TEMP_FILE" <<'HEADER'
+      # HELP llama_cpp_memory_current_bytes Current memory usage per instance (cgroup)
+      # TYPE llama_cpp_memory_current_bytes gauge
+      # HELP llama_cpp_memory_max_bytes Memory limit per instance (cgroup)
+      # TYPE llama_cpp_memory_max_bytes gauge
+      # HELP llama_cpp_memory_usage_percent Memory usage as percentage of limit
+      # TYPE llama_cpp_memory_usage_percent gauge
+      # HELP llama_cpp_kv_cache_usage_percent KV cache usage percentage per instance
+      # TYPE llama_cpp_kv_cache_usage_percent gauge
+      # HELP llama_cpp_queue_depth Current request queue depth per instance
+      # TYPE llama_cpp_queue_depth gauge
+      # HELP llama_cpp_threshold_exceeded Whether a threshold is exceeded (1=yes, 0=no)
+      # TYPE llama_cpp_threshold_exceeded gauge
+      HEADER
+
+      for i in $(seq 0 $((INSTANCE_COUNT - 1))); do
+        SERVICE_NAME=$(jq -r ".instances[$i].service_name" "$CONFIG_FILE")
+        PORT=$(jq -r ".instances[$i].port" "$CONFIG_FILE")
+        API_KEY=$(jq -r ".instances[$i].api_key" "$CONFIG_FILE")
+        PRIORITY=$(jq -r ".instances[$i].priority" "$CONFIG_FILE")
+
+        # ── Query cgroup memory stats via systemctl ──
+        MEM_CURRENT=$(systemctl show "${SERVICE_NAME}.service" --property=MemoryCurrent 2>/dev/null | cut -d= -f2)
+        MEM_MAX=$(systemctl show "${SERVICE_NAME}.service" --property=MemoryMax 2>/dev/null | cut -d= -f2)
+
+        # Handle cases where service is not running or values are unavailable
+        if [[ "$MEM_CURRENT" == "[not set]" || "$MEM_CURRENT" == "infinity" || -z "$MEM_CURRENT" ]]; then
+          MEM_CURRENT=0
+        fi
+        if [[ "$MEM_MAX" == "[not set]" || "$MEM_MAX" == "infinity" || -z "$MEM_MAX" ]]; then
+          MEM_MAX=0
+        fi
+
+        # Calculate memory usage percent
+        if [[ "$MEM_MAX" -gt 0 ]]; then
+          MEM_PERCENT=$(awk "BEGIN {printf \"%.1f\", ($MEM_CURRENT / $MEM_MAX) * 100}")
+        else
+          MEM_PERCENT="0.0"
+        fi
+
+        echo "llama_cpp_memory_current_bytes{instance=\"${SERVICE_NAME}\",priority=\"${PRIORITY}\"} ${MEM_CURRENT}" >> "$TEMP_FILE"
+        echo "llama_cpp_memory_max_bytes{instance=\"${SERVICE_NAME}\",priority=\"${PRIORITY}\"} ${MEM_MAX}" >> "$TEMP_FILE"
+        echo "llama_cpp_memory_usage_percent{instance=\"${SERVICE_NAME}\",priority=\"${PRIORITY}\"} ${MEM_PERCENT}" >> "$TEMP_FILE"
+
+        # ── Query /metrics endpoint for KV cache and queue depth ──
+        KV_CACHE_PERCENT="0.0"
+        QUEUE_DEPTH="0"
+
+        METRICS_RESPONSE=$(curl -sf --max-time 5 "http://127.0.0.1:${PORT}/metrics" 2>/dev/null || true)
+
+        if [[ -n "$METRICS_RESPONSE" ]]; then
+          # Extract KV cache usage (llama_kv_cache_usage_ratio from llama.cpp metrics)
+          KV_RATIO=$(echo "$METRICS_RESPONSE" | grep -E '^llama_kv_cache_usage_ratio' | awk '{print $2}' | head -1)
+          if [[ -n "$KV_RATIO" ]]; then
+            KV_CACHE_PERCENT=$(awk "BEGIN {printf \"%.1f\", $KV_RATIO * 100}")
+          fi
+
+          # Extract queue depth (llama_requests_pending)
+          PENDING=$(echo "$METRICS_RESPONSE" | grep -E '^llama_requests_pending' | awk '{print $2}' | head -1)
+          if [[ -n "$PENDING" ]]; then
+            QUEUE_DEPTH="${PENDING%.*}"
+          fi
+        fi
+
+        echo "llama_cpp_kv_cache_usage_percent{instance=\"${SERVICE_NAME}\",priority=\"${PRIORITY}\"} ${KV_CACHE_PERCENT}" >> "$TEMP_FILE"
+        echo "llama_cpp_queue_depth{instance=\"${SERVICE_NAME}\",priority=\"${PRIORITY}\"} ${QUEUE_DEPTH}" >> "$TEMP_FILE"
+
+        # ── Compare against thresholds ──
+        MEM_PERCENT_INT=${MEM_PERCENT%.*}
+
+        WARN_EXCEEDED=0
+        THROTTLE_EXCEEDED=0
+        SUSPEND_EXCEEDED=0
+        CRITICAL_EXCEEDED=0
+
+        if [[ "$MEM_PERCENT_INT" -ge "$CRITICAL_RAM" ]]; then
+          CRITICAL_EXCEEDED=1
+        elif [[ "$MEM_PERCENT_INT" -ge "$SUSPEND_RAM" ]]; then
+          SUSPEND_EXCEEDED=1
+        elif [[ "$MEM_PERCENT_INT" -ge "$THROTTLE_RAM" ]]; then
+          THROTTLE_EXCEEDED=1
+        elif [[ "$MEM_PERCENT_INT" -ge "$WARNING_RAM" ]]; then
+          WARN_EXCEEDED=1
+        fi
+
+        echo "llama_cpp_threshold_exceeded{instance=\"${SERVICE_NAME}\",level=\"warning\",resource=\"ram\"} ${WARN_EXCEEDED}" >> "$TEMP_FILE"
+        echo "llama_cpp_threshold_exceeded{instance=\"${SERVICE_NAME}\",level=\"throttle\",resource=\"ram\"} ${THROTTLE_EXCEEDED}" >> "$TEMP_FILE"
+        echo "llama_cpp_threshold_exceeded{instance=\"${SERVICE_NAME}\",level=\"suspend\",resource=\"ram\"} ${SUSPEND_EXCEEDED}" >> "$TEMP_FILE"
+        echo "llama_cpp_threshold_exceeded{instance=\"${SERVICE_NAME}\",level=\"critical\",resource=\"ram\"} ${CRITICAL_EXCEEDED}" >> "$TEMP_FILE"
+
+      done
+
+      # Atomically move temp file to output
+      mv "$TEMP_FILE" "$OUTPUT_FILE"
+  when: llama_cpp_enabled
+
+- name: Deploy llama-cpp-monitor systemd service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/llama-cpp-monitor.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=llama.cpp resource monitoring script
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/opt/llama.cpp/monitor-resources.sh
+      StandardOutput=journal
+      StandardError=journal
+  notify:
+    - Reload systemd for llama.cpp
+  when: llama_cpp_enabled
+
+- name: Deploy llama-cpp-monitor systemd timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/llama-cpp-monitor.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Run llama.cpp resource monitoring every {{ llama_cpp_monitoring.check_interval_seconds }}s
+
+      [Timer]
+      OnBootSec=30s
+      OnUnitActiveSec={{ llama_cpp_monitoring.check_interval_seconds }}s
+      AccuracySec=5s
+
+      [Install]
+      WantedBy=timers.target
+  notify:
+    - Reload systemd for llama.cpp
+  when: llama_cpp_enabled
+
+- name: Flush handlers before enabling monitoring timer
+  ansible.builtin.meta: flush_handlers
+  when: llama_cpp_enabled
+
+- name: Enable and start llama-cpp-monitor timer
+  ansible.builtin.systemd:
+    name: llama-cpp-monitor.timer
+    state: started
+    enabled: true
+    daemon_reload: true
+  when:
+    - llama_cpp_enabled
+    - not ansible_check_mode

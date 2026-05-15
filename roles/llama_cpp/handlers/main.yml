@@ -1,6 +1,7 @@
 - name: Reload systemd for llama.cpp
   ansible.builtin.systemd:
     daemon_reload: true
+  when: llama_cpp_enabled
 
 - name: Restart llama.cpp services
   ansible.builtin.systemd:
@@ -8,3 +9,11 @@
     state: restarted
     enabled: true
   loop: "{{ llama_cpp_instances }}"
+  when: llama_cpp_enabled
+
+- name: Restart single llama.cpp instance
+  ansible.builtin.systemd:
+    name: "{{ llama_cpp_restart_instance }}"
+    state: restarted
+    daemon_reload: true
+  when: llama_cpp_enabled

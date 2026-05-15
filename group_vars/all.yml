@@ -1,6 +1,9 @@
 # ─── Environment-driven variables ────────────────────────────────────────────
-# Load with: set -a && source .env && set +a
-# Then run: ansible-playbook playbooks/bootstrap.yml
+# REQUIRED: Export .env variables before running any Ansible command:
+#   set -a && source .env && set +a
+#   ansible-playbook playbooks/bootstrap.yml
+#
+# Without this, lookup('env', ...) returns empty strings and defaults are used.
 
 # ─── Host & System ──────────────────────────────────────────────────────────
 timezone: "{{ lookup('env', 'LAB_TIMEZONE') | default('Europe/Madrid', true) }}"
@@ -74,24 +77,200 @@ llama_cpp_src_dir: /opt/llama.cpp/src
 llama_cpp_build_dir: /opt/llama.cpp/build
 llama_cpp_cache_dir: /srv/ai-lab/llama.cpp/cache
 llama_cpp_instances:
+  # ── Code instance (priority 1 — always-on) ────────────────────────────────
   - service_name: llama-cpp-code
     port: "{{ lookup('env', 'LAB_LLAMA_CODE_PORT') | default('8080', true) | int }}"
-    hf_repo: "{{ lookup('env', 'LAB_LLAMA_CODE_MODEL') | default('Qwen/Qwen2.5-Coder-3B-Instruct-GGUF:Q4_K_M', true) }}"
+    hf_repo: "{{ lookup('env', 'LAB_LLAMA_CODE_MODEL') | default('Qwen/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M', true) }}"
     alias: coder
     ctx_size: "{{ lookup('env', 'LAB_LLAMA_CODE_CTX_SIZE') | default('32000', true) | int }}"
+    recommended_ctx_size: 16384
+    max_ctx_size: 32768
     threads: "{{ lookup('env', 'LAB_LLAMA_CODE_THREADS') | default('6', true) | int }}"
     parallel: "{{ lookup('env', 'LAB_LLAMA_CODE_PARALLEL') | default('2', true) | int }}"
-    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_CODE_GPU_LAYERS') | default('99', true) | int }}"
+    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_CODE_GPU_LAYERS') | default('33', true) | int }}"
     api_key: "{{ lookup('env', 'LAB_LLAMA_CODE_API_KEY') | default('local-code', true) }}"
-  - service_name: llama-cpp-chat
-    port: "{{ lookup('env', 'LAB_LLAMA_CHAT_PORT') | default('8081', true) | int }}"
-    hf_repo: "{{ lookup('env', 'LAB_LLAMA_CHAT_MODEL') | default('Qwen/Qwen2.5-Coder-3B-Instruct-GGUF:Q4_K_M', true) }}"
-    alias: orchestrator
-    ctx_size: "{{ lookup('env', 'LAB_LLAMA_CHAT_CTX_SIZE') | default('32000', true) | int }}"
-    threads: "{{ lookup('env', 'LAB_LLAMA_CHAT_THREADS') | default('6', true) | int }}"
-    parallel: "{{ lookup('env', 'LAB_LLAMA_CHAT_PARALLEL') | default('2', true) | int }}"
-    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_CHAT_GPU_LAYERS') | default('99', true) | int }}"
-    api_key: "{{ lookup('env', 'LAB_LLAMA_CHAT_API_KEY') | default('local-chat', true) }}"
+    instance_lifecycle: "always-on"
+    priority: 1
+    model_size_mb: 4100
+    ram_estimation_override_mb: null
+    vram_reservation_mb: 2500
+    gpu_fallback_policy: "reduce-layers"
+    max_queued_requests: 8
+    request_timeout_seconds: 120
+    overload_policy: "queue"
+    ram_suspend_threshold_percent: 90
+    vram_suspend_threshold_percent: 95
+    idle_timeout_seconds: 0
+    capabilities:
+      supports_tools: true
+      supports_json_mode: true
+      supports_reasoning: false
+      supports_embeddings: false
+    recommended_parallelism: 2
+    recommended_context: 16384
+    safe_max_context: 32768
+    embedding_mode: false
+
+  # ── Planner instance (priority 2 — warm) ──────────────────────────────────
+  - service_name: llama-cpp-planner
+    port: "{{ lookup('env', 'LAB_LLAMA_PLANNER_PORT') | default('8082', true) | int }}"
+    hf_repo: "{{ lookup('env', 'LAB_LLAMA_PLANNER_MODEL') | default('Qwen/Qwen2.5-3B-Instruct-GGUF:Q4_K_M', true) }}"
+    alias: planner
+    ctx_size: "{{ lookup('env', 'LAB_LLAMA_PLANNER_CTX_SIZE') | default('16384', true) | int }}"
+    recommended_ctx_size: 8192
+    max_ctx_size: 32768
+    threads: "{{ lookup('env', 'LAB_LLAMA_PLANNER_THREADS') | default('4', true) | int }}"
+    parallel: "{{ lookup('env', 'LAB_LLAMA_PLANNER_PARALLEL') | default('2', true) | int }}"
+    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_PLANNER_GPU_LAYERS') | default('20', true) | int }}"
+    api_key: "{{ lookup('env', 'LAB_LLAMA_PLANNER_API_KEY') | default('local-planner', true) }}"
+    instance_lifecycle: "warm"
+    priority: 2
+    model_size_mb: 1900
+    ram_estimation_override_mb: null
+    vram_reservation_mb: 1200
+    gpu_fallback_policy: "reduce-layers"
+    max_queued_requests: 8
+    request_timeout_seconds: 90
+    overload_policy: "queue"
+    ram_suspend_threshold_percent: 85
+    vram_suspend_threshold_percent: 90
+    idle_timeout_seconds: 300
+    capabilities:
+      supports_tools: true
+      supports_json_mode: true
+      supports_reasoning: true
+      supports_embeddings: false
+    recommended_parallelism: 2
+    recommended_context: 8192
+    safe_max_context: 16384
+    embedding_mode: false
+
+  # ── Utility instance (priority 3 — lazy) ──────────────────────────────────
+  - service_name: llama-cpp-utility
+    port: "{{ lookup('env', 'LAB_LLAMA_UTILITY_PORT') | default('8083', true) | int }}"
+    hf_repo: "{{ lookup('env', 'LAB_LLAMA_UTILITY_MODEL') | default('Qwen/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M', true) }}"
+    alias: utility
+    ctx_size: "{{ lookup('env', 'LAB_LLAMA_UTILITY_CTX_SIZE') | default('8192', true) | int }}"
+    recommended_ctx_size: 4096
+    max_ctx_size: 32768
+    threads: "{{ lookup('env', 'LAB_LLAMA_UTILITY_THREADS') | default('2', true) | int }}"
+    parallel: "{{ lookup('env', 'LAB_LLAMA_UTILITY_PARALLEL') | default('1', true) | int }}"
+    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_UTILITY_GPU_LAYERS') | default('0', true) | int }}"
+    api_key: "{{ lookup('env', 'LAB_LLAMA_UTILITY_API_KEY') | default('local-utility', true) }}"
+    instance_lifecycle: "lazy"
+    priority: 3
+    model_size_mb: 950
+    ram_estimation_override_mb: null
+    vram_reservation_mb: 0
+    gpu_fallback_policy: "cpu-only"
+    max_queued_requests: 4
+    request_timeout_seconds: 60
+    overload_policy: "reject"
+    ram_suspend_threshold_percent: 80
+    vram_suspend_threshold_percent: 0
+    idle_timeout_seconds: 180
+    capabilities:
+      supports_tools: true
+      supports_json_mode: true
+      supports_reasoning: false
+      supports_embeddings: false
+    recommended_parallelism: 1
+    recommended_context: 4096
+    safe_max_context: 8192
+    embedding_mode: false
+
+  # ── Embeddings instance (priority 4 — warm) ───────────────────────────────
+  - service_name: llama-cpp-embeddings
+    port: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_PORT') | default('8084', true) | int }}"
+    hf_repo: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_MODEL') | default('nomic-ai/nomic-embed-text-v1.5-GGUF:Q8_0', true) }}"
+    alias: embeddings
+    ctx_size: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_CTX_SIZE') | default('8192', true) | int }}"
+    recommended_ctx_size: 2048
+    max_ctx_size: 8192
+    threads: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_THREADS') | default('2', true) | int }}"
+    parallel: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_PARALLEL') | default('4', true) | int }}"
+    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_GPU_LAYERS') | default('0', true) | int }}"
+    api_key: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_API_KEY') | default('local-embeddings', true) }}"
+    instance_lifecycle: "warm"
+    priority: 4
+    model_size_mb: 140
+    ram_estimation_override_mb: null
+    vram_reservation_mb: 0
+    gpu_fallback_policy: "cpu-only"
+    max_queued_requests: 32
+    request_timeout_seconds: 30
+    overload_policy: "queue"
+    ram_suspend_threshold_percent: 80
+    vram_suspend_threshold_percent: 0
+    idle_timeout_seconds: 600
+    capabilities:
+      supports_tools: false
+      supports_json_mode: false
+      supports_reasoning: false
+      supports_embeddings: true
+    recommended_parallelism: 4
+    recommended_context: 2048
+    safe_max_context: 8192
+    embedding_mode: true
+
+# ─── llama.cpp Resource Budget & RAM Estimation ─────────────────────────────
+# RAM estimation formula:
+# estimated_ram_mb = (model_size_mb + kv_cache_mb) * safety_margin
+# kv_cache_mb = (ctx_size * parallel * bytes_per_token) / 1024
+# safety_margin = per-model-family factor from llama_cpp_ram_estimation_factors
+#
+# Default bytes_per_token by quantization:
+#   Q4_K_M: 0.5 bytes/token/layer (heuristic)
+#   Q8_0:   1.0 bytes/token/layer (heuristic)
+#
+# Simplified heuristic (used in validation):
+# kv_cache_mb ≈ (ctx_size * parallel * 2) / 1024  (for Q4 models)
+#
+# MemoryMax (systemd) = estimated_ram_mb + 512 MB overhead
+#
+# Budget thresholds:
+#   total <= budget              → pass (silent)
+#   budget < total <= budget*1.10 → warning (non-fatal)
+#   total > budget*1.10          → fail (fatal)
+
+llama_cpp_ram_budget_mb: "{{ lookup('env', 'LAB_LLAMA_RAM_BUDGET_MB') | default('22528', true) | int }}"              # 22GB = 28GB usable - 6GB OS reservation
+llama_cpp_ram_budget_hard_limit_percent: "{{ lookup('env', 'LAB_LLAMA_RAM_HARD_LIMIT_PERCENT') | default('110', true) | int }}"  # Fail if exceeds budget by >10%
+llama_cpp_thread_budget: "{{ lookup('env', 'LAB_LLAMA_THREAD_BUDGET') | default('12', true) | int }}"                 # 16 total - 4 OS reserved
+llama_cpp_vram_total_mb: "{{ lookup('env', 'LAB_LLAMA_VRAM_TOTAL_MB') | default('4096', true) | int }}"              # AMD iGPU VRAM
+
+# Per-model-family safety margin factors
+llama_cpp_ram_estimation_factors:
+  qwen2.5:
+    safety_margin: 1.15                    # 15% safety margin
+    bytes_per_token_q4: 0.5
+    bytes_per_token_q8: 1.0
+  nomic:
+    safety_margin: 1.10                    # 10% safety margin
+    bytes_per_token_q8: 0.8
+  default:
+    safety_margin: 1.20                    # 20% for unknown models
+    bytes_per_token_q4: 0.6
+    bytes_per_token_q8: 1.1
+
+# GPU scheduling priority (highest VRAM priority first)
+llama_cpp_gpu_priority_order:
+  - llama-cpp-code        # Highest VRAM priority
+  - llama-cpp-planner     # Medium VRAM priority
+  - llama-cpp-utility     # Low (CPU-only preferred)
+  - llama-cpp-embeddings  # CPU-only (gpu_fallback_policy: cpu-only)
+
+# Runtime resource monitoring thresholds
+# Used by the monitoring timer to detect resource pressure and trigger
+# suspension or degradation policies (Requirements 15.1, 15.2, 23.4)
+llama_cpp_monitoring:
+  check_interval_seconds: 30
+  thresholds:
+    warning_ram_percent: 80
+    throttle_ram_percent: 85
+    suspend_ram_percent: 90
+    critical_ram_percent: 95
+    warning_vram_percent: 85
+    suspend_vram_percent: 95
 
 # ─── Route53 DDNS ───────────────────────────────────────────────────────────
 route53_ddns_enabled: true
