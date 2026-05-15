@@ -56,6 +56,14 @@
     depth: 1
     single_branch: true
     version: master
+    force: true
+  register: llama_cpp_git_clone
+  when: llama_cpp_enabled
+
+- name: Check if llama-server binary exists
+  ansible.builtin.stat:
+    path: "{{ llama_cpp_build_dir }}/bin/llama-server"
+  register: llama_cpp_binary
   when: llama_cpp_enabled
 
 - name: Configure llama.cpp build
@@ -74,21 +82,22 @@
       - -DGGML_NATIVE=ON
       - -DGGML_BLAS=ON
       - -DGGML_BLAS_VENDOR=OpenBLAS
-  notify: Restart llama.cpp services
-  when: llama_cpp_enabled
+  when: llama_cpp_enabled and (llama_cpp_git_clone.changed or not llama_cpp_binary.stat.exists)
 
-- name: Build llama.cpp
+- name: Build llama.cpp (async — may take several minutes)
   ansible.builtin.command:
     argv:
       - cmake
       - --build
       - "{{ llama_cpp_build_dir }}"
-      - -j16
+      - -j{{ ansible_processor_vcpus | default(4) }}
       - --config
       - Release
-      - --parallel
+  async: 1800
+  poll: 15
+  register: llama_cpp_build_result
   notify: Restart llama.cpp services
-  when: llama_cpp_enabled
+  when: llama_cpp_enabled and (llama_cpp_git_clone.changed or not llama_cpp_binary.stat.exists)
 
 - name: Validate Vulkan detection before service install
   ansible.builtin.command:

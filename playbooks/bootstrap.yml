@@ -64,6 +64,10 @@
       ansible.builtin.import_role:
         name: llama_cpp
 
+    - name: Install Aider coding agent
+      ansible.builtin.import_role:
+        name: aider
+
     - name: Install monitoring web console
       ansible.builtin.import_role:
         name: monitor
