@@ -1,0 +1,368 @@
+# ─── User, Directories, and Permissions ──────────────────────────────────────
+# Validates: Requirements 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 18.1, 18.2, 18.4, 18.5
+
+- name: Ensure aider group exists
+  ansible.builtin.group:
+    name: aider
+    system: true
+    state: present
+  when: aider_enabled
+
+- name: Ensure aider user exists
+  ansible.builtin.user:
+    name: aider
+    group: aider
+    system: true
+    create_home: true
+    home: /srv/ai-lab/aider
+    shell: /usr/sbin/nologin
+    state: present
+  when: aider_enabled
+
+- name: Ensure aider directories exist
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /srv/ai-lab/aider/workspaces, owner: aider, group: aider, mode: "0755" }
+    - { path: /srv/ai-lab/repos, owner: aider, group: aider, mode: "0755" }
+    - { path: /var/log/aider, owner: aider, group: aider, mode: "0755" }
+    - { path: /run/aider, owner: aider, group: aider, mode: "0755" }
+    - { path: /etc/aider, owner: root, group: aider, mode: "0750" }
+  when: aider_enabled
+
+- name: Configure git identity for aider user
+  ansible.builtin.copy:
+    dest: /srv/ai-lab/aider/.gitconfig
+    owner: aider
+    group: aider
+    mode: "0644"
+    content: |
+      [user]
+          name = Aider Agent
+          email = aider@{{ domain }}
+  when: aider_enabled
+
+- name: Restrict aider user from accessing SSH private keys
+  ansible.builtin.command:
+    argv:
+      - setfacl
+      - -m
+      - u:aider:---
+      - "{{ item }}"
+  loop:
+    - /root/.ssh
+    - /home/{{ docker_user }}/.ssh
+  changed_when: false
+  failed_when: false
+  when: aider_enabled
+
+- name: Restrict aider user from accessing .env and vault files
+  ansible.builtin.command:
+    argv:
+      - setfacl
+      - -m
+      - u:aider:---
+      - "{{ item }}"
+  loop:
+    - /home/{{ docker_user }}/.env
+    - /home/{{ docker_user }}/group_vars/vault.yml
+  changed_when: false
+  failed_when: false
+  when: aider_enabled
+
+# ─── Systemd Cleanup Timer ───────────────────────────────────────────────────
+# Validates: Requirements 9.3
+
+- name: Deploy aider-cleanup.timer unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/aider-cleanup.timer
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Aider workspace cleanup timer
+
+      [Timer]
+      OnCalendar=hourly
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+  when: aider_enabled
+  notify: Restart aider-cleanup timer
+
+- name: Deploy aider-cleanup.service unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/aider-cleanup.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Aider workspace cleanup
+
+      [Service]
+      Type=oneshot
+      User=aider
+      Group=aider
+      ExecStart=/usr/local/bin/aider-cleanup
+  when: aider_enabled
+
+- name: Enable and start aider-cleanup.timer
+  ansible.builtin.systemd_service:
+    name: aider-cleanup.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: aider_enabled
+
+# ─── Logrotate ───────────────────────────────────────────────────────────────
+# Validates: Requirements 12.5
+
+- name: Deploy logrotate configuration for aider logs
+  ansible.builtin.copy:
+    dest: /etc/logrotate.d/aider
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      /var/log/aider/*.json {
+          daily
+          rotate 30
+          maxsize 500M
+          compress
+          delaycompress
+          missingok
+          notifempty
+          create 0644 aider aider
+      }
+  when: aider_enabled
+
+# ─── Repository Validation and Configuration ─────────────────────────────────
+# Validates: Requirements 3.2, 3.3, 3.4, 3.5, 10.4
+
+- name: Check repository paths exist
+  ansible.builtin.stat:
+    path: "{{ item.repo_path }}"
+  loop: "{{ aider_repositories }}"
+  loop_control:
+    label: "{{ item.repo_name }}"
+  register: aider_repo_paths
+  when: aider_enabled
+
+- name: Check repositories contain .git directory
+  ansible.builtin.stat:
+    path: "{{ item.repo_path }}/.git"
+  loop: "{{ aider_repositories }}"
+  loop_control:
+    label: "{{ item.repo_name }}"
+  register: aider_repo_git_dirs
+  when: aider_enabled
+
+- name: Build valid repositories list
+  ansible.builtin.set_fact:
+    aider_valid_repositories: >-
+      {{ aider_repositories | zip(aider_repo_paths.results, aider_repo_git_dirs.results)
+         | selectattr('1.stat.exists', 'equalto', true)
+         | selectattr('2.stat.exists', 'equalto', true)
+         | map(attribute='0')
+         | list }}
+    aider_invalid_repositories: >-
+      {{ aider_repositories | zip(aider_repo_paths.results, aider_repo_git_dirs.results)
+         | rejectattr('1.stat.exists', 'equalto', true)
+         | map(attribute='0')
+         | list
+         +
+         aider_repositories | zip(aider_repo_paths.results, aider_repo_git_dirs.results)
+         | selectattr('1.stat.exists', 'equalto', true)
+         | rejectattr('2.stat.exists', 'equalto', true)
+         | map(attribute='0')
+         | list }}
+  when: aider_enabled
+
+- name: Warn about invalid repositories
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: Repository '{{ item.repo_name }}' at '{{ item.repo_path }}'
+      does not exist or is not a valid git repository — skipping.
+  loop: "{{ aider_invalid_repositories | default([]) }}"
+  loop_control:
+    label: "{{ item.repo_name }}"
+  when:
+    - aider_enabled
+    - aider_invalid_repositories | default([]) | length > 0
+
+- name: Configure receive.denyCurrentBranch on valid repositories
+  ansible.builtin.command:
+    argv:
+      - git
+      - config
+      - receive.denyCurrentBranch
+      - ignore
+    chdir: "{{ item.repo_path }}"
+  loop: "{{ aider_valid_repositories | default([]) }}"
+  loop_control:
+    label: "{{ item.repo_name }}"
+  changed_when: false
+  when:
+    - aider_enabled
+    - aider_valid_repositories | default([]) | length > 0
+
+- name: Deploy pre-receive hook to protect branches
+  ansible.builtin.copy:
+    dest: "{{ item.repo_path }}/.git/hooks/pre-receive"
+    owner: aider
+    group: aider
+    mode: "0755"
+    content: |
+      #!/bin/bash
+      # Reject pushes to protected branches from aider user
+      PROTECTED_BRANCHES="{{ aider_protected_branches | join(' ') }}"
+      while read oldrev newrev refname; do
+        branch=$(echo "$refname" | sed 's|refs/heads/||')
+        for protected in $PROTECTED_BRANCHES; do
+          if [ "$branch" = "$protected" ] && [ "$(whoami)" = "aider" ]; then
+            echo "ERROR: Push to protected branch '$branch' rejected for aider user"
+            exit 1
+          fi
+        done
+      done
+  loop: "{{ aider_valid_repositories | default([]) }}"
+  loop_control:
+    label: "{{ item.repo_name }}"
+  when:
+    - aider_enabled
+    - aider_valid_repositories | default([]) | length > 0
+
+# ─── Prerequisites Validation ────────────────────────────────────────────────
+# Validates: Requirement 18.6
+
+- name: Verify git is installed
+  ansible.builtin.command:
+    argv:
+      - git
+      - --version
+  changed_when: false
+  when: aider_enabled
+
+- name: Check llama.cpp coding instance is reachable
+  ansible.builtin.uri:
+    url: "{{ aider_api_base | regex_replace('/v1$', '') }}/health"
+    method: GET
+    timeout: 10
+  register: aider_llama_health
+  failed_when: false
+  when: aider_enabled
+
+- name: Warn if llama.cpp coding instance is not reachable
+  ansible.builtin.debug:
+    msg: >-
+      WARNING: llama.cpp coding instance at {{ aider_api_base }} is not reachable
+      (status={{ aider_llama_health.status | default('unreachable') }}).
+      Aider will be installed but may not function until the inference endpoint is available.
+  when:
+    - aider_enabled
+    - aider_llama_health.status is not defined or aider_llama_health.status != 200
+
+# ─── Aider Installation ──────────────────────────────────────────────────────
+# Validates: Requirements 1.1, 1.2, 1.3, 1.4, 1.5, 1.6
+
+- name: Install pipx via apt
+  ansible.builtin.apt:
+    name: pipx
+    state: present
+  when: aider_enabled
+
+- name: Ensure pipx path is available for aider user
+  ansible.builtin.command:
+    argv:
+      - pipx
+      - ensurepath
+  become: true
+  become_user: aider
+  environment:
+    HOME: /srv/ai-lab/aider
+    PIPX_HOME: /srv/ai-lab/aider/.local/pipx
+    PIPX_BIN_DIR: /srv/ai-lab/aider/.local/bin
+  changed_when: false
+  when: aider_enabled
+
+- name: Install Aider via pipx as aider user
+  ansible.builtin.command:
+    argv:
+      - pipx
+      - install
+      - aider-chat
+  become: true
+  become_user: aider
+  environment:
+    HOME: /srv/ai-lab/aider
+    PIPX_HOME: /srv/ai-lab/aider/.local/pipx
+    PIPX_BIN_DIR: /srv/ai-lab/aider/.local/bin
+  register: aider_pipx_install
+  changed_when: "'installed package' in aider_pipx_install.stdout"
+  failed_when:
+    - aider_pipx_install.rc != 0
+    - "'already installed' not in aider_pipx_install.stderr"
+  when: aider_enabled
+
+# ─── Aider Environment Configuration ────────────────────────────────────────
+# Deploys a .env file in the aider user's home that Aider reads for
+# API base URL, API key, model name, edit format, and non-interactive mode.
+
+- name: Deploy Aider environment configuration
+  ansible.builtin.copy:
+    dest: /srv/ai-lab/aider/.env
+    owner: aider
+    group: aider
+    mode: "0640"
+    content: |
+      # Generated by Ansible - do not edit manually
+      # Aider environment configuration
+      # Validates: Requirements 1.2, 1.3, 1.4, 1.6
+
+      # API configuration (Requirement 1.2, 1.3)
+      OPENAI_API_BASE={{ aider_api_base }}
+      OPENAI_API_KEY={{ aider_api_key }}
+
+      # Model settings (Requirement 1.4)
+      AIDER_MODEL=openai/{{ aider_model_name }}
+      AIDER_EDIT_FORMAT={{ aider_edit_format }}
+      AIDER_MAP_TOKENS={{ aider_map_tokens }}
+      AIDER_MAX_CHAT_HISTORY_TOKENS={{ aider_max_chat_history_tokens }}
+
+      # Non-interactive mode (Requirement 1.6)
+      AIDER_YES_ALWAYS=true
+      AIDER_NO_AUTO_COMMITS=true
+      AIDER_NO_SUGGEST_SHELL_COMMANDS=true
+      AIDER_NO_SHOW_DIFFS=true
+  when: aider_enabled
+
+# ─── Aider Installation Verification ────────────────────────────────────────
+# Validates: Requirement 1.5
+
+- name: Verify Aider installation
+  ansible.builtin.command:
+    argv:
+      - /srv/ai-lab/aider/.local/bin/aider
+      - --version
+  become: true
+  become_user: aider
+  environment:
+    HOME: /srv/ai-lab/aider
+  register: aider_version_check
+  changed_when: false
+  failed_when: aider_version_check.rc != 0
+  when: aider_enabled
+
+- name: Display Aider version
+  ansible.builtin.debug:
+    msg: "Aider installed successfully: {{ aider_version_check.stdout }}"
+  when:
+    - aider_enabled
+    - aider_version_check is not skipped

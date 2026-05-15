@@ -301,3 +301,60 @@ wireguard_persistent_keepalive: 25
 wireguard_clients:
   - name: primary
     address: "{{ lookup('env', 'LAB_WG_CLIENT_ADDRESS') | default('10.66.66.2/32', true) }}"
+
+# ─── Aider (AI coding agent runtime) ───────────────────────────────────────
+aider_enabled: true
+
+# Runtime configuration (from LAB_AIDER_* environment variables)
+aider_task_timeout: "{{ lookup('env', 'LAB_AIDER_TASK_TIMEOUT') | default('600', true) | int }}"
+aider_test_timeout: "{{ lookup('env', 'LAB_AIDER_TEST_TIMEOUT') | default('300', true) | int }}"
+aider_max_concurrent: "{{ lookup('env', 'LAB_AIDER_MAX_CONCURRENT') | default('2', true) | int }}"
+aider_queue_timeout: "{{ lookup('env', 'LAB_AIDER_QUEUE_TIMEOUT') | default('300', true) | int }}"
+aider_max_workspace_disk: "{{ lookup('env', 'LAB_AIDER_MAX_WORKSPACE_DISK') | default('10737418240', true) | int }}"
+aider_max_workspace_size: "{{ lookup('env', 'LAB_AIDER_MAX_WORKSPACE_SIZE') | default('1073741824', true) | int }}"
+aider_edit_format: "{{ lookup('env', 'LAB_AIDER_EDIT_FORMAT') | default('whole', true) }}"
+aider_map_tokens: "{{ lookup('env', 'LAB_AIDER_MAP_TOKENS') | default('1024', true) | int }}"
+aider_max_chat_history_tokens: "{{ lookup('env', 'LAB_AIDER_MAX_CHAT_HISTORY_TOKENS') | default('2048', true) | int }}"
+aider_model_name: "{{ lookup('env', 'LAB_AIDER_MODEL_NAME') | default('coder', true) }}"
+aider_default_mode: "{{ lookup('env', 'LAB_AIDER_DEFAULT_MODE') | default('autonomous', true) }}"
+aider_api_base: "{{ lookup('env', 'LAB_AIDER_API_BASE') | default('http://127.0.0.1:8080/v1', true) }}"
+aider_api_key: "{{ lookup('env', 'LAB_LLAMA_CODE_API_KEY') | default('local-code', true) }}"
+
+# Protected branches — the agent cannot commit to these branches
+aider_protected_branches:
+  - main
+  - master
+  - develop
+
+# Repository configuration — defines which repositories the agent can operate on
+# Each entry specifies access controls, execution policies, and resource limits
+aider_repositories:
+  - repo_name: my-project
+    repo_path: /srv/ai-lab/repos/my-project
+    default_branch: main
+    test_command: "pytest -x --tb=short"
+    access_mode: full-edit          # full-edit | review-only | readonly
+    execution_mode: autonomous      # autonomous | supervised | dry-run
+    scope_paths: []                 # default: full repo
+    max_indexed_files: 100
+    file_modification_policy:
+      max_files_modified: 20
+      max_lines_changed: 500
+      forbidden_paths:
+        - "*.env"
+        - "secrets/"
+        - ".git/"
+      forbidden_extensions:
+        - ".pem"
+        - ".key"
+    resource_profile:
+      context_limit: 16000
+      concurrency_limit: 1
+      task_timeout_override: 600
+      test_timeout_override: 300
+      sandbox_mode: none            # none | docker (deferred)
+      allowed_tools: []
+      token_budget:
+        max_prompt_tokens: 16000
+        max_completion_tokens: 8000
+        max_total_tokens: 32000

@@ -1,0 +1,14 @@
+---
+- name: Restart aider-cleanup timer
+  ansible.builtin.systemd_service:
+    name: aider-cleanup.timer
+    state: restarted
+    enabled: true
+  when: aider_enabled
+
+- name: Reload iptables rules
+  ansible.builtin.command:
+    argv:
+      - iptables-restore
+      - /etc/iptables/rules.v4
+  when: aider_enabled
