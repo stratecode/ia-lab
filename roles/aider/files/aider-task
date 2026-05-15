@@ -1,0 +1,1377 @@
+#!/usr/bin/env bash
+# aider-task — Wrapper script for Aider coding agent task execution
+# Deployed to /usr/local/bin/aider-task by Ansible (mode 0755, root:root)
+#
+# Orchestrates the full task lifecycle:
+#   1. Parameter parsing and validation (task 6.1)
+#   2. Concurrency control (task 6.2)
+#   3. Workspace creation (task 6.3)
+#   4. Aider execution (task 6.4)
+#   5. Policy validation and testing (task 6.5)
+#   6. Commit and completion (task 6.6)
+#   7. Failure handling and cleanup (task 6.7)
+
+set -euo pipefail
+
+# ─── Source environment and library ──────────────────────────────────────────
+
+# Source runtime configuration (Req 17.5)
+if [[ -f /etc/aider/environment ]]; then
+    # shellcheck source=/dev/null
+    source /etc/aider/environment
+else
+    printf 'FATAL: /etc/aider/environment not found\n' >&2
+    exit 1
+fi
+
+# Source pure utility functions library
+if [[ -f /usr/local/lib/aider-task-lib.sh ]]; then
+    # shellcheck source=/dev/null
+    source /usr/local/lib/aider-task-lib.sh
+else
+    printf 'FATAL: /usr/local/lib/aider-task-lib.sh not found\n' >&2
+    exit 1
+fi
+
+# ─── Global state ────────────────────────────────────────────────────────────
+
+TASK_ID=""
+REPO_NAME=""
+DESCRIPTION=""
+TEST_COMMAND=""
+EXECUTION_MODE=""
+PRIORITY="normal"
+SCOPE_PATHS=""
+METADATA="{}"
+
+# Runtime state
+LOG_FILE=""
+TASK_STATUS="pending"
+CURRENT_STAGE="pending"
+STAGE_START_TIME=""
+WORKSPACE_PATH=""
+BRANCH_NAME=""
+LOCK_FD=""
+START_TIME=""
+REPO_PATH=""
+REPO_DEFAULT_BRANCH=""
+REPO_ACCESS_MODE=""
+REPO_EXECUTION_MODE=""
+REPO_TEST_COMMAND=""
+COMMIT_BEFORE=""
+COMMIT_AFTER=""
+AIDER_PID=""
+
+# ─── Signal handlers (task 6.1) ──────────────────────────────────────────────
+
+# Graceful shutdown handler for SIGTERM and SIGINT
+_handle_shutdown() {
+    local signal="${1:-UNKNOWN}"
+    TASK_STATUS="interrupted"
+
+    # Kill Aider process if running
+    if [[ -n "$AIDER_PID" ]] && kill -0 "$AIDER_PID" 2>/dev/null; then
+        kill -TERM "$AIDER_PID" 2>/dev/null || true
+        sleep 2
+        kill -0 "$AIDER_PID" 2>/dev/null && kill -KILL "$AIDER_PID" 2>/dev/null || true
+    fi
+
+    if [[ -n "$LOG_FILE" && -f "$LOG_FILE" ]]; then
+        if command -v jq &>/dev/null; then
+            local updated
+            updated=$(jq \
+                --arg status "interrupted" \
+                --arg err "Task interrupted by signal ${signal}" \
+                '.status = $status | .error_message = $err' \
+                "$LOG_FILE" 2>/dev/null)
+            if [[ -n "$updated" ]]; then
+                printf '%s\n' "$updated" > "$LOG_FILE"
+            fi
+        fi
+        log_event "$LOG_FILE" "signal" "Received ${signal}, shutting down gracefully"
+    fi
+
+    exit 1
+}
+
+# Install signal handlers
+trap '_handle_shutdown SIGTERM' SIGTERM
+trap '_handle_shutdown SIGINT' SIGINT
+trap '' SIGHUP  # Ignore SIGHUP (detached execution)
+
+# ─── CLI argument parsing (task 6.1) ─────────────────────────────────────────
+
+_usage() {
+    cat >&2 << 'EOF'
+Usage: aider-task --task-id UUID --repo NAME --description "TEXT" [OPTIONS]
+
+Required:
+  --task-id UUID          UUID v4 task identifier
+  --repo NAME             Repository name (must match aider_repositories entry)
+  --description TEXT      Natural language prompt for Aider (max 10,000 chars)
+
+Optional:
+  --test-command CMD      Override repository test command
+  --execution-mode MODE   autonomous, supervised, or dry-run
+  --priority LEVEL        low, normal, high, critical (default: normal)
+  --scope-paths PATHS     Comma-separated list of paths for Aider context
+  --metadata JSON         JSON object with structured task metadata
+  --help                  Show this help message
+EOF
+    exit 1
+}
+
+_parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --task-id)
+                [[ $# -lt 2 ]] && { printf 'ERROR: --task-id requires a value\n' >&2; exit 1; }
+                TASK_ID="$2"
+                shift 2
+                ;;
+            --repo)
+                [[ $# -lt 2 ]] && { printf 'ERROR: --repo requires a value\n' >&2; exit 1; }
+                REPO_NAME="$2"
+                shift 2
+                ;;
+            --description)
+                [[ $# -lt 2 ]] && { printf 'ERROR: --description requires a value\n' >&2; exit 1; }
+                DESCRIPTION="$2"
+                shift 2
+                ;;
+            --test-command)
+                [[ $# -lt 2 ]] && { printf 'ERROR: --test-command requires a value\n' >&2; exit 1; }
+                TEST_COMMAND="$2"
+                shift 2
+                ;;
+            --execution-mode)
+                [[ $# -lt 2 ]] && { printf 'ERROR: --execution-mode requires a value\n' >&2; exit 1; }
+                EXECUTION_MODE="$2"
+                shift 2
+                ;;
+            --priority)
+                [[ $# -lt 2 ]] && { printf 'ERROR: --priority requires a value\n' >&2; exit 1; }
+                PRIORITY="$2"
+                shift 2
+                ;;
+            --scope-paths)
+                [[ $# -lt 2 ]] && { printf 'ERROR: --scope-paths requires a value\n' >&2; exit 1; }
+                SCOPE_PATHS="$2"
+                shift 2
+                ;;
+            --metadata)
+                [[ $# -lt 2 ]] && { printf 'ERROR: --metadata requires a value\n' >&2; exit 1; }
+                METADATA="$2"
+                shift 2
+                ;;
+            --help|-h)
+                _usage
+                ;;
+            *)
+                printf 'ERROR: Unknown argument: %s\n' "$1" >&2
+                _usage
+                ;;
+        esac
+    done
+}
+
+# ─── Validation (task 6.1) ───────────────────────────────────────────────────
+
+_validate_all_params() {
+    local error
+
+    # Validate required parameters (task-id, repo, description) using library
+    error=$(validate_params "$TASK_ID" "$REPO_NAME" "$DESCRIPTION")
+    if [[ $? -ne 0 ]]; then
+        printf 'VALIDATION FAILED: %s\n' "$error" >&2
+        return 1
+    fi
+
+    # Validate priority if provided
+    case "$PRIORITY" in
+        low|normal|high|critical) ;;
+        *)
+            printf 'VALIDATION FAILED: invalid priority "%s" (must be: low, normal, high, critical)\n' "$PRIORITY" >&2
+            return 1
+            ;;
+    esac
+
+    # Validate execution mode if provided
+    if [[ -n "$EXECUTION_MODE" ]]; then
+        case "$EXECUTION_MODE" in
+            autonomous|supervised|dry-run) ;;
+            *)
+                printf 'VALIDATION FAILED: invalid execution-mode "%s" (must be: autonomous, supervised, dry-run)\n' "$EXECUTION_MODE" >&2
+                return 1
+                ;;
+        esac
+    fi
+
+    # Validate metadata JSON if provided (non-empty and not default)
+    if [[ "$METADATA" != "{}" && -n "$METADATA" ]]; then
+        error=$(validate_metadata "$METADATA")
+        if [[ $? -ne 0 ]]; then
+            printf 'VALIDATION FAILED: metadata — %s\n' "$error" >&2
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+# ─── Execution log initialization (task 6.1) ─────────────────────────────────
+
+_init_execution_log() {
+    local log_dir="${AIDER_LOG_DIR:-/var/log/aider}"
+    LOG_FILE="${log_dir}/${TASK_ID}.json"
+
+    # Ensure log directory exists
+    if [[ ! -d "$log_dir" ]]; then
+        mkdir -p "$log_dir" 2>/dev/null || {
+            printf 'ERROR: Cannot create log directory %s\n' "$log_dir" >&2
+            return 1
+        }
+    fi
+
+    # Extract execution_id and correlation_id from metadata if present
+    local execution_id=""
+    local correlation_id=""
+    if command -v jq &>/dev/null; then
+        execution_id=$(printf '%s' "$METADATA" | jq -r '.execution_id // empty' 2>/dev/null)
+        correlation_id=$(printf '%s' "$METADATA" | jq -r '.correlation_id // empty' 2>/dev/null)
+    fi
+
+    # Generate execution_id if not provided in metadata
+    if [[ -z "$execution_id" ]]; then
+        if command -v uuidgen &>/dev/null; then
+            execution_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+        else
+            execution_id=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || printf '%s' "$(date +%s)-$$")
+        fi
+    fi
+
+    # Generate correlation_id if not provided in metadata
+    if [[ -z "$correlation_id" ]]; then
+        if command -v uuidgen &>/dev/null; then
+            correlation_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+        else
+            correlation_id=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || printf '%s' "$(date +%s)-$$-corr")
+        fi
+    fi
+
+    # Split scope_paths into JSON array
+    local scope_paths_json="[]"
+    if [[ -n "$SCOPE_PATHS" ]]; then
+        if command -v jq &>/dev/null; then
+            scope_paths_json=$(printf '%s' "$SCOPE_PATHS" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')
+        fi
+    fi
+
+    local metadata_json="$METADATA"
+
+    # Create the initial execution log (Req 12.1)
+    if command -v jq &>/dev/null; then
+        jq -n \
+            --arg task_id "$TASK_ID" \
+            --arg execution_id "$execution_id" \
+            --arg correlation_id "$correlation_id" \
+            --arg repository "$REPO_NAME" \
+            --arg branch "" \
+            --arg status "pending" \
+            --arg execution_mode "${EXECUTION_MODE:-${AIDER_DEFAULT_MODE:-autonomous}}" \
+            --arg priority "$PRIORITY" \
+            --argjson metadata "$metadata_json" \
+            --argjson scope_paths "$scope_paths_json" \
+            '{
+                task_id: $task_id,
+                execution_id: $execution_id,
+                correlation_id: $correlation_id,
+                repository: $repository,
+                branch: $branch,
+                status: $status,
+                execution_mode: $execution_mode,
+                priority: $priority,
+                metadata: $metadata,
+                stages: [],
+                aider_exit_code: null,
+                test_exit_code: null,
+                duration_seconds: null,
+                token_usage: null,
+                repository_fingerprint: {},
+                modified_files: [],
+                scope_paths: $scope_paths,
+                effective_prompt: "",
+                error_message: null,
+                failure_type: null,
+                failure_category: null,
+                failure_description: null,
+                retry_eligible: false
+            }' > "$LOG_FILE"
+    else
+        cat > "$LOG_FILE" << LOGJSON
+{"task_id":"${TASK_ID}","execution_id":"${execution_id}","correlation_id":"${correlation_id}","repository":"${REPO_NAME}","branch":"","status":"pending","execution_mode":"${EXECUTION_MODE:-${AIDER_DEFAULT_MODE:-autonomous}}","priority":"${PRIORITY}","metadata":${metadata_json},"stages":[],"aider_exit_code":null,"test_exit_code":null,"duration_seconds":null,"token_usage":null,"repository_fingerprint":{},"modified_files":[],"scope_paths":${scope_paths_json},"effective_prompt":"","error_message":null,"failure_type":null,"failure_category":null,"failure_description":null,"retry_eligible":false}
+LOGJSON
+    fi
+
+    return 0
+}
+
+# ─── Helper: update log status ───────────────────────────────────────────────
+
+_update_log_status() {
+    local status="$1"
+    local error_msg="${2:-}"
+    local failure_type="${3:-}"
+
+    TASK_STATUS="$status"
+
+    if [[ -f "$LOG_FILE" ]] && command -v jq &>/dev/null; then
+        local classification=""
+        local retry_eligible="false"
+        if [[ -n "$failure_type" ]]; then
+            classification=$(classify_failure "$failure_type" | head -1)
+            retry_eligible=$(classify_failure "$failure_type" | tail -1)
+        fi
+
+        local updated
+        updated=$(jq \
+            --arg status "$status" \
+            --arg err "$error_msg" \
+            --arg ftype "$failure_type" \
+            --arg fcat "$classification" \
+            --argjson retry "${retry_eligible:-false}" \
+            '.status = $status |
+             .error_message = (if $err == "" then null else $err end) |
+             .failure_type = (if $ftype == "" then null else $ftype end) |
+             .failure_category = (if $fcat == "" then null else $fcat end) |
+             .retry_eligible = $retry' \
+            "$LOG_FILE" 2>/dev/null)
+        if [[ -n "$updated" ]]; then
+            printf '%s\n' "$updated" > "$LOG_FILE"
+        fi
+    fi
+}
+
+# ─── Helper: record stage transition ─────────────────────────────────────────
+
+_transition_stage() {
+    local new_stage="$1"
+    local now
+    now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    # Close previous stage
+    if [[ -n "$STAGE_START_TIME" && -n "$CURRENT_STAGE" ]]; then
+        log_stage_transition "$LOG_FILE" "$TASK_ID" "$CURRENT_STAGE" "$STAGE_START_TIME" "$now"
+    fi
+
+    # Open new stage
+    CURRENT_STAGE="$new_stage"
+    STAGE_START_TIME="$now"
+
+    log_event "$LOG_FILE" "stage_change" "Entering stage: ${new_stage}" \
+        "$(printf '{"task_id":"%s","stage":"%s"}' "$TASK_ID" "$new_stage")"
+}
+
+# ─── Helper: resolve repository configuration ────────────────────────────────
+
+_resolve_repo_config() {
+    REPO_PATH="${AIDER_REPOS_DIR:-/srv/ai-lab/repos}/${REPO_NAME}"
+
+    # Read repository configuration from the repos config file if available
+    # In production, this is populated by Ansible. For the wrapper, we read
+    # from a JSON config file deployed alongside the environment.
+    local config_file="/etc/aider/repositories.json"
+
+    if [[ -f "$config_file" ]] && command -v jq &>/dev/null; then
+        local repo_config
+        repo_config=$(jq -r --arg name "$REPO_NAME" '.[] | select(.repo_name == $name)' "$config_file" 2>/dev/null)
+
+        if [[ -n "$repo_config" && "$repo_config" != "null" ]]; then
+            REPO_DEFAULT_BRANCH=$(printf '%s' "$repo_config" | jq -r '.default_branch // "main"')
+            REPO_ACCESS_MODE=$(printf '%s' "$repo_config" | jq -r '.access_mode // "full-edit"')
+            REPO_EXECUTION_MODE=$(printf '%s' "$repo_config" | jq -r '.execution_mode // ""')
+            REPO_TEST_COMMAND=$(printf '%s' "$repo_config" | jq -r '.test_command // ""')
+            return 0
+        fi
+    fi
+
+    # Fallback: detect default branch from git
+    if [[ -d "$REPO_PATH/.git" ]]; then
+        REPO_DEFAULT_BRANCH=$(git -C "$REPO_PATH" symbolic-ref --short HEAD 2>/dev/null || echo "main")
+    else
+        REPO_DEFAULT_BRANCH="main"
+    fi
+    REPO_ACCESS_MODE="full-edit"
+    REPO_EXECUTION_MODE=""
+    REPO_TEST_COMMAND=""
+
+    return 0
+}
+
+# ─── Concurrency control (task 6.2) ──────────────────────────────────────────
+# Implements flock-based slot acquisition using /run/aider/slot-{0..N}.lock
+# Requirements: 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 29.3, 29.4
+
+_acquire_concurrency_slot() {
+    local lock_dir="${AIDER_LOCK_DIR:-/run/aider}"
+    local max_concurrent="${AIDER_MAX_CONCURRENT:-2}"
+    local queue_timeout="${AIDER_QUEUE_TIMEOUT:-300}"
+    local wait_start
+    wait_start=$(date +%s)
+
+    # Ensure lock directory exists
+    mkdir -p "$lock_dir" 2>/dev/null || true
+
+    # Register in priority queue file
+    local queue_file="${lock_dir}/queue"
+    printf '%d %s %s %s\n' "$$" "$PRIORITY" "$TASK_ID" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$queue_file" 2>/dev/null || true
+
+    while true; do
+        # Try each slot
+        local slot
+        for slot in $(seq 0 $(( max_concurrent - 1 ))); do
+            local lock_file="${lock_dir}/slot-${slot}.lock"
+
+            # Check for stale locks (Req 11.6)
+            if [[ -f "$lock_file" ]]; then
+                local lock_pid
+                lock_pid=$(head -1 "$lock_file" 2>/dev/null | awk '{print $1}')
+                if [[ -n "$lock_pid" ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
+                    # Stale lock — reclaim
+                    rm -f "$lock_file"
+                    log_event "$LOG_FILE" "concurrency" "Reclaimed stale lock on slot ${slot} (PID ${lock_pid})"
+                fi
+            fi
+
+            # Attempt non-blocking flock
+            # Open the lock file on a dynamic file descriptor
+            local fd=$(( 200 + slot ))
+            eval "exec ${fd}>${lock_file}"
+
+            if flock -n "$fd" 2>/dev/null; then
+                # Check priority: yield to higher-priority waiting tasks
+                if [[ -f "$queue_file" ]] && command -v awk &>/dev/null; then
+                    local higher_waiting
+                    higher_waiting=$(awk -v my_pri="$PRIORITY" -v my_pid="$$" '
+                        BEGIN {
+                            pri["critical"]=4; pri["high"]=3; pri["normal"]=2; pri["low"]=1
+                        }
+                        {
+                            if ($1 != my_pid && pri[$2] > pri[my_pri]) print $1
+                        }
+                    ' "$queue_file" 2>/dev/null | head -1)
+
+                    if [[ -n "$higher_waiting" ]] && kill -0 "$higher_waiting" 2>/dev/null; then
+                        # Release lock and let higher priority task take it
+                        eval "exec ${fd}>&-"
+                        continue
+                    fi
+                fi
+
+                # Lock acquired — write PID and priority
+                printf '%d %s %s\n' "$$" "$PRIORITY" "$TASK_ID" > "$lock_file"
+                LOCK_FD="$fd"
+
+                # Remove self from queue
+                if [[ -f "$queue_file" ]]; then
+                    sed -i "/^$$ /d" "$queue_file" 2>/dev/null || true
+                fi
+
+                log_event "$LOG_FILE" "concurrency" "Acquired slot ${slot}" \
+                    "$(printf '{"slot":%d,"priority":"%s"}' "$slot" "$PRIORITY")"
+                return 0
+            else
+                eval "exec ${fd}>&-"
+            fi
+        done
+
+        # No slot available — check timeout
+        local elapsed=$(( $(date +%s) - wait_start ))
+        if (( elapsed >= queue_timeout )); then
+            # Remove self from queue
+            if [[ -f "$queue_file" ]]; then
+                sed -i "/^$$ /d" "$queue_file" 2>/dev/null || true
+            fi
+            return 1
+        fi
+
+        # Wait and retry (Req 11.4)
+        sleep 5
+    done
+}
+
+_release_concurrency_slot() {
+    # Lock is automatically released when the file descriptor is closed (process exit)
+    # This function is for explicit cleanup if needed
+    if [[ -n "$LOCK_FD" ]]; then
+        eval "exec ${LOCK_FD}>&-" 2>/dev/null || true
+        LOCK_FD=""
+    fi
+
+    # Remove self from queue file
+    local queue_file="${AIDER_LOCK_DIR:-/run/aider}/queue"
+    if [[ -f "$queue_file" ]]; then
+        sed -i "/^$$ /d" "$queue_file" 2>/dev/null || true
+    fi
+}
+
+# ─── Workspace creation (task 6.3) ───────────────────────────────────────────
+# Creates git worktree at <workspace_root>/<task-id>/ on branch agent/<task-id>/<slug>
+# Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6
+
+_create_workspace() {
+    local workspace_root="${AIDER_WORKSPACE_ROOT:-/srv/ai-lab/aider/workspaces}"
+
+    # Generate branch slug from description
+    local slug
+    slug=$(generate_branch_slug "$DESCRIPTION")
+    BRANCH_NAME="agent/${TASK_ID}/${slug}"
+
+    # Validate branch name (Req 10.1, 10.2)
+    local branch_error
+    branch_error=$(validate_branch_name "$BRANCH_NAME")
+    if [[ $? -ne 0 ]]; then
+        printf '%s\n' "$branch_error" >&2
+        return 1
+    fi
+
+    WORKSPACE_PATH="${workspace_root}/${TASK_ID}"
+
+    # Check if workspace already exists (Req 4.5)
+    if [[ -d "$WORKSPACE_PATH" ]]; then
+        printf 'workspace_error: workspace path already exists: %s\n' "$WORKSPACE_PATH" >&2
+        return 1
+    fi
+
+    # Record repository fingerprint before execution (Req 12.8)
+    COMMIT_BEFORE=$(git -C "$REPO_PATH" rev-parse HEAD 2>/dev/null || echo "unknown")
+    local dirty_before="false"
+    if ! git -C "$REPO_PATH" diff --quiet 2>/dev/null; then
+        dirty_before="true"
+    fi
+
+    # Update log with fingerprint and branch
+    if [[ -f "$LOG_FILE" ]] && command -v jq &>/dev/null; then
+        local updated
+        updated=$(jq \
+            --arg branch "$BRANCH_NAME" \
+            --arg commit_before "$COMMIT_BEFORE" \
+            --argjson dirty "$dirty_before" \
+            '.branch = $branch |
+             .repository_fingerprint.commit_before = $commit_before |
+             .repository_fingerprint.dirty_before = $dirty' \
+            "$LOG_FILE" 2>/dev/null)
+        if [[ -n "$updated" ]]; then
+            printf '%s\n' "$updated" > "$LOG_FILE"
+        fi
+    fi
+
+    # Create git worktree (Req 4.1, 4.3)
+    local git_output
+    git_output=$(git -C "$REPO_PATH" worktree add \
+        -b "$BRANCH_NAME" \
+        "$WORKSPACE_PATH" \
+        "${REPO_DEFAULT_BRANCH}" 2>&1)
+    local git_rc=$?
+
+    if [[ $git_rc -ne 0 ]]; then
+        printf 'workspace_error: git worktree creation failed (rc=%d): %s\n' "$git_rc" "$git_output" >&2
+        return 1
+    fi
+
+    # Verify workspace is valid git checkout (Req 4.4)
+    if [[ ! -f "${WORKSPACE_PATH}/.git" ]]; then
+        printf 'workspace_error: workspace missing .git file at %s\n' "$WORKSPACE_PATH" >&2
+        return 1
+    fi
+
+    if ! git -C "$WORKSPACE_PATH" rev-parse --is-inside-work-tree &>/dev/null; then
+        printf 'workspace_error: workspace is not a valid git work tree at %s\n' "$WORKSPACE_PATH" >&2
+        return 1
+    fi
+
+    log_event "$LOG_FILE" "workspace" "Workspace created successfully" \
+        "$(printf '{"workspace":"%s","branch":"%s","base_commit":"%s"}' \
+            "$WORKSPACE_PATH" "$BRANCH_NAME" "$COMMIT_BEFORE")"
+
+    return 0
+}
+
+# ─── Aider execution (task 6.4) ──────────────────────────────────────────────
+# Invokes Aider with proper configuration and timeout enforcement
+# Requirements: 1.6, 1.7, 5.4, 5.5, 5.6, 5.7, 6.2, 6.3, 6.5, 6.6, 6.7, 6.8, 6.9, 6.10, 31.2, 31.4, 31.5
+
+_execute_aider() {
+    local task_timeout="${AIDER_TASK_TIMEOUT:-600}"
+
+    # Resolve effective execution mode (Req 6.1, 19.5, 19.6, 19.7)
+    local effective_mode
+    effective_mode=$(resolve_execution_mode "$EXECUTION_MODE" "$REPO_EXECUTION_MODE" "${AIDER_DEFAULT_MODE:-autonomous}")
+    if [[ $? -ne 0 ]]; then
+        printf 'mode_error: %s\n' "$effective_mode" >&2
+        return 1
+    fi
+
+    # Check access mode before execution (Req 24.2, 24.3)
+    local access_error
+    access_error=$(check_access_mode "$REPO_ACCESS_MODE" "write")
+    if [[ $? -ne 0 ]]; then
+        printf '%s\n' "$access_error" >&2
+        return 2  # permission_violation
+    fi
+
+    # Update log with effective mode
+    if [[ -f "$LOG_FILE" ]] && command -v jq &>/dev/null; then
+        local updated
+        updated=$(jq --arg mode "$effective_mode" '.execution_mode = $mode' "$LOG_FILE" 2>/dev/null)
+        if [[ -n "$updated" ]]; then
+            printf '%s\n' "$updated" > "$LOG_FILE"
+        fi
+    fi
+
+    # Build Aider command arguments
+    local -a aider_args=()
+    local aider_bin="/srv/ai-lab/aider/.local/bin/aider"
+
+    # Core flags (Req 6.5, 6.9, 6.10)
+    aider_args+=(--no-auto-commits)
+    aider_args+=(--message "$DESCRIPTION")
+    aider_args+=(--map-tokens "${AIDER_MAP_TOKENS:-1024}")
+    aider_args+=(--max-chat-history-tokens "${AIDER_MAX_CHAT_HISTORY_TOKENS:-2048}")
+    aider_args+=(--edit-format "${AIDER_EDIT_FORMAT:-whole}")
+
+    # Execution mode flags (Req 6.2, 6.3)
+    case "$effective_mode" in
+        autonomous)
+            aider_args+=(--yes-always)
+            ;;
+        supervised)
+            # Generate patch only, don't auto-accept
+            aider_args+=(--yes-always)  # Still run non-interactively
+            ;;
+        dry-run)
+            aider_args+=(--yes-always)
+            aider_args+=(--dry-run)
+            ;;
+    esac
+
+    # Apply scope paths via Aider file arguments (Req 31.2, 31.4, 31.5)
+    if [[ -n "$SCOPE_PATHS" ]]; then
+        local IFS=','
+        local scope
+        for scope in $SCOPE_PATHS; do
+            scope="${scope#"${scope%%[![:space:]]*}"}"
+            scope="${scope%"${scope##*[![:space:]]}"}"
+            [[ -n "$scope" ]] && aider_args+=(--file "$scope")
+        done
+    fi
+
+    # Record effective prompt in log (Req 12.7)
+    if [[ -f "$LOG_FILE" ]] && command -v jq &>/dev/null; then
+        local updated
+        updated=$(jq --arg prompt "$DESCRIPTION" '.effective_prompt = $prompt' "$LOG_FILE" 2>/dev/null)
+        if [[ -n "$updated" ]]; then
+            printf '%s\n' "$updated" > "$LOG_FILE"
+        fi
+    fi
+
+    # Prepare output capture files (Req 12.4)
+    local stdout_log="${WORKSPACE_PATH}/aider-stdout.log"
+    local stderr_log="${WORKSPACE_PATH}/aider-stderr.log"
+
+    log_event "$LOG_FILE" "aider" "Invoking Aider in ${effective_mode} mode" \
+        "$(printf '{"mode":"%s","timeout":%d}' "$effective_mode" "$task_timeout")"
+
+    # Execute Aider with timeout enforcement (Req 5.6, 5.7)
+    # Run in background to enable timeout control
+    (
+        cd "$WORKSPACE_PATH"
+        "$aider_bin" "${aider_args[@]}" >"$stdout_log" 2>"$stderr_log"
+    ) &
+    AIDER_PID=$!
+
+    # Wait with timeout
+    local elapsed=0
+    while kill -0 "$AIDER_PID" 2>/dev/null; do
+        if (( elapsed >= task_timeout )); then
+            # Timeout exceeded — send SIGTERM (Req 5.7)
+            log_event "$LOG_FILE" "timeout" "Task timeout exceeded (${task_timeout}s), sending SIGTERM"
+            kill -TERM "$AIDER_PID" 2>/dev/null || true
+
+            # Wait 10 seconds for graceful shutdown
+            local grace=0
+            while (( grace < 10 )) && kill -0 "$AIDER_PID" 2>/dev/null; do
+                sleep 1
+                (( grace++ ))
+            done
+
+            # SIGKILL if still running
+            if kill -0 "$AIDER_PID" 2>/dev/null; then
+                log_event "$LOG_FILE" "timeout" "Process still running after SIGTERM grace period, sending SIGKILL"
+                kill -KILL "$AIDER_PID" 2>/dev/null || true
+                wait "$AIDER_PID" 2>/dev/null || true
+            fi
+
+            AIDER_PID=""
+            return 3  # timeout
+        fi
+
+        sleep 1
+        (( elapsed++ ))
+    done
+
+    # Collect exit code
+    wait "$AIDER_PID" 2>/dev/null
+    local aider_rc=$?
+    AIDER_PID=""
+
+    # Record exit code in log (Req 12.2)
+    if [[ -f "$LOG_FILE" ]] && command -v jq &>/dev/null; then
+        local updated
+        updated=$(jq --argjson rc "$aider_rc" '.aider_exit_code = $rc' "$LOG_FILE" 2>/dev/null)
+        if [[ -n "$updated" ]]; then
+            printf '%s\n' "$updated" > "$LOG_FILE"
+        fi
+    fi
+
+    # Handle dry-run mode: generate patch and exit (Req 6.4)
+    if [[ "$effective_mode" == "dry-run" ]]; then
+        if [[ -d "$WORKSPACE_PATH" ]]; then
+            git -C "$WORKSPACE_PATH" diff > "${WORKSPACE_PATH}/changes.patch" 2>/dev/null || true
+        fi
+        return 4  # dry-run complete (not a failure)
+    fi
+
+    # Handle supervised mode: generate patch (Req 6.3, 19.3)
+    if [[ "$effective_mode" == "supervised" ]]; then
+        if [[ -d "$WORKSPACE_PATH" ]]; then
+            git -C "$WORKSPACE_PATH" diff > "${WORKSPACE_PATH}/changes.patch" 2>/dev/null || true
+        fi
+        # In supervised mode, we still proceed to testing
+    fi
+
+    # Check Aider exit code (Req 5.4, 5.5)
+    if [[ $aider_rc -ne 0 ]]; then
+        return 5  # aider_failure
+    fi
+
+    return 0
+}
+
+# ─── Policy validation and testing (task 6.5) ────────────────────────────────
+# Validates file modification policy, disk quotas, token budget, runs tests
+# Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 20.3, 20.4, 20.5, 22.5, 23.1-23.5, 28.5
+
+_validate_policy() {
+    # Get list of modified files
+    local modified_files
+    modified_files=$(git -C "$WORKSPACE_PATH" diff --name-only 2>/dev/null || echo "")
+
+    if [[ -z "$modified_files" ]]; then
+        return 0  # No modifications, policy passes trivially
+    fi
+
+    # Read policy from repository config
+    local config_file="/etc/aider/repositories.json"
+    local max_files=0
+    local max_lines=0
+    local forbidden_paths=""
+    local forbidden_extensions=""
+
+    if [[ -f "$config_file" ]] && command -v jq &>/dev/null; then
+        local repo_config
+        repo_config=$(jq -r --arg name "$REPO_NAME" '.[] | select(.repo_name == $name)' "$config_file" 2>/dev/null)
+
+        if [[ -n "$repo_config" && "$repo_config" != "null" ]]; then
+            max_files=$(printf '%s' "$repo_config" | jq -r '.file_modification_policy.max_files_modified // 0')
+            max_lines=$(printf '%s' "$repo_config" | jq -r '.file_modification_policy.max_lines_changed // 0')
+            forbidden_paths=$(printf '%s' "$repo_config" | jq -r '.file_modification_policy.forbidden_paths // [] | join(",")')
+            forbidden_extensions=$(printf '%s' "$repo_config" | jq -r '.file_modification_policy.forbidden_extensions // [] | join(",")')
+        fi
+    fi
+
+    # Validate file modification policy (Req 20.3, 20.4, 20.5)
+    local policy_error
+    policy_error=$(validate_file_policy "$modified_files" "$max_files" "$max_lines" "$forbidden_paths" "$forbidden_extensions")
+    if [[ $? -ne 0 ]]; then
+        printf '%s\n' "$policy_error" >&2
+        return 1  # scope_violation
+    fi
+
+    # Check disk quotas (Req 22.1-22.4)
+    local workspace_size=0
+    if command -v du &>/dev/null; then
+        workspace_size=$(du -sb "$WORKSPACE_PATH" 2>/dev/null | awk '{print $1}')
+    fi
+    local max_workspace="${AIDER_MAX_WORKSPACE_SIZE:-1073741824}"
+
+    local quota_error
+    quota_error=$(check_disk_quota "$workspace_size" "0" "0" "$max_workspace" "0" "0")
+    if [[ $? -ne 0 ]]; then
+        printf '%s\n' "$quota_error" >&2
+        return 2  # quota_exceeded
+    fi
+
+    # Check token budget (Req 28.1, 28.2)
+    # Extract token usage from Aider output if available
+    local prompt_tokens=0
+    local completion_tokens=0
+    local total_tokens=0
+    local stdout_log="${WORKSPACE_PATH}/aider-stdout.log"
+
+    if [[ -f "$stdout_log" ]]; then
+        # Try to extract token counts from Aider output
+        prompt_tokens=$(grep -oP 'prompt_tokens[=:]\s*\K\d+' "$stdout_log" 2>/dev/null | tail -1 || echo "0")
+        completion_tokens=$(grep -oP 'completion_tokens[=:]\s*\K\d+' "$stdout_log" 2>/dev/null | tail -1 || echo "0")
+        total_tokens=$(( prompt_tokens + completion_tokens ))
+    fi
+
+    # Read token budget from config
+    local max_prompt=0
+    local max_completion=0
+    local max_total=0
+    if [[ -f "$config_file" ]] && command -v jq &>/dev/null; then
+        local repo_config
+        repo_config=$(jq -r --arg name "$REPO_NAME" '.[] | select(.repo_name == $name)' "$config_file" 2>/dev/null)
+        if [[ -n "$repo_config" && "$repo_config" != "null" ]]; then
+            max_prompt=$(printf '%s' "$repo_config" | jq -r '.resource_profile.token_budget.max_prompt_tokens // 0')
+            max_completion=$(printf '%s' "$repo_config" | jq -r '.resource_profile.token_budget.max_completion_tokens // 0')
+            max_total=$(printf '%s' "$repo_config" | jq -r '.resource_profile.token_budget.max_total_tokens // 0')
+        fi
+    fi
+
+    local budget_error
+    budget_error=$(check_token_budget "$prompt_tokens" "$completion_tokens" "$total_tokens" "$max_prompt" "$max_completion" "$max_total")
+    if [[ $? -ne 0 ]]; then
+        printf '%s\n' "$budget_error" >&2
+        return 3  # token_budget_exceeded
+    fi
+
+    # Update log with token usage (Req 12.6)
+    if [[ -f "$LOG_FILE" ]] && command -v jq &>/dev/null; then
+        local updated
+        updated=$(jq \
+            --argjson pt "$prompt_tokens" \
+            --argjson ct "$completion_tokens" \
+            --argjson tt "$total_tokens" \
+            --argjson mp "$max_prompt" \
+            --argjson mc "$max_completion" \
+            --argjson mt "$max_total" \
+            '.token_usage = {
+                prompt_tokens: $pt,
+                completion_tokens: $ct,
+                total_tokens: $tt,
+                budget: { max_prompt_tokens: $mp, max_completion_tokens: $mc, max_total_tokens: $mt }
+            }' "$LOG_FILE" 2>/dev/null)
+        if [[ -n "$updated" ]]; then
+            printf '%s\n' "$updated" > "$LOG_FILE"
+        fi
+    fi
+
+    return 0
+}
+
+_generate_patch() {
+    # Generate patch file (git diff or git format-patch)
+    if [[ -d "$WORKSPACE_PATH" ]]; then
+        git -C "$WORKSPACE_PATH" diff > "${WORKSPACE_PATH}/changes.patch" 2>/dev/null || true
+    fi
+}
+
+_run_tests() {
+    local test_timeout="${AIDER_TEST_TIMEOUT:-300}"
+
+    # Determine test command: CLI override > repo config > none
+    local test_cmd="${TEST_COMMAND}"
+    if [[ -z "$test_cmd" ]]; then
+        test_cmd="$REPO_TEST_COMMAND"
+    fi
+
+    # Skip testing if no test command configured (Req 7.5)
+    if [[ -z "$test_cmd" ]]; then
+        log_event "$LOG_FILE" "testing" "No test command configured, skipping test stage"
+        return 0
+    fi
+
+    log_event "$LOG_FILE" "testing" "Executing test command" \
+        "$(printf '{"command":"%s","timeout":%d}' "$test_cmd" "$test_timeout")"
+
+    # Capture test output (Req 7.6)
+    local test_output_file="${WORKSPACE_PATH}/test-output.log"
+
+    # Execute test command with timeout (Req 7.2)
+    local test_pid
+    (
+        cd "$WORKSPACE_PATH"
+        eval "$test_cmd" >"$test_output_file" 2>&1
+    ) &
+    test_pid=$!
+
+    # Wait with timeout
+    local elapsed=0
+    while kill -0 "$test_pid" 2>/dev/null; do
+        if (( elapsed >= test_timeout )); then
+            kill -TERM "$test_pid" 2>/dev/null || true
+            sleep 5
+            kill -0 "$test_pid" 2>/dev/null && kill -KILL "$test_pid" 2>/dev/null || true
+            wait "$test_pid" 2>/dev/null || true
+
+            log_event "$LOG_FILE" "testing" "Test command timed out after ${test_timeout}s"
+            return 1  # test timeout
+        fi
+        sleep 1
+        (( elapsed++ ))
+    done
+
+    wait "$test_pid" 2>/dev/null
+    local test_rc=$?
+
+    # Record test exit code (Req 12.2)
+    if [[ -f "$LOG_FILE" ]] && command -v jq &>/dev/null; then
+        local updated
+        updated=$(jq --argjson rc "$test_rc" '.test_exit_code = $rc' "$LOG_FILE" 2>/dev/null)
+        if [[ -n "$updated" ]]; then
+            printf '%s\n' "$updated" > "$LOG_FILE"
+        fi
+    fi
+
+    # Check test result (Req 7.3, 7.4)
+    if [[ $test_rc -ne 0 ]]; then
+        return 1  # tests_failed
+    fi
+
+    return 0
+}
+
+# ─── Commit and completion (task 6.6) ────────────────────────────────────────
+# Stages changes, creates structured commit, records fingerprint
+# Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 12.2, 12.6, 12.7, 12.8
+
+_create_commit() {
+    # Stage all changes (Req 8.1)
+    git -C "$WORKSPACE_PATH" add -A 2>/dev/null
+
+    # Check if there are changes to commit (Req 8.4)
+    if git -C "$WORKSPACE_PATH" diff --cached --quiet 2>/dev/null; then
+        # No changes to commit
+        return 1  # no_changes
+    fi
+
+    # Create structured commit message (Req 8.2)
+    local commit_msg
+    commit_msg=$(format_commit_message "$TASK_ID" "$DESCRIPTION")
+
+    # Create commit with aider user identity (Req 8.3)
+    git -C "$WORKSPACE_PATH" commit \
+        --message "$commit_msg" \
+        --no-verify \
+        2>/dev/null
+
+    local commit_rc=$?
+    if [[ $commit_rc -ne 0 ]]; then
+        return 2  # commit failed
+    fi
+
+    # Record repository fingerprint after execution (Req 12.8)
+    COMMIT_AFTER=$(git -C "$WORKSPACE_PATH" rev-parse HEAD 2>/dev/null || echo "unknown")
+
+    # Record modified files in log
+    local modified_files
+    modified_files=$(git -C "$WORKSPACE_PATH" diff --name-only HEAD~1 2>/dev/null || echo "")
+
+    if [[ -f "$LOG_FILE" ]] && command -v jq &>/dev/null; then
+        local files_json="[]"
+        if [[ -n "$modified_files" ]]; then
+            files_json=$(printf '%s' "$modified_files" | jq -R -s 'split("\n") | map(select(length > 0))')
+        fi
+
+        local updated
+        updated=$(jq \
+            --arg commit_after "$COMMIT_AFTER" \
+            --argjson files "$files_json" \
+            '.repository_fingerprint.commit_after = $commit_after |
+             .modified_files = $files' \
+            "$LOG_FILE" 2>/dev/null)
+        if [[ -n "$updated" ]]; then
+            printf '%s\n' "$updated" > "$LOG_FILE"
+        fi
+    fi
+
+    log_event "$LOG_FILE" "commit" "Commit created successfully" \
+        "$(printf '{"commit":"%s","message":"%s"}' "$COMMIT_AFTER" "$commit_msg")"
+
+    return 0
+}
+
+# ─── Failure handling and cleanup (task 6.7) ──────────────────────────────────
+# Categorizes failures, generates FAILURE_REPORT.md, applies cleanup policy
+# Requirements: 9.1, 9.2, 16.1, 16.2, 16.3, 16.4, 16.5, 27.3-27.5, 30.1-30.4
+
+_handle_failure() {
+    local failure_type="${1:-}"
+    local failure_description="${2:-}"
+    local failed_stage="$CURRENT_STAGE"
+
+    # Classify failure (Req 27.1-27.5)
+    local classification
+    classification=$(classify_failure "$failure_type" | head -1)
+    local retry_eligible
+    retry_eligible=$(classify_failure "$failure_type" | tail -1)
+
+    # Update log with failure details
+    _update_log_status "$TASK_STATUS" "$failure_description" "$failure_type"
+
+    if [[ -f "$LOG_FILE" ]] && command -v jq &>/dev/null; then
+        local updated
+        updated=$(jq \
+            --arg fdesc "$failure_description" \
+            '.failure_description = $fdesc' \
+            "$LOG_FILE" 2>/dev/null)
+        if [[ -n "$updated" ]]; then
+            printf '%s\n' "$updated" > "$LOG_FILE"
+        fi
+    fi
+
+    # Record modified files (Req 16.4)
+    local modified_files=""
+    if [[ -n "$WORKSPACE_PATH" && -d "$WORKSPACE_PATH" ]]; then
+        modified_files=$(git -C "$WORKSPACE_PATH" diff --name-only 2>/dev/null || echo "")
+
+        # Update log with modified files
+        if [[ -f "$LOG_FILE" ]] && command -v jq &>/dev/null && [[ -n "$modified_files" ]]; then
+            local files_json
+            files_json=$(printf '%s' "$modified_files" | jq -R -s 'split("\n") | map(select(length > 0))')
+            local updated
+            updated=$(jq --argjson files "$files_json" '.modified_files = $files' "$LOG_FILE" 2>/dev/null)
+            if [[ -n "$updated" ]]; then
+                printf '%s\n' "$updated" > "$LOG_FILE"
+            fi
+        fi
+    fi
+
+    # Generate FAILURE_REPORT.md (Req 16.5)
+    if [[ -n "$WORKSPACE_PATH" && -d "$WORKSPACE_PATH" ]]; then
+        local error_output=""
+        local stderr_log="${WORKSPACE_PATH}/aider-stderr.log"
+        local test_log="${WORKSPACE_PATH}/test-output.log"
+
+        if [[ -f "$stderr_log" ]]; then
+            error_output=$(tail -c 5120 "$stderr_log" 2>/dev/null || echo "")
+        elif [[ -f "$test_log" ]]; then
+            error_output=$(tail -c 5120 "$test_log" 2>/dev/null || echo "")
+        fi
+
+        generate_failure_report \
+            "$WORKSPACE_PATH" \
+            "$TASK_ID" \
+            "$REPO_NAME" \
+            "$BRANCH_NAME" \
+            "$failed_stage" \
+            "$failure_type" \
+            "$error_output" \
+            "$modified_files"
+    fi
+
+    log_event "$LOG_FILE" "failure" "Task failed: ${failure_type}" \
+        "$(printf '{"failure_type":"%s","category":"%s","retry_eligible":%s,"stage":"%s"}' \
+            "$failure_type" "$classification" "$retry_eligible" "$failed_stage")"
+}
+
+_apply_cleanup_policy() {
+    local outcome="$1"  # completed, failed, tests_failed, timeout, no_changes, etc.
+
+    case "$outcome" in
+        completed|no_changes)
+            # Immediate cleanup for success (Req 9.1)
+            if [[ -n "$WORKSPACE_PATH" && -d "$WORKSPACE_PATH" ]]; then
+                # Remove worktree
+                git -C "$REPO_PATH" worktree remove "$WORKSPACE_PATH" --force 2>/dev/null || {
+                    rm -rf "$WORKSPACE_PATH" 2>/dev/null || true
+                }
+                log_event "$LOG_FILE" "cleanup" "Workspace removed (success cleanup)"
+            fi
+            ;;
+        failed|tests_failed|timeout|scope_violation|quota_exceeded|token_budget_exceeded)
+            # Preserve workspace for retention period (Req 9.2, 16.1, 16.2, 16.3)
+            # Write a retention marker file for the cleanup timer to process
+            if [[ -n "$WORKSPACE_PATH" && -d "$WORKSPACE_PATH" ]]; then
+                local retention_until
+                retention_until=$(date -u -d "+24 hours" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || \
+                    date -u -v+24H +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || \
+                    echo "")
+                printf '%s\n' "$retention_until" > "${WORKSPACE_PATH}/.retention_until" 2>/dev/null || true
+                log_event "$LOG_FILE" "cleanup" "Workspace preserved for debugging (retention until: ${retention_until})"
+            fi
+            ;;
+    esac
+}
+
+# ─── Main entry point ────────────────────────────────────────────────────────
+
+main() {
+    START_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    # ─── Stage 1: Parameter parsing and validation (task 6.1) ────────────────
+    _parse_args "$@"
+
+    # Validate all parameters (Req 5.3, 5.8)
+    if ! _validate_all_params; then
+        if [[ -n "$TASK_ID" ]] && validate_uuid "$TASK_ID"; then
+            LOG_FILE="${AIDER_LOG_DIR:-/var/log/aider}/${TASK_ID}.json"
+            if [[ -d "${AIDER_LOG_DIR:-/var/log/aider}" ]]; then
+                _init_execution_log 2>/dev/null || true
+                _update_log_status "failed" "Parameter validation failed" "validation_failure"
+            fi
+        fi
+        exit 1
+    fi
+
+    # Initialize execution log (Req 12.1)
+    if ! _init_execution_log; then
+        printf 'ERROR: Failed to initialize execution log\n' >&2
+        exit 1
+    fi
+
+    # Record the pending stage start
+    STAGE_START_TIME="$START_TIME"
+    CURRENT_STAGE="pending"
+    log_event "$LOG_FILE" "stage_change" "Task initialized, entering pending stage" \
+        "$(printf '{"task_id":"%s","stage":"pending"}' "$TASK_ID")"
+
+    # Resolve repository configuration
+    _resolve_repo_config
+
+    # ─── Stage 2: Concurrency control (task 6.2) ────────────────────────────
+    _transition_stage "acquiring_slot"
+
+    if ! _acquire_concurrency_slot; then
+        TASK_STATUS="queue_timeout"
+        _update_log_status "queue_timeout" "Failed to acquire execution slot within timeout" "queue_timeout"
+        _handle_failure "queue_timeout" "No execution slot available within ${AIDER_QUEUE_TIMEOUT:-300}s"
+        _finalize_log
+        exit 1
+    fi
+
+    # ─── Stage 3: Workspace creation (task 6.3) ──────────────────────────────
+    _transition_stage "workspace_created"
+
+    local ws_error
+    ws_error=$(_create_workspace 2>&1)
+    if [[ $? -ne 0 ]]; then
+        TASK_STATUS="failed"
+        _update_log_status "failed" "$ws_error" "repository_error"
+        _handle_failure "repository_error" "$ws_error"
+        _release_concurrency_slot
+        _finalize_log
+        exit 1
+    fi
+
+    # ─── Stage 4: Aider execution (task 6.4) ─────────────────────────────────
+    _transition_stage "executing"
+
+    local aider_error
+    aider_error=$(_execute_aider 2>&1)
+    local aider_result=$?
+
+    case $aider_result in
+        0)
+            # Success — proceed to policy validation and testing
+            ;;
+        1)
+            # Mode resolution error
+            TASK_STATUS="failed"
+            _update_log_status "failed" "$aider_error" "validation_failure"
+            _handle_failure "validation_failure" "$aider_error"
+            _apply_cleanup_policy "failed"
+            _release_concurrency_slot
+            _finalize_log
+            exit 1
+            ;;
+        2)
+            # Permission violation
+            TASK_STATUS="failed"
+            _update_log_status "failed" "$aider_error" "permission_violation"
+            _handle_failure "permission_violation" "$aider_error"
+            _apply_cleanup_policy "failed"
+            _release_concurrency_slot
+            _finalize_log
+            exit 1
+            ;;
+        3)
+            # Timeout
+            TASK_STATUS="timeout"
+            _update_log_status "timeout" "Task execution timed out" "timeout"
+            _handle_failure "timeout" "Aider process exceeded task timeout"
+            _apply_cleanup_policy "timeout"
+            _release_concurrency_slot
+            _finalize_log
+            exit 1
+            ;;
+        4)
+            # Dry-run complete — no further stages
+            TASK_STATUS="completed"
+            _update_log_status "completed" "" ""
+            _transition_stage "completed"
+            _generate_patch
+            _apply_cleanup_policy "completed"
+            _release_concurrency_slot
+            _finalize_log
+            exit 0
+            ;;
+        5)
+            # Aider failure
+            TASK_STATUS="failed"
+            local stderr_content=""
+            local stderr_log="${WORKSPACE_PATH}/aider-stderr.log"
+            if [[ -f "$stderr_log" ]]; then
+                stderr_content=$(tail -c 10240 "$stderr_log" 2>/dev/null || echo "")
+            fi
+            _update_log_status "failed" "Aider exited with non-zero code" "inference_failure"
+            _handle_failure "inference_failure" "Aider execution failed: ${stderr_content:0:500}"
+            _apply_cleanup_policy "failed"
+            _release_concurrency_slot
+            _finalize_log
+            exit 1
+            ;;
+    esac
+
+    # ─── Stage 5: Policy validation and testing (task 6.5) ───────────────────
+    _transition_stage "policy_check"
+
+    local policy_error
+    policy_error=$(_validate_policy 2>&1)
+    local policy_result=$?
+
+    case $policy_result in
+        0)
+            # Policy passed
+            ;;
+        1)
+            # Scope violation
+            TASK_STATUS="scope_violation"
+            _update_log_status "scope_violation" "$policy_error" "scope_violation"
+            _handle_failure "scope_violation" "$policy_error"
+            _apply_cleanup_policy "scope_violation"
+            _release_concurrency_slot
+            _finalize_log
+            exit 1
+            ;;
+        2)
+            # Quota exceeded
+            TASK_STATUS="quota_exceeded"
+            _update_log_status "quota_exceeded" "$policy_error" "quota_exceeded"
+            _handle_failure "quota_exceeded" "$policy_error"
+            _apply_cleanup_policy "quota_exceeded"
+            _release_concurrency_slot
+            _finalize_log
+            exit 1
+            ;;
+        3)
+            # Token budget exceeded
+            TASK_STATUS="token_budget_exceeded"
+            _update_log_status "token_budget_exceeded" "$policy_error" "quota_exceeded"
+            _handle_failure "quota_exceeded" "$policy_error"
+            _apply_cleanup_policy "token_budget_exceeded"
+            _release_concurrency_slot
+            _finalize_log
+            exit 1
+            ;;
+    esac
+
+    # Generate patch file
+    _generate_patch
+
+    # Run tests
+    _transition_stage "testing"
+
+    local test_error
+    test_error=$(_run_tests 2>&1)
+    if [[ $? -ne 0 ]]; then
+        TASK_STATUS="tests_failed"
+        _update_log_status "tests_failed" "Test command failed" "validation_failure"
+        _handle_failure "validation_failure" "Tests failed: ${test_error:0:500}"
+        _apply_cleanup_policy "tests_failed"
+        _release_concurrency_slot
+        _finalize_log
+        exit 1
+    fi
+
+    # ─── Stage 6: Commit and completion (task 6.6) ───────────────────────────
+    _transition_stage "committing"
+
+    local commit_result
+    _create_commit
+    commit_result=$?
+
+    case $commit_result in
+        0)
+            # Commit created successfully
+            TASK_STATUS="completed"
+            _update_log_status "completed" "" ""
+            _transition_stage "completed"
+            _apply_cleanup_policy "completed"
+            ;;
+        1)
+            # No changes to commit (Req 8.4)
+            TASK_STATUS="no_changes"
+            _update_log_status "no_changes" "" ""
+            _transition_stage "completed"
+            _apply_cleanup_policy "no_changes"
+            ;;
+        *)
+            # Commit failed
+            TASK_STATUS="failed"
+            _update_log_status "failed" "Git commit failed" "repository_error"
+            _handle_failure "repository_error" "Failed to create git commit"
+            _apply_cleanup_policy "failed"
+            _release_concurrency_slot
+            _finalize_log
+            exit 1
+            ;;
+    esac
+
+    # ─── Finalize ────────────────────────────────────────────────────────────
+    _release_concurrency_slot
+    _finalize_log
+    exit 0
+}
+
+# ─── Finalize log with duration ──────────────────────────────────────────────
+
+_finalize_log() {
+    local end_time
+    end_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    # Close current stage
+    if [[ -n "$STAGE_START_TIME" && -n "$CURRENT_STAGE" ]]; then
+        log_stage_transition "$LOG_FILE" "$TASK_ID" "$CURRENT_STAGE" "$STAGE_START_TIME" "$end_time"
+    fi
+
+    # Calculate total duration
+    local start_epoch end_epoch duration=0
+    if date --version &>/dev/null 2>&1; then
+        start_epoch=$(date -d "$START_TIME" +%s 2>/dev/null || echo 0)
+        end_epoch=$(date -d "$end_time" +%s 2>/dev/null || echo 0)
+    else
+        start_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$START_TIME" +%s 2>/dev/null || echo 0)
+        end_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$end_time" +%s 2>/dev/null || echo 0)
+    fi
+
+    if (( end_epoch > 0 && start_epoch > 0 )); then
+        duration=$(( end_epoch - start_epoch ))
+    fi
+
+    # Update log with final duration
+    if [[ -f "$LOG_FILE" ]] && command -v jq &>/dev/null; then
+        local updated
+        updated=$(jq --argjson dur "$duration" '.duration_seconds = $dur' "$LOG_FILE" 2>/dev/null)
+        if [[ -n "$updated" ]]; then
+            printf '%s\n' "$updated" > "$LOG_FILE"
+        fi
+    fi
+
+    log_event "$LOG_FILE" "complete" "Task finished with status: ${TASK_STATUS}" \
+        "$(printf '{"status":"%s","duration_seconds":%d}' "$TASK_STATUS" "$duration")"
+}
+
+main "$@"
