@@ -366,3 +366,90 @@
   when:
     - aider_enabled
     - aider_version_check is not skipped
+
+# ─── Network Isolation (iptables) ────────────────────────────────────────────
+# Validates: Requirements 15.1, 15.2, 15.3, 15.4, 15.5, 15.6
+
+- name: Install iptables-persistent for rule persistence
+  ansible.builtin.apt:
+    name:
+      - iptables
+      - iptables-persistent
+    state: present
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when: aider_enabled
+
+- name: Deploy iptables rules for aider network isolation
+  ansible.builtin.copy:
+    dest: /etc/iptables/rules.v4
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      *filter
+      :INPUT ACCEPT [0:0]
+      :FORWARD ACCEPT [0:0]
+      :OUTPUT ACCEPT [0:0]
+      # Allow loopback traffic to inference endpoints (Requirement 15.1)
+      -A OUTPUT -m owner --uid-owner aider -d 127.0.0.1 -p tcp --dport 8080:8084 -j ACCEPT
+      # Allow DNS resolution via systemd-resolved (Requirement 15.1)
+      -A OUTPUT -m owner --uid-owner aider -d 127.0.0.53 -p udp --dport 53 -j ACCEPT
+      -A OUTPUT -m owner --uid-owner aider -d 127.0.0.53 -p tcp --dport 53 -j ACCEPT
+      # Allow established/related return traffic (Requirement 15.1)
+      -A OUTPUT -m owner --uid-owner aider -m state --state ESTABLISHED,RELATED -j ACCEPT
+      # Block all other outbound for aider user (Requirement 15.2)
+      -A OUTPUT -m owner --uid-owner aider -j DROP
+      COMMIT
+  when: aider_enabled
+  notify: Reload iptables rules
+  register: aider_iptables_rules
+
+- name: Apply iptables rules immediately
+  ansible.builtin.command:
+    argv:
+      - iptables-restore
+      - /etc/iptables/rules.v4
+  when:
+    - aider_enabled
+    - aider_iptables_rules.changed
+  register: aider_iptables_apply
+  failed_when: aider_iptables_apply.rc != 0
+
+- name: Verify iptables rules are loaded
+  ansible.builtin.command:
+    argv:
+      - iptables
+      - -L
+      - OUTPUT
+      - -n
+      - --line-numbers
+  register: aider_iptables_verify
+  changed_when: false
+  failed_when: "'owner UID match' not in aider_iptables_verify.stdout"
+  when: aider_enabled
+
+- name: Verify network isolation — test external connection as aider user
+  ansible.builtin.command:
+    argv:
+      - bash
+      - -c
+      - "timeout 5 bash -c 'echo > /dev/tcp/8.8.8.8/53' 2>&1 && exit 1 || exit 0"
+  become: true
+  become_user: aider
+  register: aider_net_isolation_test
+  changed_when: false
+  failed_when: aider_net_isolation_test.rc != 0
+  when: aider_enabled
+
+- name: Fail if network isolation cannot be verified
+  ansible.builtin.fail:
+    msg: >-
+      FATAL: Network isolation for aider user could not be verified.
+      External connections should be blocked but the verification test did not confirm isolation.
+      Refusing to continue without network isolation (Requirement 15.6).
+  when:
+    - aider_enabled
+    - aider_net_isolation_test is defined
+    - aider_net_isolation_test.rc is defined
+    - aider_net_isolation_test.rc != 0

@@ -1,0 +1,414 @@
+#!/usr/bin/env bash
+# aider-cleanup — Workspace cleanup script for the Aider coding agent runtime
+# Deployed to /usr/local/bin/aider-cleanup by Ansible (mode 0755, root:root)
+# Executed hourly by aider-cleanup.timer as the aider user.
+#
+# Responsibilities:
+#   1. Scan workspace directories for expired retention periods
+#   2. Remove expired workspace directories and git worktree references
+#   3. Prune unmerged task branches from source repositories
+#   4. Enforce total disk usage threshold (AIDER_MAX_WORKSPACE_DISK)
+#   5. Remove oldest expired workspaces first when over threshold
+#
+# Requirements: 9.3, 9.4, 9.5, 9.6
+
+set -euo pipefail
+
+# ─── Source environment ──────────────────────────────────────────────────────
+
+if [[ -f /etc/aider/environment ]]; then
+    # shellcheck source=/dev/null
+    source /etc/aider/environment
+fi
+
+# ─── Configuration defaults ──────────────────────────────────────────────────
+
+WORKSPACE_ROOT="${AIDER_WORKSPACE_ROOT:-/srv/ai-lab/aider/workspaces}"
+REPOS_DIR="${AIDER_REPOS_DIR:-/srv/ai-lab/repos}"
+MAX_WORKSPACE_DISK="${AIDER_MAX_WORKSPACE_DISK:-10737418240}"  # 10GB in bytes
+LOG_DIR="${AIDER_LOG_DIR:-/var/log/aider}"
+
+# ─── Logging ─────────────────────────────────────────────────────────────────
+
+_log() {
+    local level="$1"
+    shift
+    local message="$*"
+    local timestamp
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    printf '[%s] [%s] aider-cleanup: %s\n' "$timestamp" "$level" "$message" >&2
+}
+
+_log_json() {
+    local action="$1"
+    local workspace="$2"
+    local detail="${3:-}"
+    local timestamp
+    timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    printf '{"timestamp":"%s","component":"aider-cleanup","action":"%s","workspace":"%s","detail":"%s"}\n' \
+        "$timestamp" "$action" "$workspace" "$detail"
+}
+
+# ─── Helper: parse ISO 8601 timestamp to epoch seconds ───────────────────────
+
+_iso_to_epoch() {
+    local iso_timestamp="$1"
+
+    if [[ -z "$iso_timestamp" ]]; then
+        echo "0"
+        return
+    fi
+
+    # Try GNU date first, then BSD date
+    if date --version &>/dev/null 2>&1; then
+        date -d "$iso_timestamp" +%s 2>/dev/null || echo "0"
+    else
+        date -j -f "%Y-%m-%dT%H:%M:%SZ" "$iso_timestamp" +%s 2>/dev/null || echo "0"
+    fi
+}
+
+# ─── Helper: get workspace disk usage in bytes ───────────────────────────────
+
+_get_workspace_disk_usage() {
+    local path="$1"
+    if [[ -d "$path" ]]; then
+        du -sb "$path" 2>/dev/null | awk '{print $1}'
+    else
+        echo "0"
+    fi
+}
+
+# ─── Helper: get total workspace root disk usage ─────────────────────────────
+
+_get_total_disk_usage() {
+    if [[ -d "$WORKSPACE_ROOT" ]]; then
+        du -sb "$WORKSPACE_ROOT" 2>/dev/null | awk '{print $1}'
+    else
+        echo "0"
+    fi
+}
+
+# ─── Helper: extract task-id from workspace directory name ───────────────────
+
+_get_task_id_from_workspace() {
+    local workspace_path="$1"
+    basename "$workspace_path"
+}
+
+# ─── Helper: find the source repository for a workspace ──────────────────────
+# Reads the .git file in the workspace to determine the parent repository.
+
+_find_source_repo() {
+    local workspace_path="$1"
+    local git_file="${workspace_path}/.git"
+
+    if [[ ! -f "$git_file" ]]; then
+        return 1
+    fi
+
+    # .git file in worktrees contains: gitdir: /path/to/repo/.git/worktrees/<name>
+    local gitdir
+    gitdir=$(sed -n 's/^gitdir: //p' "$git_file" 2>/dev/null)
+
+    if [[ -z "$gitdir" ]]; then
+        return 1
+    fi
+
+    # Navigate from .git/worktrees/<name> up to the repository root
+    # Pattern: <repo>/.git/worktrees/<task-id>
+    local repo_git_dir
+    repo_git_dir=$(dirname "$(dirname "$gitdir")")
+
+    if [[ -d "$repo_git_dir" ]]; then
+        # repo_git_dir is the .git directory; parent is the repo root
+        dirname "$repo_git_dir"
+    else
+        return 1
+    fi
+}
+
+# ─── Helper: get branch name for a workspace ─────────────────────────────────
+
+_get_workspace_branch() {
+    local workspace_path="$1"
+
+    if [[ -d "$workspace_path" ]]; then
+        git -C "$workspace_path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo ""
+    else
+        echo ""
+    fi
+}
+
+# ─── Helper: check if a branch has been merged into the default branch ───────
+
+_is_branch_merged() {
+    local repo_path="$1"
+    local branch_name="$2"
+
+    if [[ ! -d "$repo_path/.git" && ! -f "$repo_path/.git" ]]; then
+        return 1
+    fi
+
+    # Check if the branch is merged into any of the common default branches
+    local default_branch
+    default_branch=$(git -C "$repo_path" symbolic-ref --short HEAD 2>/dev/null || echo "main")
+
+    git -C "$repo_path" branch --merged "$default_branch" 2>/dev/null | \
+        grep -qw "$branch_name" 2>/dev/null
+}
+
+# ─── Phase 1: Remove expired workspaces ─────────────────────────────────────
+# Scans workspace directories for .retention_until files and removes those
+# whose retention period has expired.
+# Requirements: 9.3, 9.4
+
+_remove_expired_workspaces() {
+    local now_epoch
+    now_epoch=$(date +%s)
+    local removed_count=0
+
+    if [[ ! -d "$WORKSPACE_ROOT" ]]; then
+        _log "INFO" "Workspace root does not exist: ${WORKSPACE_ROOT}"
+        return 0
+    fi
+
+    local workspace
+    for workspace in "${WORKSPACE_ROOT}"/*/; do
+        # Skip if not a directory
+        [[ -d "$workspace" ]] || continue
+
+        local retention_file="${workspace}.retention_until"
+
+        # If no retention file exists, check if workspace is orphaned
+        # (no .git file and no retention marker = leftover from interrupted cleanup)
+        if [[ ! -f "$retention_file" ]]; then
+            # Check if this is a valid worktree workspace
+            if [[ ! -f "${workspace}.git" ]]; then
+                # Orphaned directory — remove it
+                _log "INFO" "Removing orphaned workspace (no .git, no retention): ${workspace}"
+                rm -rf "$workspace" 2>/dev/null || true
+                (( removed_count++ )) || true
+            fi
+            # If .git exists but no retention file, it's an active workspace — skip
+            continue
+        fi
+
+        # Read retention timestamp
+        local retention_until
+        retention_until=$(head -1 "$retention_file" 2>/dev/null)
+
+        if [[ -z "$retention_until" ]]; then
+            # Empty retention file — treat as expired
+            _log "WARN" "Empty retention file in workspace: ${workspace}"
+            _cleanup_workspace "$workspace"
+            (( removed_count++ )) || true
+            continue
+        fi
+
+        # Parse retention timestamp
+        local retention_epoch
+        retention_epoch=$(_iso_to_epoch "$retention_until")
+
+        if [[ "$retention_epoch" == "0" ]]; then
+            # Unparseable timestamp — treat as expired
+            _log "WARN" "Unparseable retention timestamp '${retention_until}' in: ${workspace}"
+            _cleanup_workspace "$workspace"
+            (( removed_count++ )) || true
+            continue
+        fi
+
+        # Check if retention has expired
+        if (( now_epoch >= retention_epoch )); then
+            _log "INFO" "Retention expired for workspace: ${workspace} (expired at: ${retention_until})"
+            _cleanup_workspace "$workspace"
+            (( removed_count++ )) || true
+        fi
+    done
+
+    _log "INFO" "Phase 1 complete: removed ${removed_count} expired workspace(s)"
+}
+
+# ─── Phase 2: Enforce total disk usage threshold ─────────────────────────────
+# If total workspace disk usage exceeds MAX_WORKSPACE_DISK, remove the oldest
+# expired workspaces first until usage is below the threshold.
+# Requirements: 9.6
+
+_enforce_disk_threshold() {
+    local total_usage
+    total_usage=$(_get_total_disk_usage)
+
+    if (( total_usage <= MAX_WORKSPACE_DISK )); then
+        _log "INFO" "Disk usage within threshold: ${total_usage} bytes / ${MAX_WORKSPACE_DISK} bytes"
+        return 0
+    fi
+
+    _log "WARN" "Disk usage exceeds threshold: ${total_usage} bytes > ${MAX_WORKSPACE_DISK} bytes"
+
+    # Build a list of workspaces with retention files, sorted by retention time (oldest first)
+    local -a candidates=()
+
+    local workspace
+    for workspace in "${WORKSPACE_ROOT}"/*/; do
+        [[ -d "$workspace" ]] || continue
+
+        local retention_file="${workspace}.retention_until"
+        if [[ -f "$retention_file" ]]; then
+            local retention_until
+            retention_until=$(head -1 "$retention_file" 2>/dev/null)
+            local retention_epoch
+            retention_epoch=$(_iso_to_epoch "$retention_until")
+            # Store as "epoch:path" for sorting
+            candidates+=("${retention_epoch}:${workspace}")
+        fi
+    done
+
+    # Sort candidates by epoch (oldest retention first)
+    local -a sorted_candidates
+    IFS=$'\n' sorted_candidates=($(printf '%s\n' "${candidates[@]}" | sort -t: -k1 -n))
+    unset IFS
+
+    # Remove workspaces starting from oldest until under threshold
+    local removed_count=0
+    for entry in "${sorted_candidates[@]}"; do
+        # Re-check usage
+        total_usage=$(_get_total_disk_usage)
+        if (( total_usage <= MAX_WORKSPACE_DISK )); then
+            break
+        fi
+
+        local ws_path="${entry#*:}"
+        _log "INFO" "Removing workspace to reclaim disk space: ${ws_path}"
+        _cleanup_workspace "$ws_path"
+        (( removed_count++ )) || true
+    done
+
+    # Final check — if still over threshold, remove workspaces without retention files
+    # (active workspaces are a last resort, but we only remove those that look abandoned)
+    total_usage=$(_get_total_disk_usage)
+    if (( total_usage > MAX_WORKSPACE_DISK )); then
+        _log "WARN" "Still over threshold after removing retained workspaces (${total_usage} bytes). Manual intervention may be needed."
+    fi
+
+    _log "INFO" "Phase 2 complete: removed ${removed_count} workspace(s) for disk threshold enforcement"
+}
+
+# ─── Phase 3: Prune unmerged task branches ───────────────────────────────────
+# After workspace removal, prune the associated agent/ branches from source
+# repositories if they have not been merged.
+# Requirements: 9.5
+
+_prune_orphaned_branches() {
+    local pruned_count=0
+
+    if [[ ! -d "$REPOS_DIR" ]]; then
+        _log "INFO" "Repos directory does not exist: ${REPOS_DIR}"
+        return 0
+    fi
+
+    local repo_dir
+    for repo_dir in "${REPOS_DIR}"/*/; do
+        [[ -d "$repo_dir" ]] || continue
+
+        # Check if it's a valid git repository
+        if [[ ! -d "${repo_dir}.git" ]]; then
+            continue
+        fi
+
+        # List all agent/ branches
+        local branch
+        while IFS= read -r branch; do
+            [[ -z "$branch" ]] && continue
+
+            # Trim whitespace
+            branch="${branch#"${branch%%[![:space:]]*}"}"
+            branch="${branch%"${branch##*[![:space:]]}"}"
+
+            # Skip if branch doesn't start with agent/
+            [[ "$branch" == agent/* ]] || continue
+
+            # Extract task-id from branch name (agent/<task-id>/<slug>)
+            local task_id
+            task_id=$(printf '%s' "$branch" | cut -d'/' -f2)
+
+            # Check if workspace still exists for this branch
+            if [[ -d "${WORKSPACE_ROOT}/${task_id}" ]]; then
+                # Workspace still exists — don't prune the branch
+                continue
+            fi
+
+            # Check if branch has been merged (Req 9.5)
+            if _is_branch_merged "$repo_dir" "$branch"; then
+                # Branch is merged — don't prune (it was accepted)
+                continue
+            fi
+
+            # Branch is unmerged and workspace is gone — prune it
+            _log "INFO" "Pruning unmerged branch '${branch}' from $(basename "$repo_dir")"
+            git -C "$repo_dir" branch -D "$branch" 2>/dev/null || {
+                _log "WARN" "Failed to delete branch '${branch}' from $(basename "$repo_dir")"
+            }
+            (( pruned_count++ )) || true
+
+        done < <(git -C "$repo_dir" branch --list 'agent/*' 2>/dev/null)
+    done
+
+    _log "INFO" "Phase 3 complete: pruned ${pruned_count} orphaned branch(es)"
+}
+
+# ─── Workspace cleanup helper ────────────────────────────────────────────────
+# Removes a workspace directory and its associated git worktree reference.
+# Requirements: 9.4
+
+_cleanup_workspace() {
+    local workspace_path="$1"
+
+    if [[ ! -d "$workspace_path" ]]; then
+        return 0
+    fi
+
+    local task_id
+    task_id=$(_get_task_id_from_workspace "$workspace_path")
+
+    # Find the source repository for this workspace
+    local repo_path
+    repo_path=$(_find_source_repo "$workspace_path") || repo_path=""
+
+    # Remove git worktree reference first (Req 9.4)
+    if [[ -n "$repo_path" && -d "$repo_path" ]]; then
+        git -C "$repo_path" worktree remove "$workspace_path" --force 2>/dev/null || {
+            # If worktree remove fails, try to prune stale worktree entries
+            git -C "$repo_path" worktree prune 2>/dev/null || true
+        }
+    fi
+
+    # Remove workspace directory if it still exists
+    if [[ -d "$workspace_path" ]]; then
+        rm -rf "$workspace_path" 2>/dev/null || {
+            _log "WARN" "Failed to remove workspace directory: ${workspace_path}"
+            return 1
+        }
+    fi
+
+    _log_json "workspace_removed" "$task_id" "Workspace cleaned up successfully"
+    _log "INFO" "Removed workspace: ${workspace_path}"
+    return 0
+}
+
+# ─── Main ────────────────────────────────────────────────────────────────────
+
+main() {
+    _log "INFO" "Starting cleanup run"
+
+    # Phase 1: Remove expired workspaces
+    _remove_expired_workspaces
+
+    # Phase 2: Enforce disk usage threshold
+    _enforce_disk_threshold
+
+    # Phase 3: Prune orphaned branches from source repositories
+    _prune_orphaned_branches
+
+    _log "INFO" "Cleanup run complete"
+}
+
+main "$@"
