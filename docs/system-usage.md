@@ -61,10 +61,12 @@ The bot is access-restricted to the Telegram user IDs configured in `LAB_TELEGRA
 | `/coder <mensaje>` | Direct chat with the local coder model |
 | `/planner <mensaje>` | Direct chat with the local planner model |
 | `/capabilities` | List available capabilities |
-| `/web <consulta>` | Search the web |
+| `/web <consulta>` | Research a topic from web sources and answer directly |
 | `/fetch <url>` | Fetch and summarize a web page |
-| `/doc <ruta_o_url>` | Read a document |
-| `/image <ruta_o_url>` | Analyze an image |
+| `/doc <ruta_o_url> [pregunta]` | Read a document and answer or summarize |
+| `/image <ruta_o_url>` | Analyze an image and synthesize the result |
+| `/research <consulta>` | Run full research mode |
+| `/eval <consulta>` | Run research plus OpenAI reference + judge evaluation |
 | `/sources <task_id>` | List persisted task sources/artifacts |
 | `/server status` | Read-only host summary |
 | `/server services` | Service status snapshot |
@@ -91,8 +93,10 @@ The bot is access-restricted to the Telegram user IDs configured in `LAB_TELEGRA
 /planner diseña un plan de despliegue para FastAPI + Redis + PostgreSQL
 /web últimas novedades de PostgreSQL logical replication
 /fetch https://example.com/article
-/doc https://example.com/spec.pdf
+/doc https://example.com/spec.pdf resume los riesgos principales
 /image https://example.com/screenshot.png
+/research compara NATS vs Redis Streams para colas internas
+/eval últimas mejoras de FastAPI en 2026
 /server services
 ```
 
@@ -130,7 +134,7 @@ Open WebUI is exposed at `https://<chat_domain>` and connected to the local `lla
 | `coder` | code changes, debugging, implementation plans with code bias |
 | `planner` | decomposition, sequencing, architecture, higher-level reasoning |
 | `utility` | lightweight questions, short transformations, cheap helper tasks |
-| `orchestrator-tools` | web search, URL fetch, document read, image analysis with source refs |
+| `orchestrator-tools` | research mode with web, documents and images, returning direct answers with source refs |
 
 ## Orchestrator HTTP API
 
@@ -246,6 +250,18 @@ curl -sk -X POST "$ORCH_BASE/tools/web/search" \
   -d '{"query":"latest PostgreSQL logical replication improvements"}'
 ```
 
+### Run research mode directly
+
+```bash
+curl -sk -X POST "$ORCH_BASE/research/query" \
+  -H "Authorization: Bearer $ORCH_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query":"compare NATS vs Redis Streams for internal queueing",
+    "allowed_capabilities":["web.search","web.fetch"]
+  }'
+```
+
 ### Fetch a URL directly
 
 ```bash
@@ -278,6 +294,30 @@ curl -sk -X POST "$ORCH_BASE/tools/images/analyze" \
 ```bash
 curl -sk "$ORCH_BASE/tasks/<task_id>/sources" \
   -H "Authorization: Bearer $ORCH_KEY"
+```
+
+### Create a reference answer and judge it
+
+This requires `LAB_OPENAI_REFERENCE_API_KEY` to be configured on the orchestrator.
+
+```bash
+RESEARCH_RUN_ID="<research_run_id>"
+
+curl -sk -X POST "$ORCH_BASE/evaluations/reference" \
+  -H "Authorization: Bearer $ORCH_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"research_run_id\":\"$RESEARCH_RUN_ID\"}"
+```
+
+Then:
+
+```bash
+EVALUATION_RUN_ID="<evaluation_run_id>"
+
+curl -sk -X POST "$ORCH_BASE/evaluations/judge" \
+  -H "Authorization: Bearer $ORCH_KEY" \
+  -H "Content-Type: application/json" \
+  -d "{\"evaluation_run_id\":\"$EVALUATION_RUN_ID\"}"
 ```
 
 ### Create a local-execution task
@@ -347,6 +387,18 @@ LAB_AGENT_API_KEY="$ORCH_KEY" \
 LAB_AGENT_WORKSPACE_ROOT="/abs/path/to/current/workspace" \
 PYTHONPATH=src .venv-phase4/bin/python -m orchestrator.local_bridge.daemon
 ```
+
+## Research mode notes
+
+`orchestrator-tools` is no longer just a thin tool gateway. It now runs a server-side research flow:
+
+1. classify the query
+2. select capabilities
+3. fetch one or several sources
+4. synthesize an answer with references
+5. persist the run, artifacts, and source links
+
+If `LAB_OPENAI_REFERENCE_API_KEY` is configured, the system can also generate a reference answer through the OpenAI API and score the orchestrator answer with an LLM judge. That is for evaluation and tuning, not for production control logic.
 
 ## Local Agent Bridge
 

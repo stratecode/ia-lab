@@ -123,6 +123,16 @@ class ICapabilityService(Protocol):
         ...
 
 
+class IResearchService(Protocol):
+    """Protocol for research-mode operations exposed to Telegram."""
+
+    async def query(self, query: str, *, mode_hint: str | None = None) -> dict[str, Any]:
+        ...
+
+    async def evaluate(self, query: str) -> dict[str, Any]:
+        ...
+
+
 # ---------------------------------------------------------------------------
 # Access restriction filter
 # ---------------------------------------------------------------------------
@@ -178,6 +188,7 @@ class TelegramBot:
         chat_service: IChatService | None = None,
         server_ops_service: IServerOpsService | None = None,
         capability_service: ICapabilityService | None = None,
+        research_service: IResearchService | None = None,
     ) -> None:
         """Initialize the Telegram bot.
 
@@ -198,6 +209,7 @@ class TelegramBot:
         self._chat_service = chat_service
         self._server_ops_service = server_ops_service
         self._capability_service = capability_service
+        self._research_service = research_service
         self._app: Application | None = None
         self._user_filter = AllowedUsersFilter(allowed_user_ids)
 
@@ -244,6 +256,8 @@ class TelegramBot:
         self._app.add_handler(CommandHandler("fetch", self._cmd_fetch))
         self._app.add_handler(CommandHandler("doc", self._cmd_doc))
         self._app.add_handler(CommandHandler("image", self._cmd_image))
+        self._app.add_handler(CommandHandler("research", self._cmd_research))
+        self._app.add_handler(CommandHandler("eval", self._cmd_eval))
         self._app.add_handler(CommandHandler("sources", self._cmd_sources))
 
         # Register callback query handler for inline buttons
@@ -682,6 +696,8 @@ class TelegramBot:
             "/fetch <url>\n"
             "/doc <ruta_o_url>\n"
             "/image <ruta_o_url>\n"
+            "/research <consulta>\n"
+            "/eval <consulta>\n"
             "/sources <task_id>\n"
             "/server status\n"
             "/server services\n"
@@ -810,22 +826,58 @@ class TelegramBot:
     async def _cmd_web(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        await self._run_capability_command(update, context, "web.search", "/web <consulta>")
+        await self._run_research_command(update, context, usage="/web <consulta>")
 
     async def _cmd_fetch(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        await self._run_capability_command(update, context, "web.fetch", "/fetch <url>")
+        await self._run_research_command(update, context, usage="/fetch <url>", mode_hint="url_summary")
 
     async def _cmd_doc(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        await self._run_capability_command(update, context, "document.read", "/doc <ruta_o_url>")
+        await self._run_research_command(update, context, usage="/doc <ruta_o_url>", mode_hint="document_qa")
 
     async def _cmd_image(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        await self._run_capability_command(update, context, "image.analyze", "/image <ruta_o_url>")
+        await self._run_research_command(update, context, usage="/image <ruta_o_url>", mode_hint="image_qa")
+
+    async def _cmd_research(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        await self._run_research_command(update, context, usage="/research <consulta>")
+
+    async def _cmd_eval(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        if not self._check_access(update):
+            return
+        if self._research_service is None:
+            await update.message.reply_text("⚠️ Research service not available.")
+            return
+        query = " ".join(context.args).strip()
+        if not query:
+            await update.message.reply_text("Uso: /eval <consulta>")
+            return
+        await update.message.reply_text("⏳ Ejecutando research + evaluación...")
+        try:
+            result = await self._research_service.evaluate(query)
+            lines = [str(result.get("answer") or "Sin respuesta")[:2600]]
+            evaluation = result.get("evaluation") or {}
+            winner = evaluation.get("winner")
+            scores = evaluation.get("judge_scores") or {}
+            if winner:
+                lines.append(f"\nWinner: {winner}")
+            if scores:
+                lines.append(
+                    "Scores: "
+                    + ", ".join(f"{k}={v}" for k, v in scores.items())
+                )
+            await update.message.reply_text("\n".join(lines)[:4000])
+        except Exception as exc:
+            logger.error("Error in eval command", extra={"error": str(exc)})
+            await update.message.reply_text(f"❌ Error: {exc}")
 
     async def _cmd_sources(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -988,6 +1040,45 @@ class TelegramBot:
             logger.error(
                 "Error in capability command",
                 extra={"capability": capability, "error": str(exc)},
+            )
+            await update.message.reply_text(f"❌ Error: {exc}")
+
+    async def _run_research_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        *,
+        usage: str,
+        mode_hint: str | None = None,
+    ) -> None:
+        if not self._check_access(update):
+            return
+        if self._research_service is None:
+            await update.message.reply_text("⚠️ Research service not available.")
+            return
+        query = " ".join(context.args).strip()
+        if not query:
+            await update.message.reply_text(f"Uso: {usage}")
+            return
+        await update.message.reply_text("⏳ Ejecutando research...")
+        try:
+            result = await self._research_service.query(query, mode_hint=mode_hint)
+            lines = [str(result.get("answer") or "Sin respuesta")[:3000]]
+            confidence = result.get("confidence")
+            if confidence is not None:
+                lines.append(f"\nConfidence: {confidence:.2f}")
+            sources = result.get("source_refs") or []
+            if sources:
+                lines.append("\nSources:")
+                for ref in sources[:5]:
+                    title = ref.get("title") or ref.get("uri") or "source"
+                    uri = ref.get("uri") or ""
+                    lines.append(f"- {title}: {uri}".strip())
+            await update.message.reply_text("\n".join(lines)[:4000])
+        except Exception as exc:
+            logger.error(
+                "Error in research command",
+                extra={"mode_hint": mode_hint, "error": str(exc)},
             )
             await update.message.reply_text(f"❌ Error: {exc}")
 

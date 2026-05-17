@@ -67,6 +67,12 @@ def _detect_legacy_revision(connection: Connection) -> str | None:
 
     if (
         phase_5b_columns.issubset(task_columns)
+        and {"local_bridges", "tool_invocations", "artifacts", "research_runs", "evaluation_runs", "evaluation_dataset_items"}.issubset(tables)
+    ):
+        return "005"
+
+    if (
+        phase_5b_columns.issubset(task_columns)
         and {"local_bridges", "tool_invocations", "artifacts"}.issubset(tables)
     ):
         return "004"

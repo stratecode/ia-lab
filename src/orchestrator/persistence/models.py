@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    Float,
     func,
     text,
 )
@@ -378,6 +379,120 @@ class Artifact(Base):
         Index("ix_artifacts_task_id", "task_id"),
         Index("ix_artifacts_invocation_id", "invocation_id"),
         Index("ix_artifacts_type_created_at", "artifact_type", "created_at"),
+    )
+
+
+class ResearchRun(Base):
+    """Persisted research orchestration runs."""
+
+    __tablename__ = "research_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    entrypoint: Mapped[str] = mapped_column(String(32), nullable=False)
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    intent_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    selected_capabilities: Mapped[list | None] = mapped_column(
+        JSONB, default=list, nullable=True
+    )
+    final_answer: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source_artifact_ids: Mapped[list | None] = mapped_column(
+        JSONB, default=list, nullable=True
+    )
+    tool_invocation_ids: Mapped[list | None] = mapped_column(
+        JSONB, default=list, nullable=True
+    )
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", JSONB, default=dict, nullable=True
+    )
+    created_at: Mapped[str] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    task: Mapped["Task | None"] = relationship("Task")
+
+    __table_args__ = (
+        Index("ix_research_runs_task_id", "task_id"),
+        Index("ix_research_runs_entrypoint_created_at", "entrypoint", "created_at"),
+    )
+
+
+class EvaluationRun(Base):
+    """Persisted evaluation run for a research answer."""
+
+    __tablename__ = "evaluation_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    research_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("research_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    reference_provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    reference_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reference_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    judge_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    judge_verdict: Mapped[dict | None] = mapped_column(JSONB, default=dict, nullable=True)
+    judge_scores: Mapped[dict | None] = mapped_column(JSONB, default=dict, nullable=True)
+    winner: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[str] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    research_run: Mapped["ResearchRun"] = relationship("ResearchRun")
+
+    __table_args__ = (
+        Index("ix_evaluation_runs_research_run_id", "research_run_id"),
+        Index("ix_evaluation_runs_created_at", "created_at"),
+    )
+
+
+class EvaluationDatasetItem(Base):
+    """Prepared dataset item for later tuning/fine-tuning work."""
+
+    __tablename__ = "evaluation_dataset_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    research_run_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("research_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    evaluation_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("evaluation_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    orchestrator_answer: Mapped[str] = mapped_column(Text, nullable=False)
+    reference_answer: Mapped[str] = mapped_column(Text, nullable=False)
+    sources: Mapped[list | None] = mapped_column(JSONB, default=list, nullable=True)
+    scores: Mapped[dict | None] = mapped_column(JSONB, default=dict, nullable=True)
+    winner: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", JSONB, default=dict, nullable=True
+    )
+    created_at: Mapped[str] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    research_run: Mapped["ResearchRun"] = relationship("ResearchRun")
+    evaluation_run: Mapped["EvaluationRun | None"] = relationship("EvaluationRun")
+
+    __table_args__ = (
+        Index("ix_evaluation_dataset_items_research_run_id", "research_run_id"),
+        Index("ix_evaluation_dataset_items_created_at", "created_at"),
     )
 
 

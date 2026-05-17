@@ -261,6 +261,26 @@ class CapabilitySettings(BaseSettings):
         default="orchestrator-tools",
         description="Model identifier exposed by the OpenAI-compatible tool backend",
     )
+    research_timeout_seconds: Annotated[float, Field(gt=0)] = Field(
+        default=60.0,
+        description="End-to-end timeout budget for research queries",
+    )
+    default_search_fetch_count: Annotated[int, Field(ge=1, le=10)] = Field(
+        default=3,
+        description="Default number of sources to fetch for search-based research",
+    )
+    max_search_fetch_count: Annotated[int, Field(ge=1, le=10)] = Field(
+        default=5,
+        description="Maximum number of sources to fetch for search-based research",
+    )
+    min_source_content_chars: Annotated[int, Field(ge=100)] = Field(
+        default=300,
+        description="Minimum cleaned text length for a fetched source to count as useful",
+    )
+    utility_model_name: str = Field(
+        default="utility",
+        description="Model name to use when synthesizing research answers",
+    )
 
     @property
     def allowed_url_scheme_list(self) -> list[str]:
@@ -304,6 +324,33 @@ class ObservabilitySettings(BaseSettings):
     )
 
 
+class OpenAIReferenceSettings(BaseSettings):
+    """Reference-model and judge-model settings for research evaluation."""
+
+    model_config = SettingsConfigDict(env_prefix="LAB_OPENAI_")
+
+    base_url: str = Field(
+        default="https://api.openai.com/v1",
+        description="Base URL for OpenAI-compatible reference model API",
+    )
+    reference_api_key: str = Field(
+        default="",
+        description="API key for generating external reference answers",
+    )
+    reference_model: str = Field(
+        default="gpt-5.4-mini",
+        description="Model used to generate the external reference answer",
+    )
+    judge_model: str = Field(
+        default="gpt-5.4-mini",
+        description="Model used to judge orchestrator vs reference answers",
+    )
+    timeout_seconds: Annotated[float, Field(gt=0)] = Field(
+        default=60.0,
+        description="Timeout for outbound OpenAI reference/judge requests",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Root Settings
 # ---------------------------------------------------------------------------
@@ -337,6 +384,7 @@ class Settings(BaseSettings):
     capabilities: CapabilitySettings = Field(default_factory=CapabilitySettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
+    openai_reference: OpenAIReferenceSettings = Field(default_factory=OpenAIReferenceSettings)
 
     def redacted_dict(self) -> dict:
         """Return configuration as a nested dict with sensitive values redacted.

@@ -192,6 +192,11 @@
           LAB_CAPABILITIES_MAX_ARTIFACT_TEXT_CHARS={{ orchestrator_capabilities_max_artifact_text_chars }}
           LAB_CAPABILITIES_PLANNER_ALLOWED={{ orchestrator_planner_allowed_capabilities }}
           LAB_CAPABILITIES_CODER_ALLOWED={{ orchestrator_coder_allowed_capabilities }}
+          LAB_OPENAI_BASE_URL={{ orchestrator_openai_base_url }}
+          LAB_OPENAI_REFERENCE_API_KEY={{ orchestrator_openai_reference_api_key }}
+          LAB_OPENAI_REFERENCE_MODEL={{ orchestrator_openai_reference_model }}
+          LAB_OPENAI_JUDGE_MODEL={{ orchestrator_openai_judge_model }}
+          LAB_OPENAI_TIMEOUT_SECONDS={{ orchestrator_openai_timeout_seconds }}
       notify: Restart orchestrator service
 
     - name: Install orchestrator cleanup environment file

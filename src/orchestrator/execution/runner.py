@@ -31,6 +31,7 @@ from orchestrator.observability.metrics import (
     record_planner_invalid_output,
 )
 from orchestrator.planning.service import PlannerOutputError, PlannerService
+from orchestrator.research.service import ResearchService
 from orchestrator.state_machine.transitions import AgentType
 from orchestrator.tools.interfaces import ToolResult
 
@@ -66,6 +67,7 @@ class TaskRunner:
         aider_adapter: AiderAdapter | None = None,
         planner_service: PlannerService | None = None,
         capability_service: CapabilityService | None = None,
+        research_service: ResearchService | None = None,
         aider_timeout: float = DEFAULT_AIDER_TIMEOUT,
         default_branch: str = DEFAULT_BRANCH,
     ) -> None:
@@ -81,6 +83,7 @@ class TaskRunner:
         )
         self._planner_service = planner_service
         self._capability_service = capability_service
+        self._research_service = research_service
         self._aider_timeout = aider_timeout
         self._default_branch = default_branch
 
@@ -245,7 +248,23 @@ class TaskRunner:
         start_time = time.monotonic()
         try:
             planner_metadata = dict(metadata)
-            if self._capability_service is not None:
+            if planner_metadata.get("research_mode") and self._research_service is not None:
+                research_result = await self._research_service.query(
+                    description,
+                    task_id=task_id,
+                    entrypoint=str(planner_metadata.get("entrypoint") or "planner"),
+                    allowed_capabilities=planner_metadata.get("allowed_capabilities"),
+                )
+                planner_metadata["capability_context"] = [
+                    research_result.answer,
+                    *[
+                        f"{ref.title or ref.uri}: {ref.uri or ''}"
+                        for ref in research_result.sources[:5]
+                    ],
+                ]
+                planner_metadata["capability_invocation_ids"] = research_result.tool_invocation_ids
+                planner_metadata["research_run_id"] = str(research_result.research_run.id)
+            elif self._capability_service is not None:
                 bundle = await self._capability_service.build_planner_context(
                     task_id=task_id,
                     description=description,
@@ -278,4 +297,5 @@ class TaskRunner:
             "raw_response": plan.raw_response,
             "capability_context": planner_metadata.get("capability_context", []),
             "capability_invocation_ids": planner_metadata.get("capability_invocation_ids", []),
+            "research_run_id": planner_metadata.get("research_run_id"),
         }

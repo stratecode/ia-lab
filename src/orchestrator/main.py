@@ -48,6 +48,7 @@ from orchestrator.orchestration.service import (
     TaskLifecycleService,
 )
 from orchestrator.planning.service import PlannerService
+from orchestrator.research.service import ResearchService
 from orchestrator.state_machine.transitions import TERMINAL_STATES, TaskState
 
 logger = structlog.get_logger(__name__)
@@ -391,6 +392,44 @@ class _TelegramCapabilityService:
         return str(payload.get("summary") or "Capability executed.")
 
 
+class _TelegramResearchService:
+    """Adapter exposing research mode to Telegram handlers."""
+
+    def __init__(self, state: AppState) -> None:
+        self._state = state
+
+    async def query(self, query: str, *, mode_hint: str | None = None) -> dict[str, Any]:
+        result = await self._state.research_service.query(  # type: ignore[union-attr]
+            query,
+            entrypoint="telegram",
+            mode_hint=mode_hint,  # type: ignore[arg-type]
+        )
+        return {
+            "research_run_id": str(result.research_run.id),
+            "answer": result.answer,
+            "confidence": result.confidence,
+            "source_refs": [item.model_dump(mode="json") for item in result.sources],
+            "tool_invocation_ids": result.tool_invocation_ids,
+        }
+
+    async def evaluate(self, query: str) -> dict[str, Any]:
+        result = await self._state.research_service.query(  # type: ignore[union-attr]
+            query,
+            entrypoint="telegram",
+            evaluate_against_reference=True,
+        )
+        payload = {
+            "research_run_id": str(result.research_run.id),
+            "answer": result.answer,
+            "confidence": result.confidence,
+            "source_refs": [item.model_dump(mode="json") for item in result.sources],
+            "tool_invocation_ids": result.tool_invocation_ids,
+        }
+        if result.evaluation is not None:
+            payload["evaluation"] = result.evaluation.model_dump(mode="json")
+        return payload
+
+
 class _TelegramServerOpsService:
     """Restricted host inspection commands for Telegram.
 
@@ -625,6 +664,13 @@ def _create_services(state: AppState) -> None:
         router=CapabilityRouter(state.settings.capabilities),
         settings=state.settings.capabilities,
     )
+    state.research_service = ResearchService(
+        session_factory=state.session_factory,  # type: ignore[arg-type]
+        capability_service=state.capability_service,
+        capability_settings=state.settings.capabilities,
+        llama_settings=state.settings.llama,
+        reference_settings=state.settings.openai_reference,
+    )
     state.task_lifecycle = TaskLifecycleService(
         session_factory=state.session_factory,  # type: ignore[arg-type]
         state_machine=state.state_machine,
@@ -671,6 +717,7 @@ async def _start_worker(state: AppState) -> None:
         task_runner=TaskRunner(
             planner_service=state.planner_service,
             capability_service=state.capability_service,
+            research_service=state.research_service,
         ),
         task_loader=_QueuedTaskLoader(state),
         lifecycle_service=state.task_lifecycle,
@@ -710,6 +757,7 @@ async def _start_telegram_bot(state: AppState) -> None:
         chat_service=_TelegramLlamaChatService(state),
         server_ops_service=_TelegramServerOpsService(),
         capability_service=_TelegramCapabilityService(state),
+        research_service=_TelegramResearchService(state),
     )
     await bot.start()
     state.telegram_bot = bot
@@ -912,6 +960,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from orchestrator.api.routes.config import router as config_router
     from orchestrator.api.routes.health import router as health_router
     from orchestrator.api.routes.openai_tools import router as openai_tools_router
+    from orchestrator.api.routes.research import router as research_router
     from orchestrator.api.routes.tasks import router as tasks_router
     from orchestrator.api.routes.tools import router as tools_router
     from orchestrator.api.routes.workers import router as workers_router
@@ -925,6 +974,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(config_router)
     app.include_router(workspaces_router)
     app.include_router(tools_router)
+    app.include_router(research_router)
     app.include_router(openai_tools_router)
 
     return app

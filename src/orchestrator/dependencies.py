@@ -32,6 +32,7 @@ from orchestrator.orchestration.service import TaskLifecycleService
 from orchestrator.planning.service import PlannerService
 from orchestrator.queue.event_bus import RedisEventBus
 from orchestrator.queue.redis_queue import RedisQueueService
+from orchestrator.research.service import ResearchService
 from orchestrator.scheduler.assignment import AssignmentService
 from orchestrator.scheduler.classifier import KeywordClassifier
 from orchestrator.scheduler.resource_tracker import ResourceTracker
@@ -62,6 +63,7 @@ class AppState:
     assignment_service: AssignmentService | None = None
     task_lifecycle: TaskLifecycleService | None = None
     capability_service: CapabilityService | None = None
+    research_service: ResearchService | None = None
     local_bridge_service: LocalBridgeService | None = None
     planner_service: PlannerService | None = None
     worker: Worker | None = None
@@ -85,9 +87,10 @@ def wire_dependencies(app: Any, state: AppState) -> None:
     from orchestrator.api.routes.bridges import _get_local_bridge_service
     from orchestrator.api.routes.config import _get_safe_mode_enforcer
     from orchestrator.api.routes.openai_tools import (
-        _get_capability_service as _get_openai_capability_service,
         _get_capability_settings,
+        _get_research_service as _get_openai_research_service,
     )
+    from orchestrator.api.routes.research import _get_research_service
     from orchestrator.api.routes.tasks import (
         _get_task_lifecycle,
         _get_session_factory as _tasks_get_session_factory,
@@ -131,7 +134,14 @@ def wire_dependencies(app: Any, state: AppState) -> None:
             return state.capability_service  # type: ignore[return-value]
 
         app.dependency_overrides[_get_capability_service] = provide_capability_service
-        app.dependency_overrides[_get_openai_capability_service] = provide_capability_service
+
+    if state.research_service is not None:
+
+        def provide_research_service() -> ResearchService:
+            return state.research_service  # type: ignore[return-value]
+
+        app.dependency_overrides[_get_research_service] = provide_research_service
+        app.dependency_overrides[_get_openai_research_service] = provide_research_service
 
     if state.local_bridge_service is not None:
 

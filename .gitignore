@@ -4,6 +4,7 @@ ssh/
 .env
 .venv/
 .venv-phase4/
+.venv-research/
 .kiro
 
 # macOS
