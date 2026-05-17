@@ -62,6 +62,8 @@ Tool registry and MCP integrations.
 ## General
 
 - [Getting Started](getting-started.md)
+- [System Usage Guide](system-usage.md)
+- [Orchestrator Redeploy Runbook](orchestrator-redeploy.md)
 - [Server Baseline](server-baseline.md)
 - [WireGuard](wireguard.md)
 

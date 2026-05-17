@@ -380,3 +380,40 @@ aider_repositories:
         max_prompt_tokens: 16000
         max_completion_tokens: 8000
         max_total_tokens: 32000
+
+# ─── Orchestrator Platform (Phase 4) ───────────────────────────────────────
+orchestrator_enabled: "{{ lookup('env', 'LAB_ORCHESTRATOR_ENABLED') | default('true', true) | bool }}"
+orchestrator_user: orchestrator
+orchestrator_group: orchestrator
+orchestrator_root_dir: /srv/ai-lab/orchestrator
+orchestrator_src_dir: /srv/ai-lab/orchestrator/src
+orchestrator_venv_dir: /srv/ai-lab/orchestrator/venv
+orchestrator_workspace_root: /srv/ai-lab/orchestrator/workspaces
+orchestrator_log_dir: /var/log/orchestrator
+orchestrator_config_dir: /etc/orchestrator
+orchestrator_compose_dir: /opt/docker/orchestrator
+orchestrator_postgres_data_dir: /opt/docker/postgres/data
+orchestrator_postgres_backup_dir: /opt/docker/postgres/backups
+orchestrator_port: "{{ lookup('env', 'LAB_ORCHESTRATOR_PORT') | default('8100', true) | int }}"
+orchestrator_host: "{{ lookup('env', 'LAB_ORCHESTRATOR_HOST') | default('127.0.0.1', true) }}"
+orchestrator_mode: "{{ lookup('env', 'LAB_ORCHESTRATOR_MODE') | default('all', true) }}"
+orchestrator_safe_mode: "{{ lookup('env', 'LAB_ORCHESTRATOR_SAFE_MODE') | default('true', true) | bool }}"
+orchestrator_workspace_retention_hours: "{{ lookup('env', 'LAB_WORKSPACE_RETENTION_HOURS') | default('24', true) | int }}"
+orchestrator_worker_heartbeat_interval: "{{ lookup('env', 'LAB_WORKER_HEARTBEAT_INTERVAL') | default('30', true) | int }}"
+orchestrator_scheduler_max_concurrent_tasks: "{{ lookup('env', 'LAB_SCHEDULER_MAX_CONCURRENT_TASKS') | default(lookup('env', 'LAB_MAX_CONCURRENT_TASKS') | default('3', true), true) | int }}"
+orchestrator_queue_max_global: "{{ lookup('env', 'LAB_QUEUE_MAX_GLOBAL') | default('200', true) | int }}"
+orchestrator_queue_max_per_agent: "{{ lookup('env', 'LAB_QUEUE_MAX_PER_AGENT') | default('50', true) | int }}"
+orchestrator_rate_limit_per_key: "{{ lookup('env', 'LAB_RATE_LIMIT_PER_KEY') | default('20', true) | int }}"
+orchestrator_log_level: "{{ lookup('env', 'LAB_ORCHESTRATOR_LOG_LEVEL') | default(lookup('env', 'LAB_LOG_LEVEL') | default('INFO', true), true) }}"
+orchestrator_postgres_host: 127.0.0.1
+orchestrator_postgres_port: 5432
+orchestrator_postgres_db: "{{ lookup('env', 'LAB_POSTGRES_DB') | default('orchestrator', true) }}"
+orchestrator_postgres_user: "{{ lookup('env', 'LAB_POSTGRES_USER') | default('orchestrator', true) }}"
+orchestrator_postgres_password: "{{ lookup('env', 'LAB_POSTGRES_PASSWORD') | default('', true) }}"
+orchestrator_redis_url: "{{ lookup('env', 'LAB_REDIS_URL') | default('redis://127.0.0.1:6379/0', true) }}"
+orchestrator_telegram_bot_token: "{{ lookup('env', 'LAB_TELEGRAM_BOT_TOKEN') | default('', true) }}"
+orchestrator_telegram_allowed_users: "{{ lookup('env', 'LAB_TELEGRAM_ALLOWED_USERS') | default('', true) }}"
+orchestrator_cleanup_key_name: "{{ lookup('env', 'LAB_ORCHESTRATOR_CLEANUP_KEY_NAME') | default('workspace-cleanup-timer', true) }}"
+orchestrator_cleanup_api_key: "{{ lookup('env', 'LAB_ORCHESTRATOR_CLEANUP_API_KEY') | default('', true) }}"
+orchestrator_backup_retain_count: "{{ lookup('env', 'LAB_ORCHESTRATOR_BACKUP_RETAIN_COUNT') | default('7', true) | int }}"
+orchestrator_proxy_path: "{{ lookup('env', 'LAB_ORCHESTRATOR_PROXY_PATH') | default('/orchestrator/', true) }}"

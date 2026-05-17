@@ -109,6 +109,24 @@
               annotations:
                 summary: Host temperature is high
                 description: A hardware sensor is reporting above 80C.
+
+            - alert: OrchestratorPostgresBackupFailed
+              expr: orchestrator_pg_backup_validation_failed{job="orchestrator"} == 1
+              for: 10m
+              labels:
+                severity: critical
+              annotations:
+                summary: Orchestrator PostgreSQL backup validation failed
+                description: The last orchestrator backup could not be validated with pg_restore --list.
+
+            - alert: OrchestratorPostgresBackupStale
+              expr: time() - orchestrator_pg_backup_last_success_timestamp_seconds{job="orchestrator"} > 93600
+              for: 15m
+              labels:
+                severity: warning
+              annotations:
+                summary: Orchestrator PostgreSQL backup is stale
+                description: No successful orchestrator PostgreSQL backup has been recorded in the last 26 hours.
   notify: Restart prometheus
   when: alertmanager_enabled
 
@@ -138,6 +156,12 @@
           metrics_path: /prometheus/metrics
           static_configs:
             - targets: ["localhost:9090"]
+
+        - job_name: "orchestrator"
+          metrics_path: /metrics
+          file_sd_configs:
+            - files:
+                - /var/snap/prometheus/common/file_sd/*.yml
   notify: Restart prometheus
   when: alertmanager_enabled
 

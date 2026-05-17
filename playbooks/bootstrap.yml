@@ -68,6 +68,10 @@
       ansible.builtin.import_role:
         name: aider
 
+    - name: Install Orchestrator platform
+      ansible.builtin.import_role:
+        name: orchestrator
+
     - name: Install Open WebUI
       ansible.builtin.import_role:
         name: open_webui

@@ -1,6 +1,6 @@
 # StrateCode Lab
 
-Ansible-managed homelab infrastructure. Provisions and configures an Ubuntu server as a self-hosted platform for local AI inference, VPN access, observability, and basic hardening.
+Ansible-managed homelab infrastructure. Provisions and configures an Ubuntu server as a self-hosted platform for local AI inference, orchestrated task execution, VPN access, observability, Open WebUI, and basic hardening.
 
 ## Prerequisites
 
@@ -50,19 +50,22 @@ A single Ubuntu Server host on a home LAN with an AMD GPU (Vulkan).
 ┌─────────────────────────────────────────────────────────┐
 │  lab host                                               │
 │                                                         │
-│  ┌──────────┐  ┌──────────┐  ┌────────────────────┐    │
-│  │ llama.cpp│  │ WireGuard│  │ Nginx reverse proxy │    │
-│  │ :8080    │  │ :51820   │  │ :443 / :80          │    │
-│  │ :8081    │  └──────────┘  └────────────────────┘    │
-│  └──────────┘                                           │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐             │
-│  │Prometheus│  │ Grafana  │  │Alertmgr  │             │
-│  │ :9090    │  │ :3000    │  │ :9093    │             │
-│  └──────────┘  └──────────┘  └──────────┘             │
-│  ┌──────────┐  ┌──────────┐                            │
-│  │ Cockpit  │  │ fail2ban │                            │
-│  │ :9091    │  └──────────┘                            │
-│  └──────────┘                                           │
+│  ┌────────────────────────────┐  ┌────────────────────┐ │
+│  │ llama.cpp                  │  │ Nginx reverse proxy│ │
+│  │ :8080 :8082 :8083 :8084   │  │ :443 / :80         │ │
+│  └────────────────────────────┘  └────────────────────┘ │
+│  ┌──────────────┐  ┌──────────┐  ┌──────────────────┐  │
+│  │ Orchestrator │  │ WireGuard│  │ Open WebUI       │  │
+│  │ :8100        │  │ :51820   │  │ :3001            │  │
+│  └──────────────┘  └──────────┘  └──────────────────┘  │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
+│  │Prometheus│  │ Grafana  │  │Alertmgr  │              │
+│  │ :9090    │  │ :3000    │  │ :9093    │              │
+│  └──────────┘  └──────────┘  └──────────┘              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
+│  │ Cockpit  │  │ PostgreSQL│ │ fail2ban │              │
+│  │ :9091    │  │ Docker    │ └──────────┘              │
+│  └──────────┘  └──────────┘                             │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -76,8 +79,11 @@ Roles are applied in dependency order:
 | 2 | `route53_ddns` | Dynamic DNS update via Route53 (systemd timer) |
 | 3 | `wireguard` | WireGuard VPN server + client profiles |
 | 4 | `llama_cpp` | Build llama.cpp with Vulkan, systemd services |
-| 5 | `monitor` | Cockpit + Nginx reverse proxy + TLS (Let's Encrypt) |
-| 6 | `observability` | Prometheus, Grafana (Docker), Alertmanager, alert rules |
+| 5 | `aider` | Aider task runtime and shell wrappers |
+| 6 | `orchestrator` | FastAPI control plane, PostgreSQL, timers, Telegram bot |
+| 7 | `open_webui` | Chat UI connected to local llama.cpp endpoints |
+| 8 | `monitor` | Cockpit + Nginx reverse proxy + TLS (Let's Encrypt) |
+| 9 | `observability` | Prometheus, Grafana (Docker), Alertmanager, alert rules |
 
 ## Project structure
 
@@ -104,12 +110,16 @@ Roles are applied in dependency order:
 | URL | Service | Access |
 |-----|---------|--------|
 | `https://<cockpit_domain>` | Cockpit | LAN + VPN |
+| `https://<cockpit_domain>/orchestrator/health` | Orchestrator API | LAN + VPN |
 | `https://<observability_domain>` | Grafana | LAN + VPN |
 | `https://<observability_domain>/prometheus/` | Prometheus | LAN + VPN |
+| `https://<chat_domain>` | Open WebUI | LAN + VPN |
 | `http://127.0.0.1:8080/v1` | llama.cpp (code) | localhost |
-| `http://127.0.0.1:8081/v1` | llama.cpp (chat) | localhost |
+| `http://127.0.0.1:8082/v1` | llama.cpp (planner) | localhost |
+| `http://127.0.0.1:8083/v1` | llama.cpp (utility) | localhost |
+| `http://127.0.0.1:8084/v1` | llama.cpp (embeddings) | localhost |
 
-Domains are configured in `group_vars/all.yml` (`cockpit_domain`, `observability_domain`).
+Domains are configured in `group_vars/all.yml` (`cockpit_domain`, `observability_domain`, `open_webui_domain`).
 
 ## VPN (WireGuard)
 
@@ -123,18 +133,34 @@ More details in [docs/wireguard.md](docs/wireguard.md).
 
 ## Local AI (llama.cpp)
 
-Two instances with Vulkan backend (AMD GPU):
+Four instances with Vulkan backend (AMD GPU/CPU mix depending on model):
 
 | Instance | Port | Model | Purpose |
 |----------|------|-------|---------|
-| `llama-cpp-code` | 8080 | Qwen2.5-Coder-3B-Instruct (Q4_K_M) | Code assistance |
-| `llama-cpp-chat` | 8081 | Qwen2.5-Coder-3B-Instruct (Q4_K_M) | Chat / orchestration |
+| `llama-cpp-code` | 8080 | Qwen2.5-Coder-7B-Instruct (GGUF) | Code assistance |
+| `llama-cpp-planner` | 8082 | Qwen2.5-3B-Instruct (GGUF) | Planning / reasoning |
+| `llama-cpp-utility` | 8083 | Qwen2.5-1.5B-Instruct (GGUF) | Lightweight utility tasks |
+| `llama-cpp-embeddings` | 8084 | nomic-embed-text-v1.5 (GGUF) | Embeddings |
 
 OpenAI-compatible API (`/v1/chat/completions`, `/v1/completions`).
+
+## Orchestrator
+
+The platform includes a FastAPI orchestrator on `127.0.0.1:8100` with:
+
+- PostgreSQL persistence in Docker
+- Redis-backed queue/event bus
+- worker loop integrated with `aider-task`
+- Telegram bot for status, approvals, model chat, and constrained server ops
+- cleanup and database backup timers
+- Prometheus metrics at `/metrics`
+
+The canonical deployment path is the `orchestrator` role plus the Python package in `src/orchestrator/`. Manual edits in the live `venv` are no longer part of the intended workflow, which is good, because archaeology is not a deployment strategy.
 
 ## Observability
 
 - **Prometheus** — system metrics via node_exporter
+- **Orchestrator metrics** — API and worker metrics scraped from `127.0.0.1:8100/metrics`
 - **Grafana** — dashboards (Docker, port 3000)
 - **Alertmanager** — Slack alerts (optional, requires webhook in vault)
 - **PCP** — Performance Co-Pilot for advanced metrics
@@ -161,5 +187,6 @@ Sensitive variables in the vault:
 ## Additional documentation
 
 - [Getting Started](docs/getting-started.md) — full setup guide from scratch (SSH keys, vault, first run)
+- [System Usage Guide](docs/system-usage.md) — Telegram, Open WebUI, and orchestrator API usage
 - [Server Baseline](docs/server-baseline.md) — base configuration details
 - [WireGuard](docs/wireguard.md) — VPN setup and client guide

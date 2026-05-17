@@ -210,6 +210,15 @@ ssh -i ssh/lab <user>@<host> "sudo wg show"
 
 # Check Grafana (via VPN or LAN)
 curl -k https://<observability_domain>/api/health
+
+# Check orchestrator direct
+curl -s http://127.0.0.1:8100/health
+
+# Check orchestrator through Nginx
+curl -sk https://<cockpit_domain>/orchestrator/health
+
+# Check Open WebUI
+curl -skI https://<chat_domain>/
 ```
 
 ### Verifying service status on the host
@@ -218,11 +227,17 @@ curl -k https://<observability_domain>/api/health
 # Check all llama.cpp services
 ssh -i ssh/lab <user>@<host> "systemctl status llama-cpp-code llama-cpp-planner llama-cpp-utility llama-cpp-embeddings --no-pager"
 
+# Check orchestrator service and timers
+ssh -i ssh/lab <user>@<host> "systemctl status orchestrator.service orchestrator-workspace-cleanup.timer orchestrator-pg-backup.timer --no-pager"
+
 # Check monitoring timer
 ssh -i ssh/lab <user>@<host> "systemctl status llama-cpp-monitor.timer --no-pager"
 
 # View instance logs
 ssh -i ssh/lab <user>@<host> "tail -20 /var/log/llama-cpp/llama-cpp-code.log"
+
+# View orchestrator health and metrics
+ssh -i ssh/lab <user>@<host> "curl -sf http://127.0.0.1:8100/health && echo && curl -sf http://127.0.0.1:8100/metrics | head"
 ```
 
 ## Troubleshooting

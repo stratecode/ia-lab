@@ -1,0 +1,425 @@
+- name: Configure orchestrator platform
+  when: orchestrator_enabled
+  block:
+    - name: Assert required orchestrator secrets are configured
+      ansible.builtin.assert:
+        that:
+          - orchestrator_postgres_password | length > 0
+          - orchestrator_telegram_bot_token | length > 0
+          - orchestrator_cleanup_api_key | length > 0
+          - orchestrator_telegram_allowed_users | length > 0
+        fail_msg: >-
+          Missing required orchestrator configuration. Set LAB_POSTGRES_PASSWORD,
+          LAB_TELEGRAM_BOT_TOKEN, LAB_TELEGRAM_ALLOWED_USERS and
+          LAB_ORCHESTRATOR_CLEANUP_API_KEY before deploying.
+
+    - name: Install orchestrator runtime packages
+      ansible.builtin.apt:
+        name:
+          - python3
+          - python3-venv
+          - python3-pip
+        state: present
+
+    - name: Ensure orchestrator group exists
+      ansible.builtin.group:
+        name: "{{ orchestrator_group }}"
+        system: true
+
+    - name: Ensure orchestrator user exists
+      ansible.builtin.user:
+        name: "{{ orchestrator_user }}"
+        group: "{{ orchestrator_group }}"
+        home: "{{ orchestrator_root_dir }}"
+        shell: /usr/sbin/nologin
+        system: true
+        create_home: false
+
+    - name: Ensure orchestrator directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner | default(orchestrator_user) }}"
+        group: "{{ item.group | default(orchestrator_group) }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ orchestrator_root_dir }}", mode: "0755" }
+        - { path: "{{ orchestrator_src_dir }}", mode: "0755" }
+        - { path: "{{ orchestrator_src_dir }}/src", mode: "0755" }
+        - { path: "{{ orchestrator_workspace_root }}", mode: "0755" }
+        - { path: "{{ orchestrator_log_dir }}", mode: "0755" }
+        - { path: "{{ orchestrator_config_dir }}", owner: "root", mode: "0750" }
+        - { path: "{{ orchestrator_compose_dir }}", owner: "root", group: "root", mode: "0755" }
+        - { path: "{{ orchestrator_postgres_data_dir }}", owner: "root", group: "root", mode: "0755" }
+        - { path: "{{ orchestrator_postgres_backup_dir }}", owner: "root", group: "root", mode: "0755" }
+        - { path: "/var/snap/prometheus/common/file_sd", owner: "root", group: "root", mode: "0755" }
+        - { path: "/var/lib/prometheus/node-exporter", owner: "root", group: "root", mode: "0755" }
+
+    - name: Install orchestrator pyproject
+      ansible.builtin.copy:
+        src: "{{ inventory_dir }}/pyproject.toml"
+        dest: "{{ orchestrator_src_dir }}/pyproject.toml"
+        owner: "{{ orchestrator_user }}"
+        group: "{{ orchestrator_group }}"
+        mode: "0644"
+      notify: Restart orchestrator service
+
+    - name: Install orchestrator source tree
+      ansible.builtin.copy:
+        src: "{{ inventory_dir }}/src/orchestrator"
+        dest: "{{ orchestrator_src_dir }}/src/"
+        owner: "{{ orchestrator_user }}"
+        group: "{{ orchestrator_group }}"
+        mode: "0644"
+        directory_mode: "0755"
+      notify: Restart orchestrator service
+
+    - name: Install PostgreSQL compose file for orchestrator
+      ansible.builtin.copy:
+        dest: "{{ orchestrator_compose_dir }}/docker-compose.yml"
+        mode: "0644"
+        content: |
+          services:
+            postgres:
+              image: postgres:16
+              container_name: orchestrator-postgres
+              restart: unless-stopped
+              ports:
+                - "127.0.0.1:{{ orchestrator_postgres_port }}:5432"
+              environment:
+                POSTGRES_DB: "{{ orchestrator_postgres_db }}"
+                POSTGRES_USER: "{{ orchestrator_postgres_user }}"
+                POSTGRES_PASSWORD: "{{ orchestrator_postgres_password }}"
+              volumes:
+                - "{{ orchestrator_postgres_data_dir }}:/var/lib/postgresql/data"
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -U {{ orchestrator_postgres_user }} -d {{ orchestrator_postgres_db }}"]
+                interval: 10s
+                timeout: 5s
+                retries: 5
+                start_period: 30s
+              shm_size: 128mb
+      notify: Restart orchestrator postgres stack
+
+    - name: Start orchestrator PostgreSQL stack
+      ansible.builtin.command: docker compose up -d
+      args:
+        chdir: "{{ orchestrator_compose_dir }}"
+      changed_when: false
+
+    - name: Wait for PostgreSQL to accept connections
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - orchestrator-postgres
+          - pg_isready
+          - -U
+          - "{{ orchestrator_postgres_user }}"
+          - -d
+          - "{{ orchestrator_postgres_db }}"
+      register: orchestrator_pg_isready
+      changed_when: false
+      retries: 20
+      delay: 3
+      until: orchestrator_pg_isready.rc == 0
+
+    - name: Install orchestrator environment file
+      ansible.builtin.copy:
+        dest: "{{ orchestrator_config_dir }}/orchestrator.env"
+        owner: root
+        group: "{{ orchestrator_group }}"
+        mode: "0640"
+        content: |
+          # Generated by Ansible - do not edit manually
+          LAB_ORCHESTRATOR_MODE={{ orchestrator_mode }}
+          LAB_ORCHESTRATOR_HOST={{ orchestrator_host }}
+          LAB_ORCHESTRATOR_PORT={{ orchestrator_port }}
+          LAB_ORCHESTRATOR_SAFE_MODE={{ 'true' if orchestrator_safe_mode else 'false' }}
+          LAB_ORCHESTRATOR_LOG_LEVEL={{ orchestrator_log_level }}
+          LAB_ORCHESTRATOR_WORKSPACE_RETENTION_HOURS={{ orchestrator_workspace_retention_hours }}
+          LAB_LOG_LEVEL={{ orchestrator_log_level }}
+          LAB_POSTGRES_HOST={{ orchestrator_postgres_host }}
+          LAB_POSTGRES_PORT={{ orchestrator_postgres_port }}
+          LAB_POSTGRES_DB={{ orchestrator_postgres_db }}
+          LAB_POSTGRES_USER={{ orchestrator_postgres_user }}
+          LAB_POSTGRES_PASSWORD={{ orchestrator_postgres_password }}
+          LAB_REDIS_URL={{ orchestrator_redis_url }}
+          LAB_TELEGRAM_BOT_TOKEN={{ orchestrator_telegram_bot_token }}
+          LAB_TELEGRAM_ALLOWED_USERS={{ orchestrator_telegram_allowed_users }}
+          LAB_WORKER_HEARTBEAT_INTERVAL={{ orchestrator_worker_heartbeat_interval }}
+          LAB_SCHEDULER_MAX_CONCURRENT_TASKS={{ orchestrator_scheduler_max_concurrent_tasks }}
+          LAB_MAX_CONCURRENT_TASKS={{ orchestrator_scheduler_max_concurrent_tasks }}
+          LAB_QUEUE_MAX_GLOBAL={{ orchestrator_queue_max_global }}
+          LAB_QUEUE_MAX_PER_AGENT={{ orchestrator_queue_max_per_agent }}
+          LAB_RATE_LIMIT_PER_KEY={{ orchestrator_rate_limit_per_key }}
+          LAB_WORKSPACE_ROOT={{ orchestrator_workspace_root }}
+          LAB_WORKSPACE_RETENTION_HOURS={{ orchestrator_workspace_retention_hours }}
+          LAB_LLAMA_CODE_BASE_URL=http://127.0.0.1:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'coder') | map(attribute='port') | first) }}/v1
+          LAB_LLAMA_CODE_API_KEY={{ llama_cpp_instances | selectattr('alias', 'equalto', 'coder') | map(attribute='api_key') | first }}
+          LAB_LLAMA_PLANNER_BASE_URL=http://127.0.0.1:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'planner') | map(attribute='port') | first) }}/v1
+          LAB_LLAMA_PLANNER_API_KEY={{ llama_cpp_instances | selectattr('alias', 'equalto', 'planner') | map(attribute='api_key') | first }}
+      notify: Restart orchestrator service
+
+    - name: Install orchestrator cleanup environment file
+      ansible.builtin.copy:
+        dest: "{{ orchestrator_config_dir }}/cleanup.env"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          LAB_ORCHESTRATOR_CLEANUP_API_KEY={{ orchestrator_cleanup_api_key }}
+      notify: Restart orchestrator cleanup timer
+
+    - name: Install orchestrator PostgreSQL backup script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/orchestrator-pg-backup.sh
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          BACKUP_DIR="{{ orchestrator_postgres_backup_dir }}"
+          RETAIN_COUNT="{{ orchestrator_backup_retain_count }}"
+          TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+          BACKUP_FILE="${BACKUP_DIR}/orchestrator_${TIMESTAMP}.dump"
+          CONTAINER_NAME="orchestrator-postgres"
+          TEXTFILE_DIR="/var/lib/prometheus/node-exporter"
+
+          docker exec "${CONTAINER_NAME}" pg_dump \
+            -U "${POSTGRES_USER:-{{ orchestrator_postgres_user }}}" \
+            -d "${POSTGRES_DB:-{{ orchestrator_postgres_db }}}" \
+            -Fc --no-owner --no-acl \
+            > "${BACKUP_FILE}"
+
+          if docker exec -i "${CONTAINER_NAME}" pg_restore --list < "${BACKUP_FILE}" > /dev/null 2>&1; then
+            echo "Backup validation passed: ${BACKUP_FILE}"
+            cat > "${TEXTFILE_DIR}/pg_backup_status.prom" <<EOF
+          # HELP orchestrator_pg_backup_validation_failed PostgreSQL backup validation failure (1=failed, 0=ok)
+          # TYPE orchestrator_pg_backup_validation_failed gauge
+          orchestrator_pg_backup_validation_failed{job="orchestrator"} 0
+          # HELP orchestrator_pg_backup_last_success_timestamp_seconds Unix timestamp of last successful backup
+          # TYPE orchestrator_pg_backup_last_success_timestamp_seconds gauge
+          orchestrator_pg_backup_last_success_timestamp_seconds{job="orchestrator"} $(date +%s)
+          EOF
+          else
+            echo "ERROR: Backup validation FAILED for ${BACKUP_FILE}" >&2
+            cat > "${TEXTFILE_DIR}/pg_backup_status.prom" <<EOF
+          # HELP orchestrator_pg_backup_validation_failed PostgreSQL backup validation failure (1=failed, 0=ok)
+          # TYPE orchestrator_pg_backup_validation_failed gauge
+          orchestrator_pg_backup_validation_failed{job="orchestrator"} 1
+          EOF
+            exit 1
+          fi
+
+          cd "${BACKUP_DIR}"
+          ls -1t orchestrator_*.dump 2>/dev/null | tail -n +$((RETAIN_COUNT + 1)) | xargs -r rm -f
+          echo "Backup completed successfully: ${BACKUP_FILE}"
+
+    - name: Install orchestrator PostgreSQL backup service unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/orchestrator-pg-backup.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=PostgreSQL backup for Orchestrator database
+          Wants=docker.service
+          After=docker.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/orchestrator-pg-backup.sh
+          Environment=POSTGRES_USER={{ orchestrator_postgres_user }}
+          Environment=POSTGRES_DB={{ orchestrator_postgres_db }}
+      notify:
+        - Reload systemd for orchestrator
+        - Restart orchestrator backup timer
+
+    - name: Install orchestrator PostgreSQL backup timer unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/orchestrator-pg-backup.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Daily PostgreSQL backup for Orchestrator database
+
+          [Timer]
+          OnCalendar=*-*-* 03:00:00 UTC
+          Persistent=true
+          Unit=orchestrator-pg-backup.service
+
+          [Install]
+          WantedBy=timers.target
+      notify:
+        - Reload systemd for orchestrator
+        - Restart orchestrator backup timer
+
+    - name: Install orchestrator workspace cleanup service unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/orchestrator-workspace-cleanup.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Orchestrator workspace cleanup (remove expired workspaces)
+          After=network-online.target orchestrator.service
+          Wants=orchestrator.service
+
+          [Service]
+          Type=oneshot
+          EnvironmentFile={{ orchestrator_config_dir }}/cleanup.env
+          ExecStart=/usr/bin/curl -sf -X POST -H "Authorization: Bearer ${LAB_ORCHESTRATOR_CLEANUP_API_KEY}" http://127.0.0.1:{{ orchestrator_port }}/workspaces/cleanup
+      notify:
+        - Reload systemd for orchestrator
+        - Restart orchestrator cleanup timer
+
+    - name: Install orchestrator workspace cleanup timer unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/orchestrator-workspace-cleanup.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Hourly workspace cleanup for Orchestrator platform
+
+          [Timer]
+          OnCalendar=hourly
+          Persistent=true
+          RandomizedDelaySec=120
+          Unit=orchestrator-workspace-cleanup.service
+
+          [Install]
+          WantedBy=timers.target
+      notify:
+        - Reload systemd for orchestrator
+        - Restart orchestrator cleanup timer
+
+    - name: Install orchestrator service unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/orchestrator.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Orchestrator Platform Service
+          Documentation=https://github.com/StrateCode/lab
+          After=network-online.target redis-server.service docker.service
+          Wants=network-online.target
+          Requires=redis-server.service
+
+          [Service]
+          Type=exec
+          User={{ orchestrator_user }}
+          Group={{ orchestrator_group }}
+          WorkingDirectory={{ orchestrator_root_dir }}
+          EnvironmentFile={{ orchestrator_config_dir }}/orchestrator.env
+          ExecStart={{ orchestrator_venv_dir }}/bin/uvicorn orchestrator.main:app --host ${LAB_ORCHESTRATOR_HOST} --port ${LAB_ORCHESTRATOR_PORT}
+          Restart=on-failure
+          RestartSec=5
+          StartLimitIntervalSec=60
+          StartLimitBurst=5
+          NoNewPrivileges=true
+          ProtectSystem=strict
+          ProtectHome=true
+          PrivateTmp=true
+          ReadWritePaths={{ orchestrator_root_dir }} {{ orchestrator_log_dir }}
+          MemoryMax=2G
+          TasksMax=256
+          StandardOutput=journal
+          StandardError=journal
+          SyslogIdentifier=orchestrator
+
+          [Install]
+          WantedBy=multi-user.target
+      notify:
+        - Reload systemd for orchestrator
+        - Restart orchestrator service
+
+    - name: Install orchestrator package in virtualenv
+      ansible.builtin.pip:
+        name: "{{ orchestrator_src_dir }}"
+        editable: true
+        virtualenv: "{{ orchestrator_venv_dir }}"
+        virtualenv_command: /usr/bin/python3 -m venv
+      notify: Restart orchestrator service
+
+    - name: Install Prometheus scrape target for orchestrator
+      ansible.builtin.copy:
+        dest: /var/snap/prometheus/common/file_sd/orchestrator-targets.yml
+        mode: "0644"
+        content: |
+          - targets:
+              - "127.0.0.1:{{ orchestrator_port }}"
+            labels:
+              service: orchestrator
+      notify: Restart prometheus
+
+    - name: Flush orchestrator handlers before health checks
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for orchestrator health endpoint
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ orchestrator_port }}/health"
+        status_code: 200
+      register: orchestrator_health
+      retries: 20
+      delay: 3
+      until: orchestrator_health.status == 200
+
+    - name: Ensure cleanup API key exists in orchestrator database
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export RAW_KEY="{{ orchestrator_cleanup_api_key }}"
+        KEY_HASH="$(python3 - <<'PY'
+        import hashlib
+        import os
+        print(hashlib.sha256(os.environ["RAW_KEY"].encode()).hexdigest())
+        PY
+        )"
+        KEY_ID="$(python3 - <<'PY'
+        import uuid
+        print(uuid.uuid4())
+        PY
+        )"
+        docker exec -i orchestrator-postgres psql -v ON_ERROR_STOP=1 -U "{{ orchestrator_postgres_user }}" -d "{{ orchestrator_postgres_db }}" <<SQL
+        INSERT INTO api_keys (id, key_hash, name, scope, is_active, created_at)
+        SELECT '${KEY_ID}'::uuid, '${KEY_HASH}', '{{ orchestrator_cleanup_key_name }}', 'operator', true, NOW()
+        WHERE NOT EXISTS (
+          SELECT 1 FROM api_keys WHERE name = '{{ orchestrator_cleanup_key_name }}'
+        );
+        UPDATE api_keys
+           SET key_hash='${KEY_HASH}',
+               scope='operator',
+               is_active=true,
+               revoked_at=NULL
+         WHERE name='{{ orchestrator_cleanup_key_name }}'
+           AND (
+             key_hash <> '${KEY_HASH}'
+             OR scope <> 'operator'
+             OR is_active <> true
+             OR revoked_at IS NOT NULL
+           );
+        SQL
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Ensure orchestrator backup timer is enabled and started
+      ansible.builtin.systemd:
+        name: orchestrator-pg-backup.timer
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    - name: Ensure orchestrator cleanup timer is enabled and started
+      ansible.builtin.systemd:
+        name: orchestrator-workspace-cleanup.timer
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    - name: Ensure orchestrator service is enabled and started
+      ansible.builtin.systemd:
+        name: orchestrator.service
+        state: started
+        enabled: true
+        daemon_reload: true
