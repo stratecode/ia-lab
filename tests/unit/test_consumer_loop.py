@@ -56,6 +56,7 @@ async def test_consumer_loop_uses_loaded_task_context() -> None:
             "description": "Fix the bug",
             "repo_path": "/srv/ai-lab/repos/project",
             "branch": "agent/test",
+            "metadata": {},
         }
     ]
 

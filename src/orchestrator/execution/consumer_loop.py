@@ -71,6 +71,31 @@ class ITaskLoader(Protocol):
         ...
 
 
+class ITaskLifecycleService(Protocol):
+    async def on_task_started(
+        self,
+        task_id: str,
+        agent_type: AgentType,
+        worker_id: str,
+    ) -> None: ...
+
+    async def on_task_finished(
+        self,
+        task_id: str,
+        agent_type: AgentType,
+        result: dict[str, Any],
+        worker_id: str,
+    ) -> None: ...
+
+    async def on_task_failed(
+        self,
+        task_id: str,
+        agent_type: AgentType,
+        error_message: str,
+        worker_id: str,
+    ) -> None: ...
+
+
 @dataclass(frozen=True)
 class TaskResult:
     """Result of a task execution within the consumer loop."""
@@ -132,6 +157,7 @@ class ConsumerLoop:
         worker_id: str,
         task_runner: ITaskRunner | None = None,
         task_loader: ITaskLoader | None = None,
+        lifecycle_service: ITaskLifecycleService | None = None,
         config: ConsumerLoopConfig | None = None,
     ) -> None:
         """Initialize the consumer loop.
@@ -151,6 +177,7 @@ class ConsumerLoop:
         self._worker_id = worker_id
         self._task_runner = task_runner
         self._task_loader = task_loader
+        self._lifecycle_service = lifecycle_service
         self._config = config or ConsumerLoopConfig()
         self._running = False
         self._task: asyncio.Task[None] | None = None
@@ -310,6 +337,13 @@ class ConsumerLoop:
             await self._add_to_processing_list(task_id)
 
             # Step 2: Execute the task
+            if self._lifecycle_service is not None:
+                await self._lifecycle_service.on_task_started(
+                    task_id=task_id,
+                    agent_type=agent_type,
+                    worker_id=self._worker_id,
+                )
+
             start_time = time.monotonic()
             result = await self._execute_task(task_id, agent_type)
             duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -325,6 +359,14 @@ class ConsumerLoop:
                 exit_code=result.get("exit_code") if isinstance(result, dict) else None,
             )
             await self._publish_result(task_result)
+
+            if self._lifecycle_service is not None:
+                await self._lifecycle_service.on_task_finished(
+                    task_id=task_id,
+                    agent_type=agent_type,
+                    result=result or {},
+                    worker_id=self._worker_id,
+                )
 
             # Step 4: Atomically remove from processing list on completion
             await self._remove_from_processing_list(task_id)
@@ -344,6 +386,20 @@ class ConsumerLoop:
             self._tasks_failed += 1
             duration_ms = 0
             error_msg = str(exc)
+
+            if self._lifecycle_service is not None:
+                try:
+                    await self._lifecycle_service.on_task_failed(
+                        task_id=task_id,
+                        agent_type=agent_type,
+                        error_message=error_msg,
+                        worker_id=self._worker_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Lifecycle failure while handling task failure",
+                        extra={"task_id": task_id, "worker_id": self._worker_id},
+                    )
 
             # Publish failure result
             task_result = TaskResult(
@@ -427,6 +483,7 @@ class ConsumerLoop:
             description=str(task_context.get("description") or ""),
             repo_path=str(task_context.get("repo_path") or workspace_path),
             branch=str(task_context.get("branch") or "main"),
+            metadata=task_context.get("metadata") if isinstance(task_context.get("metadata"), dict) else {},
         )
 
         # Normalize result to dict

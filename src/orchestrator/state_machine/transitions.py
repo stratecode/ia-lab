@@ -37,6 +37,13 @@ class Priority(StrEnum):
     LOW = "low"
 
 
+class TaskKind(StrEnum):
+    """High-level role of a task within a task tree."""
+
+    ROOT = "root"
+    PLAN_STEP = "plan_step"
+
+
 class ApprovalStatus(StrEnum):
     """Status of an approval request."""
 
@@ -64,6 +71,7 @@ TERMINAL_STATES: frozenset[TaskState] = frozenset(
 VALID_TRANSITIONS: frozenset[tuple[TaskState, TaskState]] = frozenset(
     {
         (TaskState.CREATED, TaskState.QUEUED),
+        (TaskState.CREATED, TaskState.WAITING_APPROVAL),
         (TaskState.CREATED, TaskState.CANCELLED),
         (TaskState.QUEUED, TaskState.ASSIGNED),
         (TaskState.QUEUED, TaskState.CANCELLED),
@@ -77,6 +85,7 @@ VALID_TRANSITIONS: frozenset[tuple[TaskState, TaskState]] = frozenset(
         (TaskState.IN_PROGRESS, TaskState.CANCELLED),
         (TaskState.IN_PROGRESS, TaskState.RETRYING),
         (TaskState.WAITING_APPROVAL, TaskState.IN_PROGRESS),
+        (TaskState.WAITING_APPROVAL, TaskState.QUEUED),
         (TaskState.WAITING_APPROVAL, TaskState.CANCELLED),
         (TaskState.WAITING_APPROVAL, TaskState.FAILED),
         (TaskState.RETRYING, TaskState.IN_PROGRESS),

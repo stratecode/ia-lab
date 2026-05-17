@@ -26,8 +26,13 @@ from orchestrator.approvals.manager import ApprovalManager
 from orchestrator.config import SecuritySettings, Settings
 from orchestrator.execution.worker import Worker
 from orchestrator.notifications.telegram_bot import TelegramBot
+from orchestrator.orchestration.service import TaskLifecycleService
+from orchestrator.planning.service import PlannerService
 from orchestrator.queue.event_bus import RedisEventBus
 from orchestrator.queue.redis_queue import RedisQueueService
+from orchestrator.scheduler.assignment import AssignmentService
+from orchestrator.scheduler.classifier import KeywordClassifier
+from orchestrator.scheduler.resource_tracker import ResourceTracker
 from orchestrator.state_machine.engine import StateMachineEngine
 from orchestrator.tools.safe_mode import SafeModeEnforcer
 
@@ -50,6 +55,11 @@ class AppState:
     state_machine: StateMachineEngine | None = None
     approval_manager: ApprovalManager | None = None
     safe_mode_enforcer: SafeModeEnforcer | None = None
+    classifier: KeywordClassifier | None = None
+    resource_tracker: ResourceTracker | None = None
+    assignment_service: AssignmentService | None = None
+    task_lifecycle: TaskLifecycleService | None = None
+    planner_service: PlannerService | None = None
     worker: Worker | None = None
     telegram_bot: TelegramBot | None = None
 
@@ -70,6 +80,7 @@ def wire_dependencies(app: Any, state: AppState) -> None:
     )
     from orchestrator.api.routes.config import _get_safe_mode_enforcer
     from orchestrator.api.routes.tasks import (
+        _get_task_lifecycle,
         _get_session_factory as _tasks_get_session_factory,
         _get_state_engine,
     )
@@ -96,6 +107,13 @@ def wire_dependencies(app: Any, state: AppState) -> None:
             return state.state_machine  # type: ignore[return-value]
 
         app.dependency_overrides[_get_state_engine] = provide_state_engine
+
+    if state.task_lifecycle is not None:
+
+        def provide_task_lifecycle() -> TaskLifecycleService:
+            return state.task_lifecycle  # type: ignore[return-value]
+
+        app.dependency_overrides[_get_task_lifecycle] = provide_task_lifecycle
 
     # Approval manager
     if state.approval_manager is not None:

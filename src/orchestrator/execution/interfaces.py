@@ -27,7 +27,14 @@ class ITaskRunner(Protocol):
     """
 
     async def execute(
-        self, task_id: str, agent_type: AgentType, workspace_path: str
+        self,
+        task_id: str,
+        agent_type: AgentType,
+        workspace_path: str,
+        description: str = "",
+        repo_path: str | None = None,
+        branch: str | None = None,
+        metadata: dict | None = None,
     ) -> ToolResult:
         """Execute a task and return the normalized result.
 

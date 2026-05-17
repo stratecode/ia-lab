@@ -22,6 +22,7 @@ from orchestrator.state_machine.transitions import (
     ApiKeyScope,
     ApprovalStatus,
     Priority,
+    TaskKind,
     TaskState,
     TERMINAL_STATES,
 )
@@ -53,6 +54,25 @@ class Task(Base):
         default=TaskState.CREATED,
     )
     description: Mapped[str] = mapped_column(Text, nullable=False)
+    parent_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    root_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    task_kind: Mapped[str] = mapped_column(
+        Enum(
+            TaskKind,
+            name="taskkind",
+            values_callable=lambda e: [x.value for x in e],
+        ),
+        nullable=False,
+        default=TaskKind.ROOT,
+    )
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", JSONB, default=dict, nullable=True
     )
@@ -105,10 +125,29 @@ class Task(Base):
     approvals: Mapped[list["Approval"]] = relationship(
         "Approval", back_populates="task", cascade="all, delete-orphan"
     )
+    parent_task: Mapped["Task | None"] = relationship(
+        "Task",
+        remote_side="Task.id",
+        foreign_keys=[parent_task_id],
+        back_populates="child_tasks",
+    )
+    child_tasks: Mapped[list["Task"]] = relationship(
+        "Task",
+        back_populates="parent_task",
+        foreign_keys=[parent_task_id],
+        cascade="all, delete-orphan",
+    )
+    root_task: Mapped["Task | None"] = relationship(
+        "Task",
+        remote_side="Task.id",
+        foreign_keys=[root_task_id],
+    )
 
     __table_args__ = (
         Index("ix_tasks_state_priority", "state", "priority"),
         Index("ix_tasks_created_at", "created_at"),
+        Index("ix_tasks_parent_task_id", "parent_task_id"),
+        Index("ix_tasks_root_task_id", "root_task_id"),
         # Partial unique index: idempotency_key must be unique when not NULL
         Index(
             "ix_tasks_idempotency_key",

@@ -19,7 +19,7 @@ There is also a fourth entry point if you enjoy pain: editing production `site-p
 
 | Entry point | URL / Channel | Purpose |
 |---|---|---|
-| Telegram bot | `@stratecode_bot` | status, approvals, direct model chat, limited server ops |
+| Telegram bot | `@stratecode_bot` | status, approvals, autonomous runs, direct model chat, limited server ops |
 | Open WebUI | `https://chat.stratecode.com` | browser chat UI |
 | Orchestrator API | `https://lab.stratecode.com/orchestrator/` | HTTP control plane |
 | Direct health | `http://127.0.0.1:8100/health` | local health check on the host |
@@ -32,7 +32,8 @@ Use this sequence if you want signal without ceremony:
 1. Check `/status` in Telegram if you want a fast operational read.
 2. Use Open WebUI for conversational work with `coder` or `planner`.
 3. Use the HTTP API when you need repeatable automation or task lifecycle control.
-4. Use Telegram approvals when a task is gated.
+4. Launch autonomous work with `/run` or `/plan` from Telegram.
+5. Use Telegram approvals when a task is gated.
 
 ## Telegram
 
@@ -49,7 +50,10 @@ The bot is access-restricted to the Telegram user IDs configured in `LAB_TELEGRA
 | `/cancel <task_id>` | Cancel a task |
 | `/approve <approval_id>` | Approve a pending approval |
 | `/reject <approval_id>` | Reject a pending approval |
+| `/approvals` | List pending approvals |
 | `/safe` | Toggle safe mode |
+| `/run <objetivo>` | Create a root task and trigger planner + coder flow |
+| `/plan <objetivo>` | Create a root task in plan-only mode |
 | `/coder <mensaje>` | Direct chat with the local coder model |
 | `/planner <mensaje>` | Direct chat with the local planner model |
 | `/server status` | Read-only host summary |
@@ -70,6 +74,9 @@ The bot is access-restricted to the Telegram user IDs configured in `LAB_TELEGRA
 /tasks
 /task 9d6c3f2d-5e62-4de1-b1b3-9966b8e32415
 /cancel 9d6c3f2d-5e62-4de1-b1b3-9966b8e32415
+/approvals
+/run prepara un plan e implementa una mejora de logs en el orquestador
+/plan diseña el trabajo para migrar el servicio a systemd separado
 /coder resume este traceback y dime la causa raíz
 /planner diseña un plan de despliegue para FastAPI + Redis + PostgreSQL
 /server services
@@ -224,6 +231,20 @@ curl -sk "$ORCH_BASE/tasks?limit=20" \
 
 ```bash
 curl -sk "$ORCH_BASE/tasks/<task_id>" \
+  -H "Authorization: Bearer $ORCH_KEY"
+```
+
+### List direct child tasks
+
+```bash
+curl -sk "$ORCH_BASE/tasks/<task_id>/children" \
+  -H "Authorization: Bearer $ORCH_KEY"
+```
+
+### Get the full task tree
+
+```bash
+curl -sk "$ORCH_BASE/tasks/<task_id>/tree" \
   -H "Authorization: Bearer $ORCH_KEY"
 ```
 

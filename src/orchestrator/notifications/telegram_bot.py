@@ -48,6 +48,17 @@ class ITaskService(Protocol):
         """Cancel a task. Returns True if successful."""
         ...
 
+    async def create_task(
+        self,
+        description: str,
+        *,
+        assigned_agent: str | None = None,
+        plan_only: bool = False,
+        entrypoint: str = "telegram",
+    ) -> dict[str, Any]:
+        """Create and orchestrate a task from Telegram."""
+        ...
+
 
 class IApprovalService(Protocol):
     """Protocol for approval operations."""
@@ -58,6 +69,10 @@ class IApprovalService(Protocol):
 
     async def reject(self, approval_id: str, operator: str) -> bool:
         """Reject a pending approval. Returns True if successful."""
+        ...
+
+    async def list_pending(self) -> list[dict[str, Any]]:
+        """List pending approvals."""
         ...
 
 
@@ -202,6 +217,9 @@ class TelegramBot:
         self._app.add_handler(CommandHandler("reject", self._cmd_reject))
         self._app.add_handler(CommandHandler("cancel", self._cmd_cancel))
         self._app.add_handler(CommandHandler("safe", self._cmd_safe))
+        self._app.add_handler(CommandHandler("run", self._cmd_run))
+        self._app.add_handler(CommandHandler("plan", self._cmd_plan))
+        self._app.add_handler(CommandHandler("approvals", self._cmd_approvals))
         self._app.add_handler(CommandHandler("coder", self._cmd_coder))
         self._app.add_handler(CommandHandler("planner", self._cmd_planner))
         self._app.add_handler(CommandHandler("help", self._cmd_help))
@@ -565,6 +583,46 @@ class TelegramBot:
             logger.error("Error in /safe command", extra={"error": str(exc)})
             await update.message.reply_text(f"❌ Error: {exc}")
 
+    async def _cmd_run(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle /run <goal> — create an autonomous root task."""
+        await self._create_orchestrated_task(update, context, plan_only=False)
+
+    async def _cmd_plan(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle /plan <goal> — create a plan-only root task."""
+        await self._create_orchestrated_task(update, context, plan_only=True)
+
+    async def _cmd_approvals(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle /approvals — list pending approvals."""
+        if not self._check_access(update):
+            return
+
+        if self._approval_service is None:
+            await update.message.reply_text("⚠️ Approval service not available.")
+            return
+
+        try:
+            approvals = await self._approval_service.list_pending()
+            if not approvals:
+                await update.message.reply_text("✅ No hay aprobaciones pendientes.")
+                return
+
+            lines = ["🔐 *Pending Approvals*\n"]
+            for approval in approvals[:20]:
+                lines.append(
+                    f"• `{approval['id']}` task=`{approval['task_id']}` "
+                    f"{_escape_md(str(approval['target_resource']))}"
+                )
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        except Exception as exc:
+            logger.error("Error in /approvals command", extra={"error": str(exc)})
+            await update.message.reply_text(f"❌ Error: {exc}")
+
     async def _cmd_coder(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
@@ -592,7 +650,10 @@ class TelegramBot:
             "/cancel <task_id>\n"
             "/approve <approval_id>\n"
             "/reject <approval_id>\n"
+            "/approvals\n"
             "/safe\n"
+            "/run <objetivo>\n"
+            "/plan <objetivo>\n"
             "/coder <mensaje>\n"
             "/planner <mensaje>\n"
             "/server status\n"
@@ -629,6 +690,49 @@ class TelegramBot:
             logger.error(
                 "Error in chat command",
                 extra={"target": target, "error": str(exc)},
+            )
+            await update.message.reply_text(f"❌ Error: {exc}")
+
+    async def _create_orchestrated_task(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        *,
+        plan_only: bool,
+    ) -> None:
+        if not self._check_access(update):
+            return
+
+        if self._task_service is None:
+            await update.message.reply_text("⚠️ Task service not available.")
+            return
+
+        prompt = " ".join(context.args).strip()
+        if not prompt:
+            usage = "/plan <objetivo>" if plan_only else "/run <objetivo>"
+            await update.message.reply_text(f"Uso: {usage}")
+            return
+
+        verb = "plan" if plan_only else "run"
+        await update.message.reply_text(f"⏳ Lanzando {verb}...")
+        try:
+            task = await self._task_service.create_task(
+                prompt,
+                assigned_agent="planner",
+                plan_only=plan_only,
+                entrypoint="telegram",
+            )
+            text = (
+                f"✅ Task creada\n"
+                f"id=`{task.get('id')}`\n"
+                f"state={task.get('state')}\n"
+                f"agent={task.get('assigned_agent')}"
+            )
+            await update.message.reply_text(text, parse_mode="Markdown")
+        except Exception as exc:
+            logger.error(
+                "Error creating orchestrated task",
+                extra={"plan_only": plan_only, "error": str(exc)},
             )
             await update.message.reply_text(f"❌ Error: {exc}")
 

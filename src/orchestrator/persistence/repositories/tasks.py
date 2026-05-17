@@ -14,6 +14,7 @@ from orchestrator.persistence.models import Task
 from orchestrator.state_machine.transitions import (
     AgentType,
     Priority,
+    TaskKind,
     TaskState,
 )
 
@@ -54,6 +55,10 @@ class TaskRepository:
         assigned_agent: AgentType | None = None,
         idempotency_key: str | None = None,
         correlation_id: uuid.UUID | None = None,
+        parent_task_id: uuid.UUID | None = None,
+        root_task_id: uuid.UUID | None = None,
+        task_kind: TaskKind = TaskKind.ROOT,
+        workspace_path: str | None = None,
     ) -> Task:
         """Create a new task and add it to the session.
 
@@ -75,6 +80,10 @@ class TaskRepository:
             assigned_agent=assigned_agent,
             idempotency_key=idempotency_key,
             correlation_id=correlation_id or uuid.uuid4(),
+            parent_task_id=parent_task_id,
+            root_task_id=root_task_id,
+            task_kind=task_kind,
+            workspace_path=workspace_path,
         )
         self._session.add(task)
         await self._session.flush()
@@ -96,6 +105,8 @@ class TaskRepository:
         state: TaskState | None = None,
         agent_type: AgentType | None = None,
         priority: Priority | None = None,
+        parent_task_id: uuid.UUID | None = None,
+        root_task_id: uuid.UUID | None = None,
         date_from: datetime | None = None,
         date_to: datetime | None = None,
         cursor: str | None = None,
@@ -129,6 +140,10 @@ class TaskRepository:
             conditions.append(Task.assigned_agent == agent_type)
         if priority is not None:
             conditions.append(Task.priority == priority)
+        if parent_task_id is not None:
+            conditions.append(Task.parent_task_id == parent_task_id)
+        if root_task_id is not None:
+            conditions.append(Task.root_task_id == root_task_id)
         if date_from is not None:
             conditions.append(Task.created_at >= date_from)
         if date_to is not None:
@@ -163,6 +178,26 @@ class TaskRepository:
             next_cursor = _encode_cursor(last_task.created_at, last_task.id)
 
         return tasks, next_cursor
+
+    async def list_children(self, parent_task_id: uuid.UUID) -> list[Task]:
+        """List direct child tasks for a parent task."""
+        stmt = (
+            select(Task)
+            .where(Task.parent_task_id == parent_task_id)
+            .order_by(Task.created_at.asc(), Task.id.asc())
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_by_root(self, root_task_id: uuid.UUID) -> list[Task]:
+        """List all tasks belonging to a task tree rooted at root_task_id."""
+        stmt = (
+            select(Task)
+            .where(Task.root_task_id == root_task_id)
+            .order_by(Task.created_at.asc(), Task.id.asc())
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
 
     async def update_state(
         self,

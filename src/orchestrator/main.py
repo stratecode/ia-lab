@@ -40,6 +40,11 @@ from orchestrator.observability.logging import configure_logging
 from orchestrator.persistence.models import Task
 from orchestrator.persistence.repositories.api_keys import ApiKeyRepository
 from orchestrator.persistence.repositories.tasks import TaskRepository
+from orchestrator.orchestration.service import (
+    OrchestratedTaskRequest,
+    TaskLifecycleService,
+)
+from orchestrator.planning.service import PlannerService
 from orchestrator.state_machine.transitions import TERMINAL_STATES, TaskState
 
 logger = structlog.get_logger(__name__)
@@ -77,6 +82,28 @@ class _TelegramTaskService:
 
         return [self._serialize_task(task) for task in tasks]
 
+    async def create_task(
+        self,
+        description: str,
+        *,
+        assigned_agent: str | None = None,
+        plan_only: bool = False,
+        entrypoint: str = "telegram",
+    ) -> dict[str, Any]:
+        from orchestrator.state_machine.transitions import AgentType, Priority
+
+        task = await self._state.task_lifecycle.create_task(  # type: ignore[union-attr]
+            OrchestratedTaskRequest(
+                description=description,
+                metadata={"plan_only": plan_only},
+                priority=Priority.NORMAL,
+                assigned_agent=AgentType(assigned_agent) if assigned_agent else None,
+                idempotency_key=None,
+                entrypoint=entrypoint,
+            )
+        )
+        return self._serialize_task(task)
+
     async def cancel_task(self, task_id: str, actor: str) -> bool:
         async with self._state.session_factory() as session:  # type: ignore[operator]
             repo = TaskRepository(session)
@@ -106,6 +133,9 @@ class _TelegramTaskService:
             "id": str(task.id),
             "state": str(task.state),
             "description": task.description,
+            "task_kind": str(task.task_kind),
+            "parent_task_id": str(task.parent_task_id) if task.parent_task_id else None,
+            "root_task_id": str(task.root_task_id) if task.root_task_id else None,
             "assigned_agent": str(task.assigned_agent) if task.assigned_agent else None,
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "started_at": task.started_at.isoformat() if task.started_at else None,
@@ -146,6 +176,51 @@ class _TelegramApprovalService:
             return False
 
         return True
+
+    async def list_pending(self) -> list[dict[str, Any]]:
+        return await self._state.task_lifecycle.get_pending_approvals()  # type: ignore[union-attr]
+
+
+class _TelegramApprovalNotificationAdapter:
+    """Bridge ApprovalManager notification hooks to the Telegram bot."""
+
+    def __init__(self, bot) -> None:
+        self._bot = bot
+
+    async def notify_approval_requested(
+        self,
+        approval_id: str,
+        task_id: str,
+        action_type: str,
+        target_resource: str,
+        timeout_seconds: int,
+    ) -> None:
+        await self._bot.send_approval_request(
+            approval_id=approval_id,
+            task_id=task_id,
+            action_type=action_type,
+            target_resource=target_resource,
+            timeout_seconds=timeout_seconds,
+        )
+
+    async def notify_escalation(
+        self,
+        approval_id: str,
+        task_id: str,
+        action_type: str,
+        target_resource: str,
+        remaining_seconds: int,
+    ) -> None:
+        await self._bot.send_message(
+            (
+                "⚠️ Escalation\n"
+                f"approval_id={approval_id}\n"
+                f"task_id={task_id}\n"
+                f"action={action_type}\n"
+                f"target={target_resource}\n"
+                f"remaining={remaining_seconds}s"
+            )
+        )
 
 
 class _TelegramStatusService:
@@ -352,6 +427,7 @@ class _QueuedTaskLoader:
             "description": task.description,
             "repo_path": repo_path,
             "branch": branch,
+            "metadata": metadata,
         }
 
 
@@ -393,12 +469,10 @@ async def _run_migrations(state: AppState) -> None:
     This is safe to run multiple times (creates only missing tables).
     If schema creation fails, the application refuses to start per requirement 5.4.
     """
-    from orchestrator.persistence.models import Base
+    from orchestrator.persistence.migrations import run_migrations
 
     try:
-        async with state.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-
+        await run_migrations(state.settings.database)
         logger.info("Database schema verified/created successfully")
     except Exception as exc:
         logger.error(
@@ -436,6 +510,10 @@ async def _connect_redis(state: AppState) -> None:
 
 def _create_services(state: AppState) -> None:
     """Instantiate application services with their dependencies."""
+    from orchestrator.queue.backpressure import BackpressureQueueService
+    from orchestrator.scheduler.assignment import AssignmentService
+    from orchestrator.scheduler.classifier import KeywordClassifier
+    from orchestrator.scheduler.resource_tracker import ResourceTracker
     from orchestrator.approvals.manager import ApprovalManager
     from orchestrator.state_machine.engine import StateMachineEngine
     from orchestrator.tools.safe_mode import SafeModeEnforcer
@@ -457,6 +535,43 @@ def _create_services(state: AppState) -> None:
         session_factory=state.session_factory,  # type: ignore[arg-type]
         state_machine=state.state_machine,
         event_publisher=state.event_bus,
+        resume_callback=lambda task_id: state.task_lifecycle.resume_approved_task(task_id),  # type: ignore[union-attr]
+    )
+
+    state.classifier = KeywordClassifier(
+        confidence_threshold=state.settings.scheduler.classification_confidence_threshold,
+        llm_base_url=state.settings.llama.planner_base_url.removesuffix("/v1"),
+        llm_timeout=state.settings.scheduler.classification_timeout,
+    )
+    state.resource_tracker = ResourceTracker(
+        state.settings.scheduler,
+        state.redis_client,  # type: ignore[arg-type]
+    )
+    state.assignment_service = AssignmentService(
+        event_bus=state.event_bus,  # type: ignore[arg-type]
+        resource_tracker=state.resource_tracker,
+        classifier=state.classifier,
+        max_concurrent_tasks=state.settings.scheduler.max_concurrent_tasks,
+    )
+    queue_controller = BackpressureQueueService(
+        state.redis_client,  # type: ignore[arg-type]
+        state.event_bus,  # type: ignore[arg-type]
+        state.settings.queue,
+    )
+    planner_service = PlannerService(
+        base_url=state.settings.llama.planner_base_url,
+        api_key=state.settings.llama.planner_api_key,
+        timeout_seconds=state.settings.llama.timeout_seconds,
+    )
+    state.planner_service = planner_service
+    state.task_lifecycle = TaskLifecycleService(
+        session_factory=state.session_factory,  # type: ignore[arg-type]
+        state_machine=state.state_machine,
+        queue_controller=queue_controller,
+        classifier=state.classifier,
+        planner_service=planner_service,
+        approval_manager=state.approval_manager,
+        resource_tracker=state.resource_tracker,
     )
 
 
@@ -474,6 +589,9 @@ async def _start_worker(state: AppState) -> None:
         logger.info("Worker not started (mode=%s)", mode.value)
         return
 
+    if state.resource_tracker is not None:
+        await state.resource_tracker.start()
+
     worker = Worker(
         redis_client=state.redis_client,  # type: ignore[arg-type]
         settings=state.settings.worker,
@@ -484,8 +602,11 @@ async def _start_worker(state: AppState) -> None:
         queue_service=state.queue_service,  # type: ignore[arg-type]
         event_bus=state.event_bus,  # type: ignore[arg-type]
         worker_id=worker.worker_id,
-        task_runner=TaskRunner(),
+        task_runner=TaskRunner(
+            planner_service=state.planner_service,
+        ),
         task_loader=_QueuedTaskLoader(state),
+        lifecycle_service=state.task_lifecycle,
     )
     worker.set_consumer_loop(consumer_loop)
     await worker.start()
@@ -524,6 +645,10 @@ async def _start_telegram_bot(state: AppState) -> None:
     )
     await bot.start()
     state.telegram_bot = bot
+    if state.approval_manager is not None:
+        state.approval_manager._notification_service = _TelegramApprovalNotificationAdapter(bot)  # type: ignore[attr-defined]
+    if state.task_lifecycle is not None:
+        state.task_lifecycle._notification_bot = bot  # type: ignore[attr-defined]
 
     logger.info("Telegram bot started")
 
@@ -534,6 +659,8 @@ async def _shutdown_worker(state: AppState) -> None:
         logger.info("Stopping worker", worker_id=state.worker.worker_id)
         await state.worker.stop()
         logger.info("Worker stopped")
+    if state.resource_tracker is not None:
+        await state.resource_tracker.stop()
 
 
 async def _shutdown_telegram_bot(state: AppState) -> None:

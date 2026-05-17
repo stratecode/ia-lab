@@ -25,6 +25,11 @@ from orchestrator.execution.aider_adapter import (
     AiderTaskParams,
     DEFAULT_AIDER_TIMEOUT,
 )
+from orchestrator.observability.metrics import (
+    PLANNER_EXECUTION_DURATION_SECONDS,
+    record_planner_invalid_output,
+)
+from orchestrator.planning.service import PlannerOutputError, PlannerService
 from orchestrator.state_machine.transitions import AgentType
 from orchestrator.tools.interfaces import ToolResult
 
@@ -58,6 +63,7 @@ class TaskRunner:
     def __init__(
         self,
         aider_adapter: AiderAdapter | None = None,
+        planner_service: PlannerService | None = None,
         aider_timeout: float = DEFAULT_AIDER_TIMEOUT,
         default_branch: str = DEFAULT_BRANCH,
     ) -> None:
@@ -71,6 +77,7 @@ class TaskRunner:
         self._aider_adapter = aider_adapter or AiderAdapter(
             default_timeout=aider_timeout
         )
+        self._planner_service = planner_service
         self._aider_timeout = aider_timeout
         self._default_branch = default_branch
 
@@ -82,6 +89,7 @@ class TaskRunner:
         description: str = "",
         repo_path: str | None = None,
         branch: str | None = None,
+        metadata: dict | None = None,
         timeout: float | None = None,
     ) -> ToolResult:
         """Execute a task and return the normalized result.
@@ -126,6 +134,12 @@ class TaskRunner:
                 branch=branch,
                 timeout=timeout,
             )
+        elif agent_type == AgentType.PLANNER:
+            result = await self._execute_planner_task(
+                task_id=task_id,
+                description=description,
+                metadata=metadata or {},
+            )
         else:
             # Other agent types not yet implemented
             duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -148,8 +162,8 @@ class TaskRunner:
             extra={
                 "task_id": task_id,
                 "agent_type": agent_type,
-                "status": result.status,
-                "duration_ms": result.duration_ms,
+                "status": result.get("status", "unknown") if isinstance(result, dict) else result.status,
+                "duration_ms": result.get("duration_ms", 0) if isinstance(result, dict) else result.duration_ms,
             },
         )
 
@@ -211,3 +225,36 @@ class TaskRunner:
         )
 
         return await self._aider_adapter.execute(params)
+
+    async def _execute_planner_task(
+        self,
+        task_id: str,
+        description: str,
+        metadata: dict,
+    ) -> dict:
+        if self._planner_service is None:
+            raise TaskRunnerError("planner_service is not configured")
+
+        start_time = time.monotonic()
+        try:
+            plan = await self._planner_service.create_plan(description, metadata)
+        except PlannerOutputError as exc:
+            PLANNER_EXECUTION_DURATION_SECONDS.observe(max(time.monotonic() - start_time, 0.0))
+            record_planner_invalid_output()
+            return {
+                "status": "error",
+                "output": "",
+                "error_message": str(exc),
+                "subtasks": [],
+            }
+        PLANNER_EXECUTION_DURATION_SECONDS.observe(max(time.monotonic() - start_time, 0.0))
+
+        return {
+            "status": "success",
+            "output": plan.plan,
+            "plan_summary": plan.summary,
+            "plan_markdown": plan.plan,
+            "subtasks": [subtask.model_dump(mode="json") for subtask in plan.subtasks],
+            "plan_only": bool(metadata.get("plan_only", False)),
+            "raw_response": plan.raw_response,
+        }

@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Protocol
+from typing import Any, Awaitable, Callable, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -129,11 +129,13 @@ class ApprovalManager:
         state_machine: StateMachineEngine,
         event_publisher: IEventPublisher | None = None,
         notification_service: INotificationService | None = None,
+        resume_callback: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._state_machine = state_machine
         self._event_publisher = event_publisher or NoOpEventPublisher()
         self._notification_service = notification_service or NoOpNotificationService()
+        self._resume_callback = resume_callback
 
     async def request_approval(
         self,
@@ -280,10 +282,12 @@ class ApprovalManager:
         if decision == ApprovalDecision.APPROVE:
             await self._state_machine.transition(
                 task_id=task_id,
-                target_state=TaskState.IN_PROGRESS,
+                target_state=TaskState.QUEUED,
                 actor=f"operator:{operator}",
                 reason="Approval granted",
             )
+            if self._resume_callback is not None:
+                await self._resume_callback(task_id)
             event_type = "approval.approved"
         else:
             await self._state_machine.transition(

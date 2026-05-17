@@ -12,6 +12,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import inspect
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -41,6 +42,32 @@ def _build_alembic_config(database_url: str) -> Config:
     alembic_cfg.set_main_option("script_location", str(_MIGRATIONS_DIR))
     alembic_cfg.set_main_option("sqlalchemy.url", database_url)
     return alembic_cfg
+
+
+def _detect_legacy_revision(connection: Connection) -> str | None:
+    """Infer the Alembic baseline for pre-migration databases.
+
+    Older deployments created the schema via SQLAlchemy metadata without an
+    ``alembic_version`` table. In that case, bootstrapping from revision ``001``
+    avoids replaying the full initial schema while still allowing incremental
+    migrations such as task hierarchy additions.
+    """
+    inspector = inspect(connection)
+    tables = set(inspector.get_table_names())
+
+    if "alembic_version" in tables:
+        return None
+
+    if "tasks" not in tables:
+        return None
+
+    task_columns = {column["name"] for column in inspector.get_columns("tasks")}
+    hierarchy_columns = {"parent_task_id", "root_task_id", "task_kind"}
+
+    if hierarchy_columns.issubset(task_columns):
+        return "002"
+
+    return "001"
 
 
 async def run_migrations(settings: DatabaseSettings | None = None) -> None:
@@ -80,9 +107,16 @@ async def run_migrations(settings: DatabaseSettings | None = None) -> None:
     def _do_upgrade(connection: Connection) -> None:
         """Execute the Alembic upgrade within a sync connection."""
         alembic_cfg.attributes["connection"] = connection
+        bootstrap_revision = _detect_legacy_revision(connection)
+        if bootstrap_revision is not None:
+            logger.info(
+                "Stamping legacy schema before migrations",
+                extra={"revision": bootstrap_revision},
+            )
+            command.stamp(alembic_cfg, bootstrap_revision)
         command.upgrade(alembic_cfg, "head")
 
-    async with connectable.connect() as connection:
+    async with connectable.begin() as connection:
         await connection.run_sync(_do_upgrade)
 
     await connectable.dispose()

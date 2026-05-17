@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from orchestrator.state_machine.transitions import (
     AgentType,
     Priority,
+    TaskKind,
     TaskState,
 )
 
@@ -43,6 +44,9 @@ class TaskResponse(BaseModel):
     state: TaskState
     description: str
     metadata: dict
+    parent_task_id: UUID | None = None
+    root_task_id: UUID | None = None
+    task_kind: TaskKind = TaskKind.ROOT
     assigned_agent: AgentType | None
     priority: Priority
     workspace_path: str | None
@@ -65,6 +69,13 @@ class TaskListResponse(BaseModel):
     cursor: str | None = None
     total: int
     page_size: int
+
+
+class TaskTreeResponse(TaskResponse):
+    children: list["TaskTreeResponse"] = Field(default_factory=list)
+
+
+TaskTreeResponse.model_rebuild()
 
 
 class TaskStateConflictResponse(BaseModel):

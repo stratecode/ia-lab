@@ -64,6 +64,15 @@
         mode: "0644"
       notify: Restart orchestrator service
 
+    - name: Install orchestrator Alembic config
+      ansible.builtin.copy:
+        src: "{{ inventory_dir }}/alembic.ini"
+        dest: "{{ orchestrator_src_dir }}/alembic.ini"
+        owner: "{{ orchestrator_user }}"
+        group: "{{ orchestrator_group }}"
+        mode: "0644"
+      notify: Restart orchestrator service
+
     - name: Install orchestrator source tree
       ansible.builtin.copy:
         src: "{{ inventory_dir }}/src/orchestrator"
@@ -72,6 +81,17 @@
         group: "{{ orchestrator_group }}"
         mode: "0644"
         directory_mode: "0755"
+      notify: Restart orchestrator service
+
+    - name: Remove deployment artifacts from orchestrator source tree
+      ansible.builtin.shell: |
+        set -euo pipefail
+        find "{{ orchestrator_src_dir }}/src/orchestrator" \
+          \( -name '__pycache__' -o -name '.DS_Store' -o -name '._*' -o -name '*.pyc' \) \
+          -print0 | xargs -0r rm -rf
+      args:
+        executable: /bin/bash
+      changed_when: false
       notify: Restart orchestrator service
 
     - name: Install PostgreSQL compose file for orchestrator
@@ -305,6 +325,8 @@
           After=network-online.target redis-server.service docker.service
           Wants=network-online.target
           Requires=redis-server.service
+          StartLimitIntervalSec=60
+          StartLimitBurst=5
 
           [Service]
           Type=exec
@@ -315,8 +337,6 @@
           ExecStart={{ orchestrator_venv_dir }}/bin/uvicorn orchestrator.main:app --host ${LAB_ORCHESTRATOR_HOST} --port ${LAB_ORCHESTRATOR_PORT}
           Restart=on-failure
           RestartSec=5
-          StartLimitIntervalSec=60
-          StartLimitBurst=5
           NoNewPrivileges=true
           ProtectSystem=strict
           ProtectHome=true

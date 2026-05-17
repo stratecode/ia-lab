@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from orchestrator.api.schemas.common import ErrorResponse
 from orchestrator.api.schemas.tasks import (
     TaskCreate,
+    TaskTreeResponse,
     TaskListResponse,
     TaskResponse,
     TaskStateConflictResponse,
@@ -29,6 +30,8 @@ from orchestrator.api.schemas.tasks import (
 )
 from orchestrator.persistence.models import Task
 from orchestrator.persistence.repositories.tasks import TaskRepository
+from orchestrator.orchestration.service import TaskLifecycleService
+from orchestrator.orchestration.service import OrchestratedTaskRequest
 from orchestrator.state_machine.engine import (
     InvalidTransitionError,
     StateMachineEngine,
@@ -36,6 +39,7 @@ from orchestrator.state_machine.engine import (
 from orchestrator.state_machine.transitions import (
     AgentType,
     Priority,
+    TaskKind,
     TaskState,
     TERMINAL_STATES,
     get_valid_transitions,
@@ -68,6 +72,9 @@ def _task_to_response(task: Task) -> TaskResponse:
         state=TaskState(task.state),
         description=task.description,
         metadata=task.metadata_ or {},
+        parent_task_id=task.parent_task_id,
+        root_task_id=task.root_task_id,
+        task_kind=TaskKind(task.task_kind),
         assigned_agent=AgentType(task.assigned_agent) if task.assigned_agent else None,
         priority=Priority(task.priority),
         workspace_path=task.workspace_path,
@@ -101,6 +108,11 @@ async def _get_state_engine() -> StateMachineEngine:
     raise NotImplementedError("State machine engine not configured")
 
 
+def _get_task_lifecycle() -> TaskLifecycleService:
+    """Placeholder dependency — overridden at app startup."""
+    raise NotImplementedError("Task lifecycle service not configured")
+
+
 # ---------------------------------------------------------------------------
 # Route handlers
 # ---------------------------------------------------------------------------
@@ -123,6 +135,7 @@ async def create_task(
         description="Optional idempotency key for deduplication (24h window)",
     ),
     session_factory: async_sessionmaker[AsyncSession] = Depends(_get_session_factory),
+    task_lifecycle: TaskLifecycleService = Depends(_get_task_lifecycle),
 ) -> TaskResponse:
     """Create a new task.
 
@@ -130,41 +143,43 @@ async def create_task(
     return the original task without creating duplicates.
     """
     async with session_factory() as session:
-        async with session.begin():
-            repo = TaskRepository(session)
+        repo = TaskRepository(session)
+        if idempotency_key:
+            existing = await repo.get_by_idempotency_key(idempotency_key)
+            if existing is not None:
+                created_at = existing.created_at
+                if isinstance(created_at, str):
+                    created_at = datetime.fromisoformat(created_at)
+                now = datetime.now(UTC)
+                if now - created_at < _IDEMPOTENCY_WINDOW:
+                    logger.info(
+                        "Idempotent task creation — returning existing task",
+                        task_id=str(existing.id),
+                        idempotency_key=idempotency_key,
+                    )
+                    return _task_to_response(existing)
 
-            # Idempotency check: if key provided, look for existing task
-            if idempotency_key:
-                existing = await repo.get_by_idempotency_key(idempotency_key)
-                if existing is not None:
-                    # Check if within the 24h dedup window
-                    created_at = existing.created_at
-                    if isinstance(created_at, str):
-                        created_at = datetime.fromisoformat(created_at)
-                    now = datetime.now(UTC)
-                    if now - created_at < _IDEMPOTENCY_WINDOW:
-                        logger.info(
-                            "Idempotent task creation — returning existing task",
-                            task_id=str(existing.id),
-                            idempotency_key=idempotency_key,
-                        )
-                        return _task_to_response(existing)
-
-            task = await repo.create(
+    try:
+        task = await task_lifecycle.create_task(
+            OrchestratedTaskRequest(
                 description=body.description,
                 metadata=body.metadata,
                 priority=body.priority,
                 assigned_agent=body.assigned_agent,
                 idempotency_key=idempotency_key,
+                entrypoint="api",
             )
-
-        logger.info(
-            "Task created",
-            task_id=str(task.id),
-            priority=body.priority.value,
-            assigned_agent=body.assigned_agent.value if body.assigned_agent else None,
         )
-        return _task_to_response(task)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    logger.info(
+        "Task created and orchestrated",
+        task_id=str(task.id),
+        priority=body.priority.value,
+        assigned_agent=body.assigned_agent.value if body.assigned_agent else None,
+    )
+    return _task_to_response(task)
 
 
 @router.get(
@@ -198,6 +213,8 @@ async def list_tasks(
     state: TaskState | None = Query(None, description="Filter by task state"),
     agent: AgentType | None = Query(None, description="Filter by assigned agent"),
     priority: Priority | None = Query(None, description="Filter by priority"),
+    parent_task_id: uuid.UUID | None = Query(None, description="Filter by parent task"),
+    root_task_id: uuid.UUID | None = Query(None, description="Filter by root task"),
     date_from: datetime | None = Query(None, description="Filter tasks created on or after"),
     date_to: datetime | None = Query(None, description="Filter tasks created on or before"),
     cursor: str | None = Query(None, description="Pagination cursor from previous response"),
@@ -215,6 +232,8 @@ async def list_tasks(
             state=state,
             agent_type=agent,
             priority=priority,
+            parent_task_id=parent_task_id,
+            root_task_id=root_task_id,
             date_from=date_from,
             date_to=date_to,
             cursor=cursor,
@@ -282,6 +301,35 @@ async def update_task(
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
     return _task_to_response(task)
+
+
+@router.get(
+    "/{task_id}/children",
+    response_model=list[TaskResponse],
+    responses={404: {"model": ErrorResponse}},
+)
+async def list_task_children(
+    task_id: uuid.UUID,
+    task_lifecycle: TaskLifecycleService = Depends(_get_task_lifecycle),
+) -> list[TaskResponse]:
+    children = await task_lifecycle.list_children(task_id)
+    return [_task_to_response(task) for task in children]
+
+
+@router.get(
+    "/{task_id}/tree",
+    response_model=TaskTreeResponse,
+    responses={404: {"model": ErrorResponse}},
+)
+async def get_task_tree(
+    task_id: uuid.UUID,
+    task_lifecycle: TaskLifecycleService = Depends(_get_task_lifecycle),
+) -> TaskTreeResponse:
+    try:
+        tree = await task_lifecycle.get_task_tree(task_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return TaskTreeResponse.model_validate(tree)
 
 
 @router.post(
