@@ -19,7 +19,16 @@ dependencies = [
     "structlog",
     "prometheus-client",
     "httpx",
+    "beautifulsoup4",
+    "pypdf",
+    "python-docx",
+    "Pillow",
+    "pytesseract",
 ]
+
+[project.scripts]
+lab-agent = "orchestrator.local_bridge.cli:main"
+lab-agentd = "orchestrator.local_bridge.daemon:main"
 
 [project.optional-dependencies]
 dev = [

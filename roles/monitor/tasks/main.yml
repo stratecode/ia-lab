@@ -181,6 +181,7 @@
           allow 127.0.0.1;
           allow ::1;
           allow {{ server_lan_cidr }};
+          allow {{ docker_internal_cidr }};
       {% if wireguard_enabled %}
           allow {{ wireguard_subnet }};
       {% endif %}
@@ -235,6 +236,7 @@
           allow 127.0.0.1;
           allow ::1;
           allow {{ server_lan_cidr }};
+          allow {{ docker_internal_cidr }};
       {% if wireguard_enabled %}
           allow {{ wireguard_subnet }};
       {% endif %}
@@ -282,6 +284,7 @@
           allow 127.0.0.1;
           allow ::1;
           allow {{ server_lan_cidr }};
+          allow {{ docker_internal_cidr }};
       {% if wireguard_enabled %}
           allow {{ wireguard_subnet }};
       {% endif %}

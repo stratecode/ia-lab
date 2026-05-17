@@ -237,6 +237,31 @@ ROOT_TASK_DURATION_SECONDS = Histogram(
     buckets=(1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 900.0, 1800.0, 3600.0),
 )
 
+CAPABILITY_INVOCATIONS_TOTAL = Counter(
+    "orchestrator_capability_invocations_total",
+    "Total number of capability invocations",
+    labelnames=["capability", "entrypoint", "status"],
+)
+
+CAPABILITY_ERRORS_TOTAL = Counter(
+    "orchestrator_capability_errors_total",
+    "Total number of failed capability invocations",
+    labelnames=["capability", "entrypoint"],
+)
+
+CAPABILITY_DURATION_SECONDS = Histogram(
+    "orchestrator_capability_duration_seconds",
+    "Time taken by capability invocations",
+    labelnames=["capability", "entrypoint"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
+)
+
+ARTIFACTS_CREATED_TOTAL = Counter(
+    "orchestrator_artifacts_created_total",
+    "Total number of persisted artifacts",
+    labelnames=["artifact_type", "entrypoint"],
+)
+
 # ---------------------------------------------------------------------------
 # Scheduler Queue Wait
 # ---------------------------------------------------------------------------
@@ -286,6 +311,35 @@ def record_planner_subtask_created(assigned_agent: str, requires_approval: bool)
 
 def record_planner_invalid_output() -> None:
     PLANNER_INVALID_OUTPUT_TOTAL.inc()
+
+
+def record_capability_invocation(
+    capability: str,
+    entrypoint: str,
+    status: str,
+    duration_seconds: float,
+) -> None:
+    CAPABILITY_INVOCATIONS_TOTAL.labels(
+        capability=capability,
+        entrypoint=entrypoint,
+        status=status,
+    ).inc()
+    CAPABILITY_DURATION_SECONDS.labels(
+        capability=capability,
+        entrypoint=entrypoint,
+    ).observe(max(duration_seconds, 0.0))
+    if status != "success":
+        CAPABILITY_ERRORS_TOTAL.labels(
+            capability=capability,
+            entrypoint=entrypoint,
+        ).inc()
+
+
+def record_artifact_created(artifact_type: str, entrypoint: str) -> None:
+    ARTIFACTS_CREATED_TOTAL.labels(
+        artifact_type=artifact_type,
+        entrypoint=entrypoint,
+    ).inc()
 
 
 def record_state_transition(

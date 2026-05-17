@@ -23,8 +23,10 @@ from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from orchestrator.approvals.manager import ApprovalManager
+from orchestrator.capabilities.service import CapabilityService
 from orchestrator.config import SecuritySettings, Settings
 from orchestrator.execution.worker import Worker
+from orchestrator.local_bridge.service import LocalBridgeService
 from orchestrator.notifications.telegram_bot import TelegramBot
 from orchestrator.orchestration.service import TaskLifecycleService
 from orchestrator.planning.service import PlannerService
@@ -59,6 +61,8 @@ class AppState:
     resource_tracker: ResourceTracker | None = None
     assignment_service: AssignmentService | None = None
     task_lifecycle: TaskLifecycleService | None = None
+    capability_service: CapabilityService | None = None
+    local_bridge_service: LocalBridgeService | None = None
     planner_service: PlannerService | None = None
     worker: Worker | None = None
     telegram_bot: TelegramBot | None = None
@@ -78,12 +82,18 @@ def wire_dependencies(app: Any, state: AppState) -> None:
         _get_approval_manager,
         _get_session_factory as _approvals_get_session_factory,
     )
+    from orchestrator.api.routes.bridges import _get_local_bridge_service
     from orchestrator.api.routes.config import _get_safe_mode_enforcer
+    from orchestrator.api.routes.openai_tools import (
+        _get_capability_service as _get_openai_capability_service,
+        _get_capability_settings,
+    )
     from orchestrator.api.routes.tasks import (
         _get_task_lifecycle,
         _get_session_factory as _tasks_get_session_factory,
         _get_state_engine,
     )
+    from orchestrator.api.routes.tools import _get_capability_service
     from orchestrator.api.routes.workers import _get_redis
     from orchestrator.api.routes.workspaces import (
         _get_security_settings,
@@ -115,6 +125,21 @@ def wire_dependencies(app: Any, state: AppState) -> None:
 
         app.dependency_overrides[_get_task_lifecycle] = provide_task_lifecycle
 
+    if state.capability_service is not None:
+
+        def provide_capability_service() -> CapabilityService:
+            return state.capability_service  # type: ignore[return-value]
+
+        app.dependency_overrides[_get_capability_service] = provide_capability_service
+        app.dependency_overrides[_get_openai_capability_service] = provide_capability_service
+
+    if state.local_bridge_service is not None:
+
+        def provide_local_bridge_service() -> LocalBridgeService:
+            return state.local_bridge_service  # type: ignore[return-value]
+
+        app.dependency_overrides[_get_local_bridge_service] = provide_local_bridge_service
+
     # Approval manager
     if state.approval_manager is not None:
 
@@ -144,3 +169,8 @@ def wire_dependencies(app: Any, state: AppState) -> None:
         return state.settings.security
 
     app.dependency_overrides[_get_security_settings] = provide_security_settings
+
+    def provide_capability_settings():
+        return state.settings.capabilities
+
+    app.dependency_overrides[_get_capability_settings] = provide_capability_settings

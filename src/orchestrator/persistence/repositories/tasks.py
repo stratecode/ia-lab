@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from orchestrator.persistence.models import Task
 from orchestrator.state_machine.transitions import (
     AgentType,
+    ExecutionTarget,
     Priority,
     TaskKind,
     TaskState,
@@ -58,6 +59,7 @@ class TaskRepository:
         parent_task_id: uuid.UUID | None = None,
         root_task_id: uuid.UUID | None = None,
         task_kind: TaskKind = TaskKind.ROOT,
+        execution_target: ExecutionTarget = ExecutionTarget.REMOTE,
         workspace_path: str | None = None,
     ) -> Task:
         """Create a new task and add it to the session.
@@ -83,6 +85,7 @@ class TaskRepository:
             parent_task_id=parent_task_id,
             root_task_id=root_task_id,
             task_kind=task_kind,
+            execution_target=execution_target,
             workspace_path=workspace_path,
         )
         self._session.add(task)
@@ -105,6 +108,7 @@ class TaskRepository:
         state: TaskState | None = None,
         agent_type: AgentType | None = None,
         priority: Priority | None = None,
+        execution_target: ExecutionTarget | None = None,
         parent_task_id: uuid.UUID | None = None,
         root_task_id: uuid.UUID | None = None,
         date_from: datetime | None = None,
@@ -140,6 +144,8 @@ class TaskRepository:
             conditions.append(Task.assigned_agent == agent_type)
         if priority is not None:
             conditions.append(Task.priority == priority)
+        if execution_target is not None:
+            conditions.append(Task.execution_target == execution_target)
         if parent_task_id is not None:
             conditions.append(Task.parent_task_id == parent_task_id)
         if root_task_id is not None:

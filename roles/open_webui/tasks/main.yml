@@ -20,6 +20,7 @@
             - "127.0.0.1:{{ open_webui_port }}:8080"
           extra_hosts:
             - "host.docker.internal:host-gateway"
+            - "{{ cockpit_domain }}:host-gateway"
           env_file:
             - /srv/ai-lab/open-webui/open-webui.env
           volumes:

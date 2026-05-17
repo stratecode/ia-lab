@@ -110,6 +110,19 @@ class IServerOpsService(Protocol):
         ...
 
 
+class ICapabilityService(Protocol):
+    """Protocol for capability-layer operations exposed to Telegram."""
+
+    async def list_capabilities(self) -> list[dict[str, str]]:
+        ...
+
+    async def execute(self, capability: str, argument: str) -> dict[str, Any]:
+        ...
+
+    async def get_task_sources(self, task_id: str) -> list[dict[str, Any]]:
+        ...
+
+
 # ---------------------------------------------------------------------------
 # Access restriction filter
 # ---------------------------------------------------------------------------
@@ -164,6 +177,7 @@ class TelegramBot:
         status_service: ISystemStatusService | None = None,
         chat_service: IChatService | None = None,
         server_ops_service: IServerOpsService | None = None,
+        capability_service: ICapabilityService | None = None,
     ) -> None:
         """Initialize the Telegram bot.
 
@@ -183,6 +197,7 @@ class TelegramBot:
         self._status_service = status_service
         self._chat_service = chat_service
         self._server_ops_service = server_ops_service
+        self._capability_service = capability_service
         self._app: Application | None = None
         self._user_filter = AllowedUsersFilter(allowed_user_ids)
 
@@ -224,6 +239,12 @@ class TelegramBot:
         self._app.add_handler(CommandHandler("planner", self._cmd_planner))
         self._app.add_handler(CommandHandler("help", self._cmd_help))
         self._app.add_handler(CommandHandler("server", self._cmd_server))
+        self._app.add_handler(CommandHandler("capabilities", self._cmd_capabilities))
+        self._app.add_handler(CommandHandler("web", self._cmd_web))
+        self._app.add_handler(CommandHandler("fetch", self._cmd_fetch))
+        self._app.add_handler(CommandHandler("doc", self._cmd_doc))
+        self._app.add_handler(CommandHandler("image", self._cmd_image))
+        self._app.add_handler(CommandHandler("sources", self._cmd_sources))
 
         # Register callback query handler for inline buttons
         self._app.add_handler(CallbackQueryHandler(self._callback_handler))
@@ -656,6 +677,12 @@ class TelegramBot:
             "/plan <objetivo>\n"
             "/coder <mensaje>\n"
             "/planner <mensaje>\n"
+            "/capabilities\n"
+            "/web <consulta>\n"
+            "/fetch <url>\n"
+            "/doc <ruta_o_url>\n"
+            "/image <ruta_o_url>\n"
+            "/sources <task_id>\n"
             "/server status\n"
             "/server services\n"
             "/server disk"
@@ -766,6 +793,69 @@ class TelegramBot:
             )
             await update.message.reply_text(f"❌ Error: {exc}")
 
+    async def _cmd_capabilities(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        if not self._check_access(update):
+            return
+        if self._capability_service is None:
+            await update.message.reply_text("⚠️ Capability service not available.")
+            return
+        items = await self._capability_service.list_capabilities()
+        text = "\n".join(
+            f"• `{item['name']}` — {_escape_md(item['description'])}" for item in items
+        )
+        await update.message.reply_text(text or "No capabilities available.", parse_mode="Markdown")
+
+    async def _cmd_web(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        await self._run_capability_command(update, context, "web.search", "/web <consulta>")
+
+    async def _cmd_fetch(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        await self._run_capability_command(update, context, "web.fetch", "/fetch <url>")
+
+    async def _cmd_doc(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        await self._run_capability_command(update, context, "document.read", "/doc <ruta_o_url>")
+
+    async def _cmd_image(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        await self._run_capability_command(update, context, "image.analyze", "/image <ruta_o_url>")
+
+    async def _cmd_sources(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        if not self._check_access(update):
+            return
+        if self._capability_service is None:
+            await update.message.reply_text("⚠️ Capability service not available.")
+            return
+        if not context.args:
+            await update.message.reply_text("Uso: /sources <task_id>")
+            return
+        task_id = context.args[0]
+        try:
+            items = await self._capability_service.get_task_sources(task_id)
+            if not items:
+                await update.message.reply_text("No hay fuentes registradas para esa task.")
+                return
+            lines = ["📚 *Task Sources*\n"]
+            for item in items[:10]:
+                title = _escape_md(str(item.get("title") or item.get("artifact_type") or "artifact"))
+                uri = item.get("uri")
+                lines.append(f"• {title}")
+                if uri:
+                    lines.append(f"  {_escape_md(uri)}")
+            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+        except Exception as exc:
+            logger.error("Error in /sources command", extra={"error": str(exc), "task_id": task_id})
+            await update.message.reply_text(f"❌ Error: {exc}")
+
     # ------------------------------------------------------------------
     # Callback query handler (inline buttons)
     # ------------------------------------------------------------------
@@ -864,6 +954,42 @@ class TelegramBot:
             "Usa /coder <mensaje> o /planner <mensaje>. "
             "El bot no soporta chat libre todavia."
         )
+
+    async def _run_capability_command(
+        self,
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+        capability: str,
+        usage: str,
+    ) -> None:
+        if not self._check_access(update):
+            return
+        if self._capability_service is None:
+            await update.message.reply_text("⚠️ Capability service not available.")
+            return
+        argument = " ".join(context.args).strip()
+        if not argument:
+            await update.message.reply_text(f"Uso: {usage}")
+            return
+        await update.message.reply_text("⏳ Ejecutando capacidad...")
+        try:
+            result = await self._capability_service.execute(capability, argument)
+            summary = str(result.get("summary") or "Sin resumen")
+            sources = result.get("source_refs") or []
+            lines = [summary[:3200]]
+            if sources:
+                lines.append("\nSources:")
+                for ref in sources[:5]:
+                    title = ref.get("title") or ref.get("uri") or "source"
+                    uri = ref.get("uri") or ""
+                    lines.append(f"- {title}: {uri}".strip())
+            await update.message.reply_text("\n".join(lines)[:4000])
+        except Exception as exc:
+            logger.error(
+                "Error in capability command",
+                extra={"capability": capability, "error": str(exc)},
+            )
+            await update.message.reply_text(f"❌ Error: {exc}")
 
 
 # ---------------------------------------------------------------------------

@@ -202,10 +202,81 @@ class LlamaChatSettings(BaseSettings):
         default="local-planner",
         description="Bearer token for the planner llama.cpp endpoint",
     )
+    utility_base_url: str = Field(
+        default="http://127.0.0.1:8083/v1",
+        description="OpenAI-compatible base URL for the utility model",
+    )
+    utility_api_key: str = Field(
+        default="local-utility",
+        description="Bearer token for the utility llama.cpp endpoint",
+    )
     timeout_seconds: Annotated[float, Field(gt=0)] = Field(
         default=90.0,
         description="Timeout for Telegram-triggered llama.cpp chat requests",
     )
+
+
+class CapabilitySettings(BaseSettings):
+    """Capability Layer configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="LAB_CAPABILITIES_")
+
+    request_timeout_seconds: Annotated[float, Field(gt=0)] = Field(
+        default=20.0,
+        description="Default outbound timeout for capability HTTP requests",
+    )
+    max_html_bytes: Annotated[int, Field(gt=0)] = Field(
+        default=1_500_000,
+        description="Maximum number of HTML bytes to keep per fetch",
+    )
+    max_document_bytes: Annotated[int, Field(gt=0)] = Field(
+        default=20_000_000,
+        description="Maximum document size in bytes",
+    )
+    max_image_bytes: Annotated[int, Field(gt=0)] = Field(
+        default=10_000_000,
+        description="Maximum image size in bytes",
+    )
+    max_artifact_text_chars: Annotated[int, Field(gt=0)] = Field(
+        default=16000,
+        description="Maximum persisted content text per artifact",
+    )
+    allowed_url_schemes: str = Field(
+        default="http,https,file",
+        description="Comma-separated list of URL schemes allowed by capability providers",
+    )
+    allowed_local_roots: str = Field(
+        default="/srv/ai-lab,/tmp",
+        description="Comma-separated list of local path prefixes allowed for document/image reads",
+    )
+    planner_allowed_capabilities: str = Field(
+        default="web.search,web.fetch,document.read",
+        description="Comma-separated capability allowlist for planner tasks",
+    )
+    coder_allowed_capabilities: str = Field(
+        default="",
+        description="Comma-separated capability allowlist for coder tasks",
+    )
+    openai_tools_model_id: str = Field(
+        default="orchestrator-tools",
+        description="Model identifier exposed by the OpenAI-compatible tool backend",
+    )
+
+    @property
+    def allowed_url_scheme_list(self) -> list[str]:
+        return [item.strip().lower() for item in self.allowed_url_schemes.split(",") if item.strip()]
+
+    @property
+    def allowed_local_root_list(self) -> list[str]:
+        return [item.strip() for item in self.allowed_local_roots.split(",") if item.strip()]
+
+    @property
+    def planner_capability_allowlist(self) -> list[str]:
+        return [item.strip() for item in self.planner_allowed_capabilities.split(",") if item.strip()]
+
+    @property
+    def coder_capability_allowlist(self) -> list[str]:
+        return [item.strip() for item in self.coder_allowed_capabilities.split(",") if item.strip()]
 
 
 class SecuritySettings(BaseSettings):
@@ -263,6 +334,7 @@ class Settings(BaseSettings):
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
     notifications: NotificationSettings = Field(default_factory=NotificationSettings)
     llama: LlamaChatSettings = Field(default_factory=LlamaChatSettings)
+    capabilities: CapabilitySettings = Field(default_factory=CapabilitySettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
 

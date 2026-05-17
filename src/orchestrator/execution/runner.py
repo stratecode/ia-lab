@@ -25,6 +25,7 @@ from orchestrator.execution.aider_adapter import (
     AiderTaskParams,
     DEFAULT_AIDER_TIMEOUT,
 )
+from orchestrator.capabilities.service import CapabilityService
 from orchestrator.observability.metrics import (
     PLANNER_EXECUTION_DURATION_SECONDS,
     record_planner_invalid_output,
@@ -64,6 +65,7 @@ class TaskRunner:
         self,
         aider_adapter: AiderAdapter | None = None,
         planner_service: PlannerService | None = None,
+        capability_service: CapabilityService | None = None,
         aider_timeout: float = DEFAULT_AIDER_TIMEOUT,
         default_branch: str = DEFAULT_BRANCH,
     ) -> None:
@@ -78,6 +80,7 @@ class TaskRunner:
             default_timeout=aider_timeout
         )
         self._planner_service = planner_service
+        self._capability_service = capability_service
         self._aider_timeout = aider_timeout
         self._default_branch = default_branch
 
@@ -215,9 +218,13 @@ class TaskRunner:
         Returns:
             ToolResult from the aider-task execution.
         """
+        if not repo_path or not repo_path.strip():
+            raise TaskRunnerError(
+                "coder task requires metadata.repo_name (or repo_path/repository_path) for remote execution"
+            )
         params = AiderTaskParams(
             task_id=task_id,
-            repo_path=repo_path or workspace_path,
+            repo_path=repo_path,
             branch=branch or self._default_branch,
             prompt=description,
             workspace_path=workspace_path,
@@ -237,7 +244,19 @@ class TaskRunner:
 
         start_time = time.monotonic()
         try:
-            plan = await self._planner_service.create_plan(description, metadata)
+            planner_metadata = dict(metadata)
+            if self._capability_service is not None:
+                bundle = await self._capability_service.build_planner_context(
+                    task_id=task_id,
+                    description=description,
+                    metadata=planner_metadata,
+                )
+                if bundle.context_blocks:
+                    planner_metadata["capability_context"] = bundle.context_blocks
+                    planner_metadata["capability_invocation_ids"] = [
+                        str(item.id) for item in bundle.invocations
+                    ]
+            plan = await self._planner_service.create_plan(description, planner_metadata)
         except PlannerOutputError as exc:
             PLANNER_EXECUTION_DURATION_SECONDS.observe(max(time.monotonic() - start_time, 0.0))
             record_planner_invalid_output()
@@ -257,4 +276,6 @@ class TaskRunner:
             "subtasks": [subtask.model_dump(mode="json") for subtask in plan.subtasks],
             "plan_only": bool(metadata.get("plan_only", False)),
             "raw_response": plan.raw_response,
+            "capability_context": planner_metadata.get("capability_context", []),
+            "capability_invocation_ids": planner_metadata.get("capability_invocation_ids", []),
         }

@@ -44,6 +44,13 @@ class TaskKind(StrEnum):
     PLAN_STEP = "plan_step"
 
 
+class ExecutionTarget(StrEnum):
+    """Execution backend selected for a task."""
+
+    REMOTE = "remote"
+    LOCAL = "local"
+
+
 class ApprovalStatus(StrEnum):
     """Status of an approval request."""
 

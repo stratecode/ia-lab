@@ -38,6 +38,7 @@ from orchestrator.state_machine.engine import (
 )
 from orchestrator.state_machine.transitions import (
     AgentType,
+    ExecutionTarget,
     Priority,
     TaskKind,
     TaskState,
@@ -72,11 +73,13 @@ def _task_to_response(task: Task) -> TaskResponse:
         state=TaskState(task.state),
         description=task.description,
         metadata=task.metadata_ or {},
+        allowed_capabilities=list((task.metadata_ or {}).get("allowed_capabilities") or []),
         parent_task_id=task.parent_task_id,
         root_task_id=task.root_task_id,
         task_kind=TaskKind(task.task_kind),
         assigned_agent=AgentType(task.assigned_agent) if task.assigned_agent else None,
         priority=Priority(task.priority),
+        execution_target=ExecutionTarget(task.execution_target),
         workspace_path=task.workspace_path,
         retry_count=task.retry_count,
         correlation_id=task.correlation_id,
@@ -163,9 +166,17 @@ async def create_task(
         task = await task_lifecycle.create_task(
             OrchestratedTaskRequest(
                 description=body.description,
-                metadata=body.metadata,
+                metadata={
+                    **body.metadata,
+                    **(
+                        {"allowed_capabilities": body.allowed_capabilities}
+                        if body.allowed_capabilities is not None
+                        else {}
+                    ),
+                },
                 priority=body.priority,
                 assigned_agent=body.assigned_agent,
+                execution_target=body.execution_target,
                 idempotency_key=idempotency_key,
                 entrypoint="api",
             )
@@ -178,6 +189,7 @@ async def create_task(
         task_id=str(task.id),
         priority=body.priority.value,
         assigned_agent=body.assigned_agent.value if body.assigned_agent else None,
+        execution_target=body.execution_target.value,
     )
     return _task_to_response(task)
 
@@ -213,6 +225,7 @@ async def list_tasks(
     state: TaskState | None = Query(None, description="Filter by task state"),
     agent: AgentType | None = Query(None, description="Filter by assigned agent"),
     priority: Priority | None = Query(None, description="Filter by priority"),
+    execution_target: ExecutionTarget | None = Query(None, description="Filter by execution target"),
     parent_task_id: uuid.UUID | None = Query(None, description="Filter by parent task"),
     root_task_id: uuid.UUID | None = Query(None, description="Filter by root task"),
     date_from: datetime | None = Query(None, description="Filter tasks created on or after"),
@@ -232,6 +245,7 @@ async def list_tasks(
             state=state,
             agent_type=agent,
             priority=priority,
+            execution_target=execution_target,
             parent_task_id=parent_task_id,
             root_task_id=root_task_id,
             date_from=date_from,

@@ -60,6 +60,12 @@ class PlannerService:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
         metadata_json = json.dumps(metadata or {}, ensure_ascii=True)
+        capability_context = metadata.get("capability_context") if metadata else None
+        capability_context_text = ""
+        if capability_context:
+            capability_context_text = "\n\nContexto adicional de capacidades:\n" + "\n\n".join(
+                str(item)[:2400] for item in capability_context[:5]
+            )
         prompt = (
             "Eres un planner operativo para un orquestador multiagente.\n"
             "Devuelve SOLO JSON valido con esta forma exacta:\n"
@@ -75,6 +81,7 @@ class PlannerService:
             "- Usa requires_approval=true solo si la subtarea parece destructiva o sensible\n\n"
             f"Objetivo:\n{description}\n\n"
             f"Metadata:\n{metadata_json}"
+            f"{capability_context_text}"
         )
         payload = {
             "model": "planner",

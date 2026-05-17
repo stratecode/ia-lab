@@ -21,6 +21,7 @@ from orchestrator.state_machine.transitions import (
     AgentType,
     ApiKeyScope,
     ApprovalStatus,
+    ExecutionTarget,
     Priority,
     TaskKind,
     TaskState,
@@ -85,6 +86,15 @@ class Task(Base):
         nullable=False,
         default=Priority.NORMAL,
     )
+    execution_target: Mapped[str] = mapped_column(
+        Enum(
+            ExecutionTarget,
+            name="executiontarget",
+            values_callable=lambda e: [x.value for x in e],
+        ),
+        nullable=False,
+        default=ExecutionTarget.REMOTE,
+    )
     workspace_path: Mapped[str | None] = mapped_column(
         String(512), nullable=True
     )
@@ -125,6 +135,12 @@ class Task(Base):
     approvals: Mapped[list["Approval"]] = relationship(
         "Approval", back_populates="task", cascade="all, delete-orphan"
     )
+    tool_invocations: Mapped[list["ToolInvocation"]] = relationship(
+        "ToolInvocation", back_populates="task", cascade="all, delete-orphan"
+    )
+    artifacts: Mapped[list["Artifact"]] = relationship(
+        "Artifact", back_populates="task", cascade="all, delete-orphan"
+    )
     parent_task: Mapped["Task | None"] = relationship(
         "Task",
         remote_side="Task.id",
@@ -148,6 +164,7 @@ class Task(Base):
         Index("ix_tasks_created_at", "created_at"),
         Index("ix_tasks_parent_task_id", "parent_task_id"),
         Index("ix_tasks_root_task_id", "root_task_id"),
+        Index("ix_tasks_execution_target_state", "execution_target", "state"),
         # Partial unique index: idempotency_key must be unique when not NULL
         Index(
             "ix_tasks_idempotency_key",
@@ -279,6 +296,121 @@ class AuditLog(Base):
         Index("ix_audit_log_timestamp", "timestamp"),
         Index("ix_audit_log_actor_action", "actor", "action"),
         Index("ix_audit_log_resource", "resource_type", "resource_id"),
+    )
+
+
+class ToolInvocation(Base):
+    """Audit record for a single capability/tool invocation."""
+
+    __tablename__ = "tool_invocations"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    agent_type: Mapped[str | None] = mapped_column(
+        Enum(AgentType, name="agenttype", values_callable=lambda e: [x.value for x in e]),
+        nullable=True,
+    )
+    entrypoint: Mapped[str] = mapped_column(String(32), nullable=False)
+    capability: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_payload: Mapped[dict | None] = mapped_column(JSONB, default=dict, nullable=True)
+    output_payload: Mapped[dict | None] = mapped_column(JSONB, default=dict, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    source_refs: Mapped[list | None] = mapped_column(JSONB, default=list, nullable=True)
+    artifact_ids: Mapped[list | None] = mapped_column(JSONB, default=list, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    task: Mapped["Task | None"] = relationship("Task", back_populates="tool_invocations")
+    artifacts: Mapped[list["Artifact"]] = relationship(
+        "Artifact", back_populates="invocation", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("ix_tool_invocations_task_id", "task_id"),
+        Index("ix_tool_invocations_capability", "capability"),
+        Index("ix_tool_invocations_entrypoint_created_at", "entrypoint", "created_at"),
+    )
+
+
+class Artifact(Base):
+    """Stored artifact emitted by tools or capability invocations."""
+
+    __tablename__ = "artifacts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    task_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    invocation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tool_invocations.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    artifact_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    uri: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    media_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSONB, default=dict, nullable=True)
+    created_at: Mapped[str] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    task: Mapped["Task | None"] = relationship("Task", back_populates="artifacts")
+    invocation: Mapped["ToolInvocation | None"] = relationship(
+        "ToolInvocation", back_populates="artifacts"
+    )
+
+    __table_args__ = (
+        Index("ix_artifacts_task_id", "task_id"),
+        Index("ix_artifacts_invocation_id", "invocation_id"),
+        Index("ix_artifacts_type_created_at", "artifact_type", "created_at"),
+    )
+
+
+class LocalBridge(Base):
+    """Registered local bridge worker bound to a single workspace root."""
+
+    __tablename__ = "local_bridges"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    hostname: Mapped[str] = mapped_column(String(255), nullable=False)
+    workspace_root: Mapped[str] = mapped_column(String(1024), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    capabilities: Mapped[dict | None] = mapped_column(JSONB, default=dict, nullable=True)
+    api_key_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    last_heartbeat: Mapped[str | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[str] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[str] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_local_bridges_workspace_root", "workspace_root"),
+        Index("ix_local_bridges_last_heartbeat", "last_heartbeat"),
     )
 
 

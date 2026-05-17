@@ -35,6 +35,51 @@ tool:
 
 ## Internal Tools
 
+### capability-router
+
+```yaml
+tool:
+  name: "capability-router"
+  category: "internal"
+  owner_component: "orchestrator"
+  permission_requirements:
+    - type: "capability"
+      level: "allowlisted"
+  authorized_agents:
+    - "planner"
+    - "coder"
+  timeout_seconds: 60
+  retry_policy:
+    max_retries: 1
+    backoff: fixed
+  input_schema:
+    type: object
+    properties:
+      capability:
+        type: string
+        enum: [web.search, web.fetch, document.read, image.analyze]
+      payload:
+        type: object
+    required: [capability, payload]
+  output_schema:
+    type: object
+    properties:
+      summary:
+        type: string
+      source_refs:
+        type: array
+      artifact_ids:
+        type: array
+  execution_environment: "host"
+  network_access: true
+  mcp_compatible: false
+```
+
+**Access notes:**
+- `planner` can use `web.search`, `web.fetch`, and `document.read` when explicitly allowlisted.
+- `coder` consumes artifacts/context but does not gain general shell access through this router.
+- Results are persisted as invocation records plus artifacts and can be queried later through the API.
+
 ### filesystem
 
 ```yaml

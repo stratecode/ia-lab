@@ -64,3 +64,23 @@ def test_detect_legacy_revision_skips_stamped_database(monkeypatch) -> None:
     )
 
     assert _detect_legacy_revision(object()) is None
+
+
+def test_detect_legacy_revision_bootstraps_phase_5b_schema(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "orchestrator.persistence.migrations.inspect",
+        lambda connection: _FakeInspector(
+            ["tasks", "approvals", "local_bridges"],
+            task_columns=[
+                "id",
+                "description",
+                "state",
+                "parent_task_id",
+                "root_task_id",
+                "task_kind",
+                "execution_target",
+            ],
+        ),
+    )
+
+    assert _detect_legacy_revision(object()) == "003"

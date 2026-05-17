@@ -18,6 +18,7 @@ server_root_lv_expand: true
 server_root_lv_path: /dev/ubuntu-vg/ubuntu-lv
 server_root_lv_size: +100%FREE
 server_lan_cidr: "{{ lookup('env', 'LAB_LAN_CIDR') | default('192.168.0.0/24', true) }}"
+docker_internal_cidr: "{{ lookup('env', 'LAB_DOCKER_INTERNAL_CIDR') | default('172.16.0.0/12', true) }}"
 server_wifi_enabled: false
 server_wifi_interface: wlp2s0
 server_packages:
@@ -84,6 +85,9 @@ open_webui_connections:
   - name: utility
     url: "http://host.docker.internal:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'utility') | map(attribute='port') | first) }}/v1"
     api_key: "{{ llama_cpp_instances | selectattr('alias', 'equalto', 'utility') | map(attribute='api_key') | first }}"
+  - name: orchestrator-tools
+    url: "https://{{ cockpit_domain }}{{ orchestrator_proxy_path | regex_replace('/$','') }}/v1"
+    api_key: "{{ orchestrator_open_webui_api_key }}"
 
 # ─── Alertmanager ───────────────────────────────────────────────────────────
 alertmanager_enabled: true
@@ -415,5 +419,15 @@ orchestrator_telegram_bot_token: "{{ lookup('env', 'LAB_TELEGRAM_BOT_TOKEN') | d
 orchestrator_telegram_allowed_users: "{{ lookup('env', 'LAB_TELEGRAM_ALLOWED_USERS') | default('', true) }}"
 orchestrator_cleanup_key_name: "{{ lookup('env', 'LAB_ORCHESTRATOR_CLEANUP_KEY_NAME') | default('workspace-cleanup-timer', true) }}"
 orchestrator_cleanup_api_key: "{{ lookup('env', 'LAB_ORCHESTRATOR_CLEANUP_API_KEY') | default('', true) }}"
+orchestrator_open_webui_key_name: "{{ lookup('env', 'LAB_ORCHESTRATOR_OPEN_WEBUI_KEY_NAME') | default('open-webui-orchestrator-tools', true) }}"
+orchestrator_open_webui_api_key: "{{ lookup('env', 'LAB_ORCHESTRATOR_OPEN_WEBUI_API_KEY') | default('', true) }}"
 orchestrator_backup_retain_count: "{{ lookup('env', 'LAB_ORCHESTRATOR_BACKUP_RETAIN_COUNT') | default('7', true) | int }}"
 orchestrator_proxy_path: "{{ lookup('env', 'LAB_ORCHESTRATOR_PROXY_PATH') | default('/orchestrator/', true) }}"
+orchestrator_capabilities_allowed_local_roots: "{{ lookup('env', 'LAB_CAPABILITIES_ALLOWED_LOCAL_ROOTS') | default('/srv/ai-lab,/tmp', true) }}"
+orchestrator_capabilities_allowed_url_schemes: "{{ lookup('env', 'LAB_CAPABILITIES_ALLOWED_URL_SCHEMES') | default('http,https,file', true) }}"
+orchestrator_capabilities_max_html_bytes: "{{ lookup('env', 'LAB_CAPABILITIES_MAX_HTML_BYTES') | default('1500000', true) | int }}"
+orchestrator_capabilities_max_document_bytes: "{{ lookup('env', 'LAB_CAPABILITIES_MAX_DOCUMENT_BYTES') | default('20000000', true) | int }}"
+orchestrator_capabilities_max_image_bytes: "{{ lookup('env', 'LAB_CAPABILITIES_MAX_IMAGE_BYTES') | default('10000000', true) | int }}"
+orchestrator_capabilities_max_artifact_text_chars: "{{ lookup('env', 'LAB_CAPABILITIES_MAX_ARTIFACT_TEXT_CHARS') | default('16000', true) | int }}"
+orchestrator_planner_allowed_capabilities: "{{ lookup('env', 'LAB_CAPABILITIES_PLANNER_ALLOWED') | default('web.search,web.fetch,document.read', true) }}"
+orchestrator_coder_allowed_capabilities: "{{ lookup('env', 'LAB_CAPABILITIES_CODER_ALLOWED') | default('', true) }}"

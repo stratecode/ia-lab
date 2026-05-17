@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from orchestrator.execution.runner import TaskRunner
+from orchestrator.execution.runner import TaskRunnerError
 from orchestrator.state_machine.transitions import AgentType
 
 
@@ -50,3 +51,17 @@ async def test_task_runner_supports_planner_tasks() -> None:
     assert result["plan_summary"] == "A simple plan"
     assert result["plan_only"] is True
     assert len(result["subtasks"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_task_runner_rejects_remote_coder_without_repo_path(tmp_path) -> None:
+    runner = TaskRunner()
+
+    with pytest.raises(TaskRunnerError):
+        await runner.execute(
+            task_id="task-456",
+            agent_type=AgentType.CODER,
+            workspace_path=str(tmp_path),
+            description="Implement feature",
+            repo_path="",
+        )

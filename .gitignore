@@ -2,6 +2,8 @@
 group_vars/vault.yml
 ssh/
 .env
+.venv/
+.venv-phase4/
 .kiro
 
 # macOS

@@ -63,6 +63,16 @@ def _detect_legacy_revision(connection: Connection) -> str | None:
 
     task_columns = {column["name"] for column in inspector.get_columns("tasks")}
     hierarchy_columns = {"parent_task_id", "root_task_id", "task_kind"}
+    phase_5b_columns = hierarchy_columns | {"execution_target"}
+
+    if (
+        phase_5b_columns.issubset(task_columns)
+        and {"local_bridges", "tool_invocations", "artifacts"}.issubset(tables)
+    ):
+        return "004"
+
+    if phase_5b_columns.issubset(task_columns) and "local_bridges" in tables:
+        return "003"
 
     if hierarchy_columns.issubset(task_columns):
         return "002"

@@ -26,6 +26,7 @@ from orchestrator.scheduler.classifier import KeywordClassifier
 from orchestrator.state_machine.engine import StateMachineEngine
 from orchestrator.state_machine.transitions import (
     AgentType,
+    ExecutionTarget,
     Priority,
     TaskKind,
     TaskState,
@@ -54,6 +55,7 @@ class OrchestratedTaskRequest:
     metadata: dict[str, Any]
     priority: Priority
     assigned_agent: AgentType | None
+    execution_target: ExecutionTarget
     idempotency_key: str | None
     entrypoint: str
 
@@ -107,6 +109,10 @@ class TaskLifecycleService:
                     raise ValueError(
                         f"Phase 5A only supports planner and coder, got {agent_type.value}"
                     )
+                if req.execution_target == ExecutionTarget.LOCAL:
+                    workspace_root = str(req.metadata.get("workspace_root") or "").strip()
+                    if not workspace_root:
+                        raise ValueError("execution_target=local requires metadata.workspace_root")
 
                 task = await repo.create(
                     description=req.description,
@@ -116,11 +122,16 @@ class TaskLifecycleService:
                     },
                     priority=req.priority,
                     assigned_agent=agent_type,
+                    execution_target=req.execution_target,
                     idempotency_key=req.idempotency_key,
                     task_kind=TaskKind.ROOT,
                 )
                 task.root_task_id = task.id
-                task.workspace_path = self._workspace_path(task.id)
+                task.workspace_path = self._workspace_path(
+                    task.id,
+                    execution_target=req.execution_target,
+                    metadata=req.metadata,
+                )
                 self._ensure_workspace_dir(task.workspace_path)
             task_id = str(task.id)
 
@@ -130,6 +141,7 @@ class TaskLifecycleService:
         await self._queue_task(
             task_id=task_id,
             agent_type=agent_type,
+            execution_target=req.execution_target,
             priority=req.priority,
             actor=f"{req.entrypoint}:create",
         )
@@ -213,9 +225,10 @@ class TaskLifecycleService:
         task = await self._get_task(task_id)
         if task is None or not task.assigned_agent:
             raise ValueError(f"Approved task {task_id} has no assigned_agent")
-        await self._queue_controller.enqueue_with_backpressure(
+        await self._enqueue_for_target(
             task_id=task_id,
             agent_type=AgentType(task.assigned_agent),
+            execution_target=ExecutionTarget(task.execution_target),
             priority=Priority(task.priority),
         )
         async with self._session_factory() as session:
@@ -302,9 +315,14 @@ class TaskLifecycleService:
                             "requires_approval": requires_approval,
                             "planner_generated": True,
                             "parent_task_id": task_id,
+                            "entrypoint": (root_task.metadata_ or {}).get("entrypoint", "planner"),
+                            "workspace_root": (root_task.metadata_ or {}).get("workspace_root"),
+                            "allowed_capabilities": (root_task.metadata_ or {}).get("allowed_capabilities", []),
+                            "tool_request": (payload.get("tool_request") if isinstance(payload.get("tool_request"), dict) else None),
                         },
                         priority=priority,
                         assigned_agent=assigned_agent,
+                        execution_target=ExecutionTarget(root_task.execution_target),
                         parent_task_id=root_task.id,
                         root_task_id=root_task.root_task_id or root_task.id,
                         task_kind=TaskKind.PLAN_STEP,
@@ -312,10 +330,30 @@ class TaskLifecycleService:
                     child.workspace_path = self._workspace_path(
                         root_task.root_task_id or root_task.id,
                         child.id,
+                        execution_target=ExecutionTarget(root_task.execution_target),
+                        metadata=child.metadata_ or {},
                     )
                     self._ensure_workspace_dir(child.workspace_path)
                     child_id = str(child.id)
             created_subtask_ids.append(child_id)
+
+            if assigned_agent == AgentType.PLANNER:
+                async with self._session_factory() as session:
+                    async with session.begin():
+                        db_child = await session.get(Task, uuid.UUID(child_id))
+                        if db_child is not None:
+                            db_child.results = {
+                                "status": "success",
+                                "output": "",
+                                "summary": "Planner coordination step recorded without direct execution",
+                                "coordination_only": True,
+                            }
+                await self._mark_completed(
+                    child_id,
+                    "planner coordination step recorded without direct execution",
+                )
+                record_planner_subtask_created(assigned_agent.value, requires_approval)
+                continue
 
             if requires_approval:
                 await self._approval_manager.request_approval(
@@ -328,6 +366,7 @@ class TaskLifecycleService:
                 await self._queue_task(
                     task_id=child_id,
                     agent_type=assigned_agent,
+                    execution_target=ExecutionTarget(root_task.execution_target),
                     priority=priority,
                     actor="planner:create_subtask",
                 )
@@ -376,6 +415,7 @@ class TaskLifecycleService:
         self,
         task_id: str,
         agent_type: AgentType,
+        execution_target: ExecutionTarget,
         priority: Priority,
         actor: str,
     ) -> None:
@@ -383,9 +423,10 @@ class TaskLifecycleService:
         if task is None:
             raise ValueError(f"Task {task_id} not found")
         try:
-            await self._queue_controller.enqueue_with_backpressure(
+            await self._enqueue_for_target(
                 task_id=task_id,
                 agent_type=agent_type,
+                execution_target=execution_target,
                 priority=priority,
             )
         except QueueFullError as exc:
@@ -406,7 +447,7 @@ class TaskLifecycleService:
             task_id=task_id,
             target_state=TaskState.QUEUED,
             actor=actor,
-            reason=f"Queued for {agent_type.value}",
+            reason=f"Queued for {agent_type.value} via {execution_target.value}",
         )
         async with self._session_factory() as session:
             async with session.begin():
@@ -459,13 +500,39 @@ class TaskLifecycleService:
                     reason="All subtasks completed",
                 )
 
+    async def _enqueue_for_target(
+        self,
+        task_id: str,
+        agent_type: AgentType,
+        execution_target: ExecutionTarget,
+        priority: Priority,
+    ) -> None:
+        if execution_target == ExecutionTarget.LOCAL and agent_type == AgentType.CODER:
+            return
+        await self._queue_controller.enqueue_with_backpressure(
+            task_id=task_id,
+            agent_type=agent_type,
+            priority=priority,
+        )
+
     async def _get_task(self, task_id: str) -> Task | None:
         async with self._session_factory() as session:
             repo = TaskRepository(session)
             return await repo.get_by_id(uuid.UUID(task_id))
 
-    def _workspace_path(self, root_task_id: uuid.UUID, task_id: uuid.UUID | None = None) -> str:
+    def _workspace_path(
+        self,
+        root_task_id: uuid.UUID,
+        task_id: uuid.UUID | None = None,
+        *,
+        execution_target: ExecutionTarget = ExecutionTarget.REMOTE,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
         actual_task_id = task_id or root_task_id
+        if execution_target == ExecutionTarget.LOCAL:
+            workspace_root = str((metadata or {}).get("workspace_root") or "").strip()
+            if workspace_root:
+                return str(Path(workspace_root) / ".lab-tasks" / str(root_task_id) / str(actual_task_id))
         return str(Path(self._workspace_root) / str(root_task_id) / str(actual_task_id))
 
     @staticmethod
@@ -488,6 +555,7 @@ class TaskLifecycleService:
             "metadata": task.metadata_ or {},
             "assigned_agent": str(task.assigned_agent) if task.assigned_agent else None,
             "priority": str(task.priority),
+            "execution_target": str(task.execution_target),
             "task_kind": str(task.task_kind),
             "parent_task_id": str(task.parent_task_id) if task.parent_task_id else None,
             "root_task_id": str(task.root_task_id) if task.root_task_id else None,

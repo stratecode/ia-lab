@@ -34,8 +34,11 @@ from fastapi import FastAPI
 from redis.asyncio import Redis
 from sqlalchemy import select
 
+from orchestrator.capabilities.router import CapabilityRouter
+from orchestrator.capabilities.service import CapabilityService
 from orchestrator.config import OrchestratorMode, Settings
 from orchestrator.dependencies import AppState, wire_dependencies
+from orchestrator.local_bridge.service import LocalBridgeService
 from orchestrator.observability.logging import configure_logging
 from orchestrator.persistence.models import Task
 from orchestrator.persistence.repositories.api_keys import ApiKeyRepository
@@ -91,6 +94,7 @@ class _TelegramTaskService:
         entrypoint: str = "telegram",
     ) -> dict[str, Any]:
         from orchestrator.state_machine.transitions import AgentType, Priority
+        from orchestrator.state_machine.transitions import ExecutionTarget
 
         task = await self._state.task_lifecycle.create_task(  # type: ignore[union-attr]
             OrchestratedTaskRequest(
@@ -98,6 +102,7 @@ class _TelegramTaskService:
                 metadata={"plan_only": plan_only},
                 priority=Priority.NORMAL,
                 assigned_agent=AgentType(assigned_agent) if assigned_agent else None,
+                execution_target=ExecutionTarget.REMOTE,
                 idempotency_key=None,
                 entrypoint=entrypoint,
             )
@@ -137,6 +142,7 @@ class _TelegramTaskService:
             "parent_task_id": str(task.parent_task_id) if task.parent_task_id else None,
             "root_task_id": str(task.root_task_id) if task.root_task_id else None,
             "assigned_agent": str(task.assigned_agent) if task.assigned_agent else None,
+            "execution_target": str(task.execution_target),
             "created_at": task.created_at.isoformat() if task.created_at else None,
             "started_at": task.started_at.isoformat() if task.started_at else None,
             "completed_at": task.completed_at.isoformat() if task.completed_at else None,
@@ -340,6 +346,51 @@ class _TelegramLlamaChatService:
         return content
 
 
+class _TelegramCapabilityService:
+    """Adapter exposing Capability Layer v1 to Telegram handlers."""
+
+    def __init__(self, state: AppState) -> None:
+        self._state = state
+
+    async def list_capabilities(self) -> list[dict[str, str]]:
+        return self._state.capability_service.list_capabilities()  # type: ignore[union-attr]
+
+    async def execute(self, capability: str, argument: str) -> dict[str, Any]:
+        payload: dict[str, Any]
+        if capability == "web.search":
+            payload = {"query": argument}
+        elif capability == "web.fetch":
+            payload = {"url": argument}
+        else:
+            payload = {"location": argument}
+        record = await self._state.capability_service.invoke(  # type: ignore[union-attr]
+            capability,
+            payload,
+            entrypoint="telegram",
+        )
+        return {
+            "invocation_id": str(record.id),
+            "summary": self._summarize_output(record.output_payload),
+            "source_refs": [item.model_dump(mode="json") for item in record.source_refs],
+            "status": record.status,
+        }
+
+    async def get_task_sources(self, task_id: str) -> list[dict[str, Any]]:
+        return await self._state.capability_service.list_task_sources(uuid.UUID(task_id))  # type: ignore[union-attr]
+
+    def _summarize_output(self, payload: dict[str, Any]) -> str:
+        if payload.get("content_text"):
+            return str(payload["content_text"])[:1600]
+        if isinstance(payload.get("results"), list):
+            return "\n".join(
+                f"{idx}. {item.get('title')} — {item.get('url')}"
+                for idx, item in enumerate(payload["results"][:5], start=1)
+            )
+        if payload.get("ocr_text"):
+            return str(payload["ocr_text"])[:1600]
+        return str(payload.get("summary") or "Capability executed.")
+
+
 class _TelegramServerOpsService:
     """Restricted host inspection commands for Telegram.
 
@@ -419,7 +470,11 @@ class _QueuedTaskLoader:
             raise ValueError(f"Task {task_id} not found")
 
         metadata = task.metadata_ or {}
-        repo_path = metadata.get("repo_path") or metadata.get("repository_path")
+        repo_path = (
+            metadata.get("repo_name")
+            or metadata.get("repo_path")
+            or metadata.get("repository_path")
+        )
         branch = metadata.get("branch") or metadata.get("default_branch") or "main"
 
         return {
@@ -428,6 +483,7 @@ class _QueuedTaskLoader:
             "repo_path": repo_path,
             "branch": branch,
             "metadata": metadata,
+            "execution_target": task.execution_target,
         }
 
 
@@ -564,6 +620,11 @@ def _create_services(state: AppState) -> None:
         timeout_seconds=state.settings.llama.timeout_seconds,
     )
     state.planner_service = planner_service
+    state.capability_service = CapabilityService(
+        session_factory=state.session_factory,  # type: ignore[arg-type]
+        router=CapabilityRouter(state.settings.capabilities),
+        settings=state.settings.capabilities,
+    )
     state.task_lifecycle = TaskLifecycleService(
         session_factory=state.session_factory,  # type: ignore[arg-type]
         state_machine=state.state_machine,
@@ -572,6 +633,11 @@ def _create_services(state: AppState) -> None:
         planner_service=planner_service,
         approval_manager=state.approval_manager,
         resource_tracker=state.resource_tracker,
+    )
+    state.local_bridge_service = LocalBridgeService(
+        session_factory=state.session_factory,  # type: ignore[arg-type]
+        task_lifecycle=state.task_lifecycle,
+        approval_manager=state.approval_manager,
     )
 
 
@@ -604,6 +670,7 @@ async def _start_worker(state: AppState) -> None:
         worker_id=worker.worker_id,
         task_runner=TaskRunner(
             planner_service=state.planner_service,
+            capability_service=state.capability_service,
         ),
         task_loader=_QueuedTaskLoader(state),
         lifecycle_service=state.task_lifecycle,
@@ -642,6 +709,7 @@ async def _start_telegram_bot(state: AppState) -> None:
         status_service=_TelegramStatusService(state),
         chat_service=_TelegramLlamaChatService(state),
         server_ops_service=_TelegramServerOpsService(),
+        capability_service=_TelegramCapabilityService(state),
     )
     await bot.start()
     state.telegram_bot = bot
@@ -840,18 +908,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # --- Route registration ---
     from orchestrator.api.routes.approvals import router as approvals_router
+    from orchestrator.api.routes.bridges import router as bridges_router
     from orchestrator.api.routes.config import router as config_router
     from orchestrator.api.routes.health import router as health_router
+    from orchestrator.api.routes.openai_tools import router as openai_tools_router
     from orchestrator.api.routes.tasks import router as tasks_router
+    from orchestrator.api.routes.tools import router as tools_router
     from orchestrator.api.routes.workers import router as workers_router
     from orchestrator.api.routes.workspaces import router as workspaces_router
 
     app.include_router(health_router)
     app.include_router(tasks_router)
     app.include_router(approvals_router)
+    app.include_router(bridges_router)
     app.include_router(workers_router)
     app.include_router(config_router)
     app.include_router(workspaces_router)
+    app.include_router(tools_router)
+    app.include_router(openai_tools_router)
 
     return app
 

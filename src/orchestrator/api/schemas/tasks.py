@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from orchestrator.state_machine.transitions import (
     AgentType,
+    ExecutionTarget,
     Priority,
     TaskKind,
     TaskState,
@@ -23,8 +24,10 @@ class TaskCreate(BaseModel):
 
     description: str = Field(..., min_length=1, max_length=10000)
     metadata: dict = Field(default_factory=dict)
+    allowed_capabilities: list[str] | None = None
     priority: Priority = Priority.NORMAL
     assigned_agent: AgentType | None = None
+    execution_target: ExecutionTarget = ExecutionTarget.REMOTE
 
 
 class TaskUpdate(BaseModel):
@@ -44,11 +47,13 @@ class TaskResponse(BaseModel):
     state: TaskState
     description: str
     metadata: dict
+    allowed_capabilities: list[str] = Field(default_factory=list)
     parent_task_id: UUID | None = None
     root_task_id: UUID | None = None
     task_kind: TaskKind = TaskKind.ROOT
     assigned_agent: AgentType | None
     priority: Priority
+    execution_target: ExecutionTarget = ExecutionTarget.REMOTE
     workspace_path: str | None
     retry_count: int
     correlation_id: UUID

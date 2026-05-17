@@ -7,11 +7,13 @@
           - orchestrator_postgres_password | length > 0
           - orchestrator_telegram_bot_token | length > 0
           - orchestrator_cleanup_api_key | length > 0
+          - orchestrator_open_webui_api_key | length > 0
           - orchestrator_telegram_allowed_users | length > 0
         fail_msg: >-
           Missing required orchestrator configuration. Set LAB_POSTGRES_PASSWORD,
-          LAB_TELEGRAM_BOT_TOKEN, LAB_TELEGRAM_ALLOWED_USERS and
-          LAB_ORCHESTRATOR_CLEANUP_API_KEY before deploying.
+          LAB_TELEGRAM_BOT_TOKEN, LAB_TELEGRAM_ALLOWED_USERS,
+          LAB_ORCHESTRATOR_CLEANUP_API_KEY and
+          LAB_ORCHESTRATOR_OPEN_WEBUI_API_KEY before deploying.
 
     - name: Install orchestrator runtime packages
       ansible.builtin.apt:
@@ -19,6 +21,7 @@
           - python3
           - python3-venv
           - python3-pip
+          - tesseract-ocr
         state: present
 
     - name: Ensure orchestrator group exists
@@ -179,6 +182,16 @@
           LAB_LLAMA_CODE_API_KEY={{ llama_cpp_instances | selectattr('alias', 'equalto', 'coder') | map(attribute='api_key') | first }}
           LAB_LLAMA_PLANNER_BASE_URL=http://127.0.0.1:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'planner') | map(attribute='port') | first) }}/v1
           LAB_LLAMA_PLANNER_API_KEY={{ llama_cpp_instances | selectattr('alias', 'equalto', 'planner') | map(attribute='api_key') | first }}
+          LAB_LLAMA_UTILITY_BASE_URL=http://127.0.0.1:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'utility') | map(attribute='port') | first) }}/v1
+          LAB_LLAMA_UTILITY_API_KEY={{ llama_cpp_instances | selectattr('alias', 'equalto', 'utility') | map(attribute='api_key') | first }}
+          LAB_CAPABILITIES_ALLOWED_LOCAL_ROOTS={{ orchestrator_capabilities_allowed_local_roots }}
+          LAB_CAPABILITIES_ALLOWED_URL_SCHEMES={{ orchestrator_capabilities_allowed_url_schemes }}
+          LAB_CAPABILITIES_MAX_HTML_BYTES={{ orchestrator_capabilities_max_html_bytes }}
+          LAB_CAPABILITIES_MAX_DOCUMENT_BYTES={{ orchestrator_capabilities_max_document_bytes }}
+          LAB_CAPABILITIES_MAX_IMAGE_BYTES={{ orchestrator_capabilities_max_image_bytes }}
+          LAB_CAPABILITIES_MAX_ARTIFACT_TEXT_CHARS={{ orchestrator_capabilities_max_artifact_text_chars }}
+          LAB_CAPABILITIES_PLANNER_ALLOWED={{ orchestrator_planner_allowed_capabilities }}
+          LAB_CAPABILITIES_CODER_ALLOWED={{ orchestrator_coder_allowed_capabilities }}
       notify: Restart orchestrator service
 
     - name: Install orchestrator cleanup environment file
@@ -415,6 +428,44 @@
            AND (
              key_hash <> '${KEY_HASH}'
              OR scope <> 'operator'
+             OR is_active <> true
+             OR revoked_at IS NOT NULL
+           );
+        SQL
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Ensure Open WebUI orchestrator API key exists in orchestrator database
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export RAW_KEY="{{ orchestrator_open_webui_api_key }}"
+        KEY_HASH="$(python3 - <<'PY'
+        import hashlib
+        import os
+        print(hashlib.sha256(os.environ["RAW_KEY"].encode()).hexdigest())
+        PY
+        )"
+        KEY_ID="$(python3 - <<'PY'
+        import uuid
+        print(uuid.uuid4())
+        PY
+        )"
+        docker exec -i orchestrator-postgres psql -v ON_ERROR_STOP=1 -U "{{ orchestrator_postgres_user }}" -d "{{ orchestrator_postgres_db }}" <<SQL
+        INSERT INTO api_keys (id, key_hash, name, scope, is_active, created_at)
+        SELECT '${KEY_ID}'::uuid, '${KEY_HASH}', '{{ orchestrator_open_webui_key_name }}', 'bot', true, NOW()
+        WHERE NOT EXISTS (
+          SELECT 1 FROM api_keys WHERE name = '{{ orchestrator_open_webui_key_name }}'
+        );
+        UPDATE api_keys
+           SET key_hash='${KEY_HASH}',
+               scope='bot',
+               is_active=true,
+               revoked_at=NULL
+         WHERE name='{{ orchestrator_open_webui_key_name }}'
+           AND (
+             key_hash <> '${KEY_HASH}'
+             OR scope <> 'bot'
              OR is_active <> true
              OR revoked_at IS NOT NULL
            );
