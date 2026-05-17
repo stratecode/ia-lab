@@ -68,6 +68,10 @@
       ansible.builtin.import_role:
         name: aider
 
+    - name: Install Open WebUI
+      ansible.builtin.import_role:
+        name: open_webui
+
     - name: Install monitoring web console
       ansible.builtin.import_role:
         name: monitor

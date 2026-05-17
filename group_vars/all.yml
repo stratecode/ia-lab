@@ -39,6 +39,7 @@ server_packages:
 # ─── Domains ────────────────────────────────────────────────────────────────
 cockpit_domain: "{{ lookup('env', 'LAB_COCKPIT_DOMAIN') | default('lab.localhost', true) }}"
 observability_domain: "{{ lookup('env', 'LAB_OBSERVABILITY_DOMAIN') | default('monitor.localhost', true) }}"
+open_webui_domain: "{{ lookup('env', 'LAB_CHAT_DOMAIN') | default('chat.localhost', true) }}"
 
 # ─── Monitor / Nginx / TLS ──────────────────────────────────────────────────
 monitor_backend_port: 9091
@@ -62,6 +63,27 @@ grafana_enabled: true
 grafana_port: 3000
 grafana_admin_user: admin
 grafana_admin_password: "{{ vault_grafana_admin_password }}"
+
+# ─── Open WebUI ─────────────────────────────────────────────────────────────
+open_webui_enabled: true
+open_webui_port: 3001
+open_webui_name: "StrateCode Chat"
+open_webui_version: "{{ lookup('env', 'LAB_OPEN_WEBUI_VERSION') | default('v0.9.5', true) }}"
+open_webui_secret_key: "{{ lookup('env', 'LAB_OPEN_WEBUI_SECRET_KEY') | default('change-me-open-webui-secret', true) }}"
+open_webui_enable_signup: "{{ lookup('env', 'LAB_OPEN_WEBUI_ENABLE_SIGNUP') | default('true', true) | bool }}"
+open_webui_model_list_timeout: 30
+open_webui_request_timeout: 180
+open_webui_public_cname_target: "{{ lookup('env', 'LAB_CHAT_CNAME_TARGET') | default(route53_ddns_record_name, true) }}"
+open_webui_connections:
+  - name: coder
+    url: "http://host.docker.internal:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'coder') | map(attribute='port') | first) }}/v1"
+    api_key: "{{ llama_cpp_instances | selectattr('alias', 'equalto', 'coder') | map(attribute='api_key') | first }}"
+  - name: planner
+    url: "http://host.docker.internal:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'planner') | map(attribute='port') | first) }}/v1"
+    api_key: "{{ llama_cpp_instances | selectattr('alias', 'equalto', 'planner') | map(attribute='api_key') | first }}"
+  - name: utility
+    url: "http://host.docker.internal:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'utility') | map(attribute='port') | first) }}/v1"
+    api_key: "{{ llama_cpp_instances | selectattr('alias', 'equalto', 'utility') | map(attribute='api_key') | first }}"
 
 # ─── Alertmanager ───────────────────────────────────────────────────────────
 alertmanager_enabled: true

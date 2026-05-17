@@ -1,0 +1,121 @@
+- name: Ensure Open WebUI directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - /srv/ai-lab/open-webui
+
+- name: Install Open WebUI compose file
+  ansible.builtin.copy:
+    dest: /srv/ai-lab/open-webui/docker-compose.yml
+    mode: "0644"
+    content: |
+      services:
+        open-webui:
+          image: ghcr.io/open-webui/open-webui:{{ open_webui_version }}
+          container_name: open-webui
+          restart: unless-stopped
+          ports:
+            - "127.0.0.1:{{ open_webui_port }}:8080"
+          extra_hosts:
+            - "host.docker.internal:host-gateway"
+          env_file:
+            - /srv/ai-lab/open-webui/open-webui.env
+          volumes:
+            - open-webui-data:/app/backend/data
+
+      volumes:
+        open-webui-data:
+  when: open_webui_enabled
+
+- name: Install Open WebUI environment file
+  ansible.builtin.copy:
+    dest: /srv/ai-lab/open-webui/open-webui.env
+    mode: "0600"
+    content: |
+      WEBUI_NAME={{ open_webui_name }}
+      WEBUI_URL=https://{{ open_webui_domain }}
+      WEBUI_SECRET_KEY={{ open_webui_secret_key }}
+      ENABLE_SIGNUP={{ 'True' if open_webui_enable_signup else 'False' }}
+      ENABLE_OLLAMA_API=False
+      ENABLE_OPENAI_API=True
+      ENABLE_DIRECT_CONNECTIONS=False
+      OPENAI_API_BASE_URLS={{ open_webui_connections | map(attribute='url') | join(';') }}
+      OPENAI_API_KEYS={{ open_webui_connections | map(attribute='api_key') | join(';') }}
+      AIOHTTP_CLIENT_TIMEOUT={{ open_webui_request_timeout }}
+      AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST={{ open_webui_model_list_timeout }}
+  when: open_webui_enabled
+
+- name: Start Open WebUI stack
+  ansible.builtin.command: docker compose up -d
+  args:
+    chdir: /srv/ai-lab/open-webui
+  when: open_webui_enabled
+
+- name: Publish Open WebUI DNS record through Route53
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    resolve_hosted_zone_id() {
+      local requested_zone="${1%.}."
+      local resolved_name resolved_id
+
+      read -r resolved_name resolved_id < <(
+        aws route53 list-hosted-zones-by-name \
+          --dns-name "${requested_zone}" \
+          --max-items 1 \
+          --query 'HostedZones[0].[Name,Id]' \
+          --output text
+      )
+
+      if [[ "${resolved_name}" != "${requested_zone}" || -z "${resolved_id}" || "${resolved_id}" == "None" ]]; then
+        echo "Unable to resolve hosted zone ID for ${requested_zone}" >&2
+        return 1
+      fi
+
+      echo "${resolved_id#/hostedzone/}"
+    }
+
+    HOSTED_ZONE_ID="{{ route53_ddns_hosted_zone_id }}"
+    if [[ -z "${HOSTED_ZONE_ID}" ]]; then
+      HOSTED_ZONE_ID="$(resolve_hosted_zone_id "{{ route53_ddns_zone_name }}")"
+    fi
+
+    TMP_BATCH="$(mktemp)"
+    trap 'rm -f "${TMP_BATCH}"' EXIT
+
+    cat > "${TMP_BATCH}" <<EOF
+    {
+      "Comment": "Open WebUI DNS alias",
+      "Changes": [
+        {
+          "Action": "UPSERT",
+          "ResourceRecordSet": {
+            "Name": "{{ open_webui_domain }}.",
+            "Type": "CNAME",
+            "TTL": 300,
+            "ResourceRecords": [
+              { "Value": "{{ open_webui_public_cname_target }}." }
+            ]
+          }
+        }
+      ]
+    }
+    EOF
+
+    aws route53 change-resource-record-sets \
+      --hosted-zone-id "${HOSTED_ZONE_ID}" \
+      --change-batch "file://${TMP_BATCH}" \
+      >/dev/null
+  args:
+    executable: /bin/bash
+  environment:
+    AWS_PROFILE: "{{ monitor_letsencrypt_aws_profile }}"
+    AWS_SHARED_CREDENTIALS_FILE: /root/.aws/credentials
+    AWS_CONFIG_FILE: /root/.aws/config
+  when:
+    - open_webui_enabled
+    - monitor_tls_mode == "letsencrypt"
+    - monitor_letsencrypt_challenge == "dns-route53"
+    - open_webui_public_cname_target | length > 0

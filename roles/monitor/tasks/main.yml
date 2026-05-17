@@ -106,11 +106,17 @@
           '--dns-route53',
           '--non-interactive',
           '--agree-tos',
+          '--cert-name', cockpit_domain,
           '--expand',
           '--keep-until-expiring',
           '-d', cockpit_domain,
           '-d', observability_domain
         ]
+        + (
+          ['-d', open_webui_domain]
+          if open_webui_enabled | default(false)
+          else []
+        )
         + (
           ['-m', monitor_letsencrypt_email]
           if monitor_letsencrypt_email | length > 0
@@ -237,6 +243,51 @@
               proxy_set_header X-Forwarded-Host $host;
           }
       }
+      {% if open_webui_enabled | default(false) %}
+
+      server {
+          listen 80;
+          listen [::]:80;
+          server_name {{ open_webui_domain }};
+
+          location /.well-known/acme-challenge/ {
+              root /var/www/html;
+          }
+
+          location / {
+              return 301 https://$host$request_uri;
+          }
+      }
+
+      server {
+          listen 443 ssl;
+          listen [::]:443 ssl;
+          http2 on;
+          server_name {{ open_webui_domain }};
+
+          ssl_certificate {{ monitor_nginx_ssl_certificate }};
+          ssl_certificate_key {{ monitor_nginx_ssl_certificate_key }};
+
+          allow 127.0.0.1;
+          allow ::1;
+          allow {{ server_lan_cidr }};
+      {% if wireguard_enabled %}
+          allow {{ wireguard_subnet }};
+      {% endif %}
+          deny all;
+
+          location / {
+              proxy_pass http://127.0.0.1:{{ open_webui_port }}/;
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header X-Forwarded-Host $host;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_http_version 1.1;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection "upgrade";
+          }
+      }
+      {% endif %}
   notify: Reload nginx
 
 - name: Check whether nginx monitor site exists
@@ -300,6 +351,7 @@
   ansible.builtin.debug:
     msg: >-
       Let's Encrypt not attempted for {{ cockpit_domain }}, {{ observability_domain }}.
+      {% if open_webui_enabled | default(false) %} {{ open_webui_domain }}.{% endif %}
       For dns-route53, ensure AWS profile {{ monitor_letsencrypt_aws_profile }}
       can edit Route53. For HTTP challenge, public DNS and ports 80/443 must
       point to this server.
