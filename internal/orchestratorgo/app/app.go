@@ -59,8 +59,11 @@ func New() (*Runtime, error) {
 		TimeoutSeconds:    20,
 	})
 	researchService := research.New(research.Options{
-		SearchBaseURL: cfg.WebSearchBaseURL,
-		Capabilities:  capabilityClient,
+		SearchBaseURL:        cfg.WebSearchBaseURL,
+		Capabilities:         capabilityClient,
+		UtilityBaseURL:       cfg.LlamaUtilityBaseURL,
+		UtilityAPIKey:        cfg.LlamaUtilityAPIKey,
+		UtilityTimeoutSeconds: cfg.LlamaTimeoutSeconds,
 	})
 	shadowWorker := worker.New(cfg, postgres, redisStore, researchService)
 	safeMode := httpapi.NewSafeModeState(cfg.SafeMode)
