@@ -93,6 +93,20 @@ export LAB_AGENT_POLL_INTERVAL="2s"
 export LAB_AGENT_HEARTBEAT_INTERVAL="15s"
 ```
 
+Alternative: use an env file and pass it explicitly:
+
+```bash
+cat > .env.bridge <<'EOF'
+LAB_AGENT_BASE_URL=https://<cockpit_domain>/orchestrator
+LAB_AGENT_API_KEY=<operator-or-admin-api-key>
+LAB_AGENT_WORKSPACE_ROOT=/absolute/path/to/workspace
+LAB_AGENT_BRIDGE_ID=55555555-5555-4555-8555-555555555555
+LAB_AGENT_NAME=my-local-bridge
+LAB_AGENT_POLL_INTERVAL=2s
+LAB_AGENT_HEARTBEAT_INTERVAL=15s
+EOF
+```
+
 Notes:
 
 - `LAB_AGENT_API_KEY` must have `operator` or `admin` scope
@@ -104,13 +118,13 @@ Notes:
 Linux example:
 
 ```bash
-./dist/lab-agent-linux-amd64 bridge register
+./dist/lab-agent-linux-amd64 --env-file .env.bridge bridge register
 ```
 
 macOS example:
 
 ```bash
-./dist/lab-agent-darwin-arm64 bridge register
+./dist/lab-agent-darwin-arm64 --env-file .env.bridge bridge register
 ```
 
 This creates or updates the bridge row in `/bridges/register`.
@@ -120,13 +134,13 @@ This creates or updates the bridge row in `/bridges/register`.
 Linux:
 
 ```bash
-./dist/lab-agentd-linux-amd64
+./dist/lab-agentd-linux-amd64 --env-file .env.bridge
 ```
 
 macOS:
 
 ```bash
-./dist/lab-agentd-darwin-arm64
+./dist/lab-agentd-darwin-arm64 --env-file .env.bridge
 ```
 
 Daemon responsibilities:
@@ -139,36 +153,38 @@ Daemon responsibilities:
 
 ## CLI usage
 
+The normal operational surface for the bridge is the CLI, not raw `curl`.
+
 ### Bridge commands
 
 Register:
 
 ```bash
-./dist/lab-agent-linux-amd64 bridge register
+./dist/lab-agent-linux-amd64 --env-file .env.bridge bridge register
 ```
 
 Heartbeat once:
 
 ```bash
-./dist/lab-agent-linux-amd64 bridge heartbeat
+./dist/lab-agent-linux-amd64 --env-file .env.bridge bridge heartbeat
 ```
 
 Status:
 
 ```bash
-./dist/lab-agent-linux-amd64 bridge status
+./dist/lab-agent-linux-amd64 --env-file .env.bridge bridge status
 ```
 
 Smoke handshake:
 
 ```bash
-./dist/lab-agent-linux-amd64 bridge smoke
+./dist/lab-agent-linux-amd64 --env-file .env.bridge bridge smoke
 ```
 
 Start polling daemon from the CLI wrapper:
 
 ```bash
-./dist/lab-agent-linux-amd64 bridge start
+./dist/lab-agent-linux-amd64 --env-file .env.bridge bridge start
 ```
 
 ### Task and approval commands
@@ -176,22 +192,34 @@ Start polling daemon from the CLI wrapper:
 List tasks:
 
 ```bash
-./dist/lab-agent-linux-amd64 tasks list
+./dist/lab-agent-linux-amd64 --env-file .env.bridge tasks list
 ```
 
 Watch tasks:
 
 ```bash
-./dist/lab-agent-linux-amd64 tasks watch
+./dist/lab-agent-linux-amd64 --env-file .env.bridge tasks watch
 ```
 
 List approvals:
 
 ```bash
-./dist/lab-agent-linux-amd64 approvals list
+./dist/lab-agent-linux-amd64 --env-file .env.bridge approvals list
 ```
 
+## Recommended workflow
+
+1. register the workspace with `lab-agent`
+2. start `lab-agentd`
+3. inspect local task/approval flow with:
+   - `lab-agent ... bridge status`
+   - `lab-agent ... tasks list`
+   - `lab-agent ... approvals list`
+4. only use direct API calls when you are integrating the orchestrator or creating tasks programmatically
+
 ## Creating local tasks
+
+This part uses the orchestrator API because task creation belongs to the orchestrator, not to the bridge binary itself.
 
 Local execution is triggered from the orchestrator API with `execution_target=local`.
 
@@ -260,6 +288,13 @@ curl -sk -X POST "$ORCH_BASE/tasks" \
 
 That task will move to `waiting_approval`. After `POST /approvals/{id}/approve`, the bridge will execute it once. Once is the key word.
 
+If you just want to observe the queue and approvals from the bridge side, prefer:
+
+```bash
+./dist/lab-agent-linux-amd64 --env-file .env.bridge tasks list
+./dist/lab-agent-linux-amd64 --env-file .env.bridge approvals list
+```
+
 ## Artifacts and traces
 
 Every local bridge execution persists a tool invocation plus zero or more artifacts:
@@ -281,6 +316,12 @@ curl -sk "$ORCH_BASE/tasks/<task_id>/sources" \
 curl -sk "$ORCH_BASE/tools/invocations/<invocation_id>" \
   -H "Authorization: Bearer $ORCH_KEY"
 ```
+
+Operationally:
+
+- use `lab-agent` to operate the bridge
+- use API endpoints to integrate or inspect stored data
+- use the workspace itself to inspect the real file changes
 
 ## Operational constraints
 

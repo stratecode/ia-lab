@@ -88,10 +88,32 @@ func (b *Bot) run(ctx context.Context) {
 			if update.UpdateID >= b.offset {
 				b.offset = update.UpdateID + 1
 			}
+			if update.CallbackQuery != nil {
+				if !b.isAllowed(update.CallbackQuery.From.ID) {
+					continue
+				}
+				if err := b.handleCallback(ctx, update.CallbackQuery); err != nil {
+					log.Warn().Err(err).Msg("telegram callback handling failed")
+				}
+				continue
+			}
 			if update.Message == nil {
 				continue
 			}
 			if !b.isAllowed(update.Message.From.ID) {
+				continue
+			}
+			command := parseCommand(update.Message.Text)
+			switch command {
+			case "tasks":
+				if err := b.sendTasksList(ctx, update.Message.Chat.ID); err != nil {
+					log.Warn().Err(err).Int64("chat_id", update.Message.Chat.ID).Msg("telegram send tasks failed")
+				}
+				continue
+			case "approvals":
+				if err := b.sendApprovalsList(ctx, update.Message.Chat.ID); err != nil {
+					log.Warn().Err(err).Int64("chat_id", update.Message.Chat.ID).Msg("telegram send approvals failed")
+				}
 				continue
 			}
 			reply := b.handleCommand(ctx, update.Message)
@@ -143,9 +165,16 @@ func (b *Bot) getUpdates(ctx context.Context) ([]update, error) {
 }
 
 func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) error {
+	return b.sendMessageWithMarkup(ctx, chatID, text, nil)
+}
+
+func (b *Bot) sendMessageWithMarkup(ctx context.Context, chatID int64, text string, replyMarkup map[string]any) error {
 	body := map[string]any{
 		"chat_id": chatID,
 		"text":    text,
+	}
+	if replyMarkup != nil {
+		body["reply_markup"] = replyMarkup
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -165,6 +194,33 @@ func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) error 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return fmt.Errorf("telegram sendMessage failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+func (b *Bot) answerCallbackQuery(ctx context.Context, callbackID, text string) error {
+	body := map[string]any{"callback_query_id": callbackID}
+	if strings.TrimSpace(text) != "" {
+		body["text"] = text
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	endpoint := fmt.Sprintf("https://api.telegram.org/bot%s/answerCallbackQuery", b.cfg.TelegramBotToken)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return fmt.Errorf("telegram answerCallbackQuery failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return nil
 }
@@ -253,6 +309,26 @@ func (b *Bot) cmdTasks(ctx context.Context) string {
 		lines = append(lines, fmt.Sprintf("- %s | %s | %s", item.ID, item.State, item.Description))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (b *Bot) sendTasksList(ctx context.Context, chatID int64) error {
+	items, _, err := b.postgres.ListTasks(ctx, store.TaskListFilter{Limit: 10})
+	if err != nil {
+		return b.sendMessage(ctx, chatID, "Error leyendo tareas: "+err.Error())
+	}
+	if len(items) == 0 {
+		return b.sendMessage(ctx, chatID, "No hay tareas.")
+	}
+	lines := []string{"Tasks"}
+	rows := make([][]map[string]string, 0, len(items))
+	for _, item := range items {
+		lines = append(lines, fmt.Sprintf("- %s | %s | %s", item.State, item.ID, item.Description))
+		rows = append(rows, []map[string]string{{
+			"text":          fmt.Sprintf("%s | %s", item.State, trimForButton(item.Description, 28)),
+			"callback_data": "task:" + item.ID,
+		}})
+	}
+	return b.sendMessageWithMarkup(ctx, chatID, strings.Join(lines, "\n"), map[string]any{"inline_keyboard": rows})
 }
 
 func (b *Bot) cmdTask(ctx context.Context, taskID string) string {
@@ -344,6 +420,26 @@ func (b *Bot) cmdApprovals(ctx context.Context) string {
 	return strings.Join(lines, "\n")
 }
 
+func (b *Bot) sendApprovalsList(ctx context.Context, chatID int64) error {
+	items, err := b.postgres.ListApprovals(ctx, store.ApprovalListFilter{Status: domain.ApprovalPending, Limit: 20})
+	if err != nil {
+		return b.sendMessage(ctx, chatID, "Error leyendo approvals: "+err.Error())
+	}
+	if len(items) == 0 {
+		return b.sendMessage(ctx, chatID, "No hay approvals pendientes.")
+	}
+	lines := []string{"Pending approvals"}
+	rows := make([][]map[string]string, 0, len(items))
+	for _, item := range items {
+		lines = append(lines, fmt.Sprintf("- %s | task=%s | %s | %s", item.ID, item.TaskID, item.ActionType, item.TargetResource))
+		rows = append(rows, []map[string]string{
+			{"text": "Approve " + trimForButton(item.TargetResource, 18), "callback_data": "approve:" + item.ID},
+			{"text": "Reject " + trimForButton(item.TargetResource, 18), "callback_data": "reject:" + item.ID},
+		})
+	}
+	return b.sendMessageWithMarkup(ctx, chatID, strings.Join(lines, "\n"), map[string]any{"inline_keyboard": rows})
+}
+
 func (b *Bot) cmdResolveApproval(ctx context.Context, approvalID string, approve bool, operator string) string {
 	approvalID = strings.TrimSpace(approvalID)
 	if approvalID == "" {
@@ -359,7 +455,7 @@ func (b *Bot) cmdResolveApproval(ctx context.Context, approvalID string, approve
 	if err != nil {
 		return "Error resolviendo approval: " + err.Error()
 	}
-	if approve && task != nil && task.AssignedAgent != nil {
+	if approve && task != nil && task.AssignedAgent != nil && task.ExecutionTarget != domain.ExecutionTargetLocal {
 		if err := b.redis.EnqueueTask(ctx, task.ID, *task.AssignedAgent, task.Priority); err != nil {
 			return "Approval resuelta, pero falló el requeue: " + err.Error()
 		}
@@ -476,8 +572,9 @@ func (b *Bot) cmdSources(ctx context.Context, taskID string) string {
 }
 
 type update struct {
-	UpdateID int64    `json:"update_id"`
-	Message  *message `json:"message"`
+	UpdateID      int64          `json:"update_id"`
+	Message       *message       `json:"message"`
+	CallbackQuery *callbackQuery `json:"callback_query"`
 }
 
 type message struct {
@@ -487,6 +584,16 @@ type message struct {
 		ID int64 `json:"id"`
 	} `json:"chat"`
 	From struct {
+		ID       int64  `json:"id"`
+		Username string `json:"username"`
+	} `json:"from"`
+}
+
+type callbackQuery struct {
+	ID      string   `json:"id"`
+	Data    string   `json:"data"`
+	Message *message `json:"message"`
+	From    struct {
 		ID       int64  `json:"id"`
 		Username string `json:"username"`
 	} `json:"from"`
@@ -528,6 +635,56 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func trimForButton(text string, max int) string {
+	text = strings.TrimSpace(text)
+	if len(text) <= max {
+		return text
+	}
+	if max <= 3 {
+		return text[:max]
+	}
+	return text[:max-3] + "..."
+}
+
+func parseCommand(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" || !strings.HasPrefix(text, "/") {
+		return ""
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.TrimPrefix(fields[0], "/")
+}
+
+func (b *Bot) handleCallback(ctx context.Context, query *callbackQuery) error {
+	if query == nil || query.Message == nil {
+		return nil
+	}
+	data := strings.TrimSpace(query.Data)
+	if data == "" {
+		return b.answerCallbackQuery(ctx, query.ID, "")
+	}
+	var reply string
+	switch {
+	case strings.HasPrefix(data, "task:"):
+		reply = b.cmdTask(ctx, strings.TrimSpace(strings.TrimPrefix(data, "task:")))
+	case strings.HasPrefix(data, "approve:"):
+		reply = b.cmdResolveApproval(ctx, strings.TrimSpace(strings.TrimPrefix(data, "approve:")), true, query.From.Username)
+	case strings.HasPrefix(data, "reject:"):
+		reply = b.cmdResolveApproval(ctx, strings.TrimSpace(strings.TrimPrefix(data, "reject:")), false, query.From.Username)
+	default:
+		reply = "Acción no soportada."
+	}
+	if strings.TrimSpace(reply) != "" {
+		if err := b.sendMessage(ctx, query.Message.Chat.ID, reply); err != nil {
+			return err
+		}
+	}
+	return b.answerCallbackQuery(ctx, query.ID, "Hecho")
 }
 
 func (b *Bot) reconcileRootTask(ctx context.Context, taskID string) {

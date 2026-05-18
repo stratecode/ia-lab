@@ -15,7 +15,18 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
+	envFile, filteredArgs, err := bridge.ExtractEnvFileArg(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		usage()
+		os.Exit(1)
+	}
+	if err := bridge.LoadEnvFile(envFile); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load env file: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(filteredArgs) < 2 {
 		usage()
 		os.Exit(1)
 	}
@@ -23,7 +34,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	opts, command, err := parseCLI(os.Args[1:])
+	opts, command, err := parseCLI(filteredArgs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		usage()
@@ -125,14 +136,14 @@ func parseDurationEnv(key string, fallback time.Duration) time.Duration {
 
 func usage() {
 	fmt.Println(`Usage:
-  lab-agent bridge register [--base-url ... --api-key ... --workspace-root ...]
-  lab-agent bridge heartbeat [--bridge-id ...]
-  lab-agent bridge status [--bridge-id ...]
-  lab-agent bridge smoke [--bridge-id ...]
-  lab-agent bridge start [--bridge-id ... --workspace-root ...]
-  lab-agent tasks list
-  lab-agent tasks watch
-  lab-agent approvals list`)
+  lab-agent [--env-file .env.bridge] bridge register [--base-url ... --api-key ... --workspace-root ...]
+  lab-agent [--env-file .env.bridge] bridge heartbeat [--bridge-id ...]
+  lab-agent [--env-file .env.bridge] bridge status [--bridge-id ...]
+  lab-agent [--env-file .env.bridge] bridge smoke [--bridge-id ...]
+  lab-agent [--env-file .env.bridge] bridge start [--bridge-id ... --workspace-root ...]
+  lab-agent [--env-file .env.bridge] tasks list
+  lab-agent [--env-file .env.bridge] tasks watch
+  lab-agent [--env-file .env.bridge] approvals list`)
 }
 
 type ioDiscard struct{}

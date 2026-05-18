@@ -376,7 +376,7 @@ curl -sk "$ORCH_BASE/tasks/<task_id>/tree" \
 LAB_AGENT_BASE_URL="$ORCH_BASE" \
 LAB_AGENT_API_KEY="$ORCH_KEY" \
 LAB_AGENT_WORKSPACE_ROOT="/abs/path/to/current/workspace" \
-./dist/lab-agent-linux-amd64 bridge register
+./dist/lab-agent-linux-amd64 --env-file .env.bridge bridge register
 ```
 
 ### Run the local bridge daemon
@@ -385,7 +385,7 @@ LAB_AGENT_WORKSPACE_ROOT="/abs/path/to/current/workspace" \
 LAB_AGENT_BASE_URL="$ORCH_BASE" \
 LAB_AGENT_API_KEY="$ORCH_KEY" \
 LAB_AGENT_WORKSPACE_ROOT="/abs/path/to/current/workspace" \
-./dist/lab-agentd-linux-amd64
+./dist/lab-agentd-linux-amd64 --env-file .env.bridge
 ```
 
 ### Inspect local bridge state
@@ -393,7 +393,7 @@ LAB_AGENT_WORKSPACE_ROOT="/abs/path/to/current/workspace" \
 ```bash
 LAB_AGENT_BASE_URL="$ORCH_BASE" \
 LAB_AGENT_API_KEY="$ORCH_KEY" \
-./dist/lab-agent-linux-amd64 bridge status
+./dist/lab-agent-linux-amd64 --env-file .env.bridge bridge status
 ```
 
 ### Smoke-test the bridge handshake
@@ -402,7 +402,14 @@ LAB_AGENT_API_KEY="$ORCH_KEY" \
 LAB_AGENT_BASE_URL="$ORCH_BASE" \
 LAB_AGENT_API_KEY="$ORCH_KEY" \
 LAB_AGENT_WORKSPACE_ROOT="/abs/path/to/current/workspace" \
-./dist/lab-agent-linux-amd64 bridge smoke
+./dist/lab-agent-linux-amd64 --env-file .env.bridge bridge smoke
+```
+
+### Inspect local work from the CLI
+
+```bash
+./dist/lab-agent-linux-amd64 --env-file .env.bridge tasks list
+./dist/lab-agent-linux-amd64 --env-file .env.bridge approvals list
 ```
 
 ## Research mode notes
@@ -430,6 +437,8 @@ The Local Agent Bridge is now the controlled path for local execution from the G
   - `lab-agentd`
 - full operational guide:
   - [Local Bridge and CLI](local-bridge.md)
+
+Use `lab-agent` and `lab-agentd` as the primary operator interface. Use `curl` against the orchestrator API when you need integration, automation, or low-level inspection.
 
 ### Supported tools
 

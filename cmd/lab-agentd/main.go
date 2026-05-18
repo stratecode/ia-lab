@@ -15,6 +15,16 @@ import (
 )
 
 func main() {
+	envFile, filteredArgs, err := bridge.ExtractEnvFileArg(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := bridge.LoadEnvFile(envFile); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load env file: %v\n", err)
+		os.Exit(1)
+	}
+
 	opts := defaultOptions()
 	fs := flag.NewFlagSet("lab-agentd", flag.ExitOnError)
 	fs.StringVar(&opts.BaseURL, "base-url", opts.BaseURL, "Orchestrator base URL")
@@ -25,7 +35,7 @@ func main() {
 	fs.StringVar(&opts.Hostname, "hostname", opts.Hostname, "Host name override")
 	fs.DurationVar(&opts.PollInterval, "poll-interval", opts.PollInterval, "Poll interval")
 	fs.DurationVar(&opts.HeartbeatInterval, "heartbeat-interval", opts.HeartbeatInterval, "Heartbeat interval")
-	fs.Parse(os.Args[1:])
+	fs.Parse(filteredArgs)
 
 	if strings.TrimSpace(opts.APIKey) == "" {
 		fmt.Fprintln(os.Stderr, "LAB_AGENT_API_KEY or --api-key is required")
