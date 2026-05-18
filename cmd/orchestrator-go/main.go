@@ -29,7 +29,7 @@ func main() {
 	}
 
 	go func() {
-		log.Info().Str("addr", server.Addr).Msg("starting orchestrator-go shadow core")
+		log.Info().Str("addr", server.Addr).Msg("starting orchestrator-go runtime core")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("orchestrator-go server failed")
 			os.Exit(1)

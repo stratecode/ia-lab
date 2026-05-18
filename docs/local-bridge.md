@@ -181,20 +181,53 @@ macOS:
 The TUI gives you:
 
 - overview of health, bridge, local tasks, and approvals
+- initiative lifecycle views for `Initiatives`, `Requirements`, `Design`, `Plan`, and `Execution`
 - task inspection with results and artifacts
 - approval actions without hunting UUIDs by hand
 - bridge register/heartbeat/smoke/start-stop actions
 - chat with the agent
 - a wizard to create mini projects for lab testing
 
-The validated project flow is:
+The validated initiative flow is:
 
-1. the TUI creates a root `planner` task on the orchestrator
-2. the planner emits local subtasks for `researcher`, `coder`, and `reviewer`
-3. the local bridge executes those subtasks inside the registered workspace
-4. the root task completes only when all children complete
+1. create an initiative bound to one workspace
+2. generate `requirements`
+3. approve or reject them
+4. generate `design`
+5. approve or reject it
+6. generate `plan`
+7. approve it
+8. selectively launch one or more generated tasks
+
+The validated local project flow under that initiative is:
+
+1. the TUI creates initiative-linked planned work on the orchestrator
+2. the orchestrator emits local work for `researcher`, `coder`, and `reviewer`
+3. the local bridge executes that work inside the registered workspace
+4. the task and initiative only complete when the linked execution path completes
 
 It is a cockpit, not a shrine to terminal aesthetics.
+
+### Initiative keybindings
+
+Inside the initiative-oriented views:
+
+- `n` or `i`
+  create initiative
+- `enter` or `l`
+  load initiative detail
+- `g`
+  advance the current phase or generate backlog on `Plan`
+- `a`
+  approve current phase
+- `x`
+  reject current phase
+- `m`
+  cycle selected execution mode on `Execution`
+- `s`
+  launch the selected execution task
+
+The TUI governs, approves, launches, and inspects. It does not pretend to be a Markdown IDE in this MVP.
 
 ### CLI commands
 
@@ -250,6 +283,26 @@ List approvals:
 ./dist/lab-agent-linux-amd64 --env-file .env.bridge approvals list
 ```
 
+## Initiative API
+
+The TUI is the operator surface. The API is the integration surface.
+
+Initiative endpoints:
+
+- `POST /initiatives`
+- `GET /initiatives`
+- `GET /initiatives/{id}`
+- `GET /initiatives/{id}/artifacts`
+- `POST /initiatives/{id}/advance`
+- `POST /initiatives/{id}/approve/{phase}`
+- `POST /initiatives/{id}/reject/{phase}`
+- `POST /initiatives/{id}/tasks/generate`
+- `GET /initiatives/{id}/tasks`
+- `POST /initiatives/{id}/tasks/{task_id}/mode`
+- `POST /initiatives/{id}/tasks/launch`
+
+The bridge does not own governance. It owns execution inside the workspace once the initiative has already been reviewed and launched.
+
 ## Rebuild local binaries after bridge changes
 
 Linux runtime binaries:
@@ -276,8 +329,11 @@ If you skip this after changing bridge tools, the daemon can still connect and s
 2. start the bridge from:
    - `lab-agent ... tui`
    - or `lab-agentd`
-3. create a mini project from the TUI `Projects` wizard for the fastest end-to-end check
-4. inspect task tree, artifacts, approvals, and final state from the TUI first
+3. create an initiative from the TUI
+4. advance `requirements -> design -> plan`
+5. approve each phase
+6. launch one or more execution tasks from `Execution`
+7. inspect artifacts, approvals, outputs, and final state from the TUI first
 5. use CLI commands for scripted or direct operational work
 6. only use direct API calls when you are integrating the orchestrator or creating tasks programmatically
 

@@ -150,6 +150,7 @@ The platform now runs a Go orchestrator on `127.0.0.1:8100` with:
 
 - PostgreSQL persistence in Docker
 - Redis-backed queue/event bus
+- initiative lifecycle above tasks (`idea -> requirements -> design -> plan -> selective execution`)
 - worker loop integrated with `aider-task`
 - Telegram bot for status, approvals, model chat, and constrained server ops
 - cleanup and database backup timers
@@ -192,6 +193,6 @@ Sensitive variables in the vault:
 - [Getting Started](docs/getting-started.md) — full setup guide from scratch (SSH keys, vault, first run)
 - [System Usage Guide](docs/system-usage.md) — Telegram, Open WebUI, and orchestrator API usage
 - [Orchestrator Go Runtime](docs/orchestrator-go-runtime.md) — Go runtime architecture, build flow, and deployment model
-- [Local Bridge and TUI/CLI](docs/local-bridge.md) — install, operate, and troubleshoot the local execution bridge
+- [Local Bridge and TUI/CLI](docs/local-bridge.md) — install, operate, and troubleshoot the local execution bridge and initiative workflow
 - [Server Baseline](docs/server-baseline.md) — base configuration details
 - [WireGuard](docs/wireguard.md) — VPN setup and client guide

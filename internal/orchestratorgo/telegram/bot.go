@@ -18,6 +18,7 @@ import (
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 	"github.com/stratecode/lab/internal/orchestratorgo/httpapi"
+	"github.com/stratecode/lab/internal/orchestratorgo/initiative"
 	"github.com/stratecode/lab/internal/orchestratorgo/research"
 	"github.com/stratecode/lab/internal/orchestratorgo/store"
 )
@@ -27,6 +28,7 @@ type Bot struct {
 	postgres     *store.PostgresStore
 	redis        *store.RedisStore
 	research     *research.Service
+	initiatives  *initiative.Service
 	capabilities *capabilities.Client
 	safeMode     *httpapi.SafeModeState
 	client       *http.Client
@@ -36,12 +38,13 @@ type Bot struct {
 	mu           sync.Mutex
 }
 
-func New(cfg config.Config, postgres *store.PostgresStore, redis *store.RedisStore, researchService *research.Service, capabilityClient *capabilities.Client, safeMode *httpapi.SafeModeState) *Bot {
+func New(cfg config.Config, postgres *store.PostgresStore, redis *store.RedisStore, researchService *research.Service, initiativeService *initiative.Service, capabilityClient *capabilities.Client, safeMode *httpapi.SafeModeState) *Bot {
 	return &Bot{
 		cfg:          cfg,
 		postgres:     postgres,
 		redis:        redis,
 		research:     researchService,
+		initiatives:  initiativeService,
 		capabilities: capabilityClient,
 		safeMode:     safeMode,
 		client:       &http.Client{Timeout: 35 * time.Second},
@@ -113,6 +116,11 @@ func (b *Bot) run(ctx context.Context) {
 			case "approvals":
 				if err := b.sendApprovalsList(ctx, update.Message.Chat.ID); err != nil {
 					log.Warn().Err(err).Int64("chat_id", update.Message.Chat.ID).Msg("telegram send approvals failed")
+				}
+				continue
+			case "initiatives":
+				if err := b.sendInitiativesList(ctx, update.Message.Chat.ID); err != nil {
+					log.Warn().Err(err).Int64("chat_id", update.Message.Chat.ID).Msg("telegram send initiatives failed")
 				}
 				continue
 			}
@@ -249,6 +257,20 @@ func (b *Bot) handleCommand(ctx context.Context, message *message) string {
 		return b.cmdCreateTask(ctx, arg, domain.AgentTypePlanner, false)
 	case "plan":
 		return b.cmdCreateTask(ctx, arg, domain.AgentTypePlanner, true)
+	case "initiatives":
+		return b.cmdInitiatives(ctx)
+	case "initiative":
+		return b.cmdInitiative(ctx, arg)
+	case "idea":
+		return b.cmdIdea(ctx, arg)
+	case "approve_phase":
+		return b.cmdResolveInitiativePhase(ctx, arg, true, message.From.Username)
+	case "reject_phase":
+		return b.cmdResolveInitiativePhase(ctx, arg, false, message.From.Username)
+	case "launch_tasks":
+		return b.cmdLaunchInitiativeTasks(ctx, arg)
+	case "initiative_tasks":
+		return b.cmdInitiativeTasks(ctx, arg)
 	case "approvals":
 		return b.cmdApprovals(ctx)
 	case "approve":
@@ -403,6 +425,284 @@ func (b *Bot) cmdCreateTask(ctx context.Context, description string, agent domai
 		return "Error encolando tarea: " + err.Error()
 	}
 	return fmt.Sprintf("Task creada\n- ID: %s\n- Agent: %s\n- State: queued", task.ID, agent)
+}
+
+func (b *Bot) cmdInitiatives(ctx context.Context) string {
+	items, err := b.postgres.ListInitiatives(ctx, store.InitiativeListFilter{Limit: 10})
+	if err != nil {
+		return "Error leyendo iniciativas: " + err.Error()
+	}
+	if len(items) == 0 {
+		return "No hay iniciativas."
+	}
+	lines := []string{"Initiatives"}
+	for _, item := range items {
+		lines = append(lines, fmt.Sprintf("- %s | %s | %s | %s", item.ID, item.Status, item.CurrentPhase, item.Title))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (b *Bot) sendInitiativesList(ctx context.Context, chatID int64) error {
+	items, err := b.postgres.ListInitiatives(ctx, store.InitiativeListFilter{Limit: 10})
+	if err != nil {
+		return b.sendMessage(ctx, chatID, "Error leyendo iniciativas: "+err.Error())
+	}
+	if len(items) == 0 {
+		return b.sendMessage(ctx, chatID, "No hay iniciativas.")
+	}
+	lines := []string{"Initiatives"}
+	rows := make([][]map[string]string, 0, len(items))
+	for _, item := range items {
+		lines = append(lines, fmt.Sprintf("- %s | %s | %s | %s", item.ID, item.Status, item.CurrentPhase, item.Title))
+		rows = append(rows, []map[string]string{{
+			"text":          fmt.Sprintf("%s | %s", item.Status, trimForButton(item.Title, 24)),
+			"callback_data": "initiative:" + item.ID,
+		}})
+	}
+	return b.sendMessageWithMarkup(ctx, chatID, strings.Join(lines, "\n"), map[string]any{"inline_keyboard": rows})
+}
+
+func (b *Bot) cmdInitiative(ctx context.Context, initiativeID string) string {
+	initiativeID = strings.TrimSpace(initiativeID)
+	if initiativeID == "" {
+		return "Uso: /initiative <initiative_id>"
+	}
+	item, err := b.postgres.GetInitiative(ctx, initiativeID)
+	if err != nil {
+		return "Error leyendo iniciativa: " + err.Error()
+	}
+	if item == nil {
+		return "Iniciativa no encontrada."
+	}
+	links, err := b.postgres.ListInitiativeTasks(ctx, initiativeID)
+	if err != nil {
+		return "Error leyendo tareas de iniciativa: " + err.Error()
+	}
+	return fmt.Sprintf("Initiative %s\n- Status: %s\n- Phase: %s\n- Workspace: %s\n- Goal: %s\n- Tasks: %d", item.ID, item.Status, item.CurrentPhase, item.WorkspaceRoot, item.Goal, len(links))
+}
+
+func (b *Bot) sendInitiativeDetail(ctx context.Context, chatID int64, initiativeID string) error {
+	item, err := b.postgres.GetInitiative(ctx, initiativeID)
+	if err != nil {
+		return b.sendMessage(ctx, chatID, "Error leyendo iniciativa: "+err.Error())
+	}
+	if item == nil {
+		return b.sendMessage(ctx, chatID, "Iniciativa no encontrada.")
+	}
+	links, err := b.postgres.ListInitiativeTasks(ctx, initiativeID)
+	if err != nil {
+		return b.sendMessage(ctx, chatID, "Error leyendo tareas de iniciativa: "+err.Error())
+	}
+	text := fmt.Sprintf("Initiative %s\n- Status: %s\n- Phase: %s\n- Workspace: %s\n- Goal: %s\n- Tasks: %d", item.ID, item.Status, item.CurrentPhase, item.WorkspaceRoot, item.Goal, len(links))
+	rows := [][]map[string]string{}
+	if isPhaseReviewStatus(item.Status) {
+		rows = append(rows, []map[string]string{
+			{"text": "Approve phase", "callback_data": fmt.Sprintf("phaseapprove:%s:%s", item.ID, item.CurrentPhase)},
+			{"text": "Reject phase", "callback_data": fmt.Sprintf("phasereject:%s:%s", item.ID, item.CurrentPhase)},
+		})
+	}
+	if item.Status == domain.InitiativeStatusExecutionReady || item.Status == domain.InitiativeStatusExecuting || item.Status == domain.InitiativeStatusBlocked {
+		rows = append(rows, []map[string]string{
+			{"text": "Launch tasks", "callback_data": "launchinitiative:" + item.ID},
+			{"text": "List tasks", "callback_data": "initiative_tasks:" + item.ID},
+		})
+	}
+	var markup map[string]any
+	if len(rows) > 0 {
+		markup = map[string]any{"inline_keyboard": rows}
+	}
+	return b.sendMessageWithMarkup(ctx, chatID, text, markup)
+}
+
+func (b *Bot) cmdIdea(ctx context.Context, arg string) string {
+	fields := strings.Fields(strings.TrimSpace(arg))
+	if len(fields) < 2 {
+		return "Uso: /idea <workspace_alias> <texto>"
+	}
+	workspaceRoot, err := b.resolveWorkspaceAlias(ctx, fields[0])
+	if err != nil {
+		return "Error resolviendo workspace: " + err.Error()
+	}
+	goal := strings.TrimSpace(strings.Join(fields[1:], " "))
+	title := goal
+	if len(title) > 72 {
+		title = strings.TrimSpace(title[:72]) + "..."
+	}
+	item, err := b.postgres.CreateInitiative(ctx, store.CreateInitiativeParams{
+		Title:         title,
+		WorkspaceRoot: workspaceRoot,
+		Goal:          goal,
+		CreatedBy:     "telegram",
+		ExecutionMode: domain.InitiativeExecutionModeSelective,
+	})
+	if err != nil {
+		return "Error creando iniciativa: " + err.Error()
+	}
+	return fmt.Sprintf("Iniciativa creada\n- ID: %s\n- Workspace: %s\n- Status: %s", item.ID, item.WorkspaceRoot, item.Status)
+}
+
+func (b *Bot) cmdResolveInitiativePhase(ctx context.Context, arg string, approve bool, operator string) string {
+	fields := strings.Fields(strings.TrimSpace(arg))
+	if len(fields) < 2 {
+		if approve {
+			return "Uso: /approve_phase <initiative_id> <requirements|design|plan>"
+		}
+		return "Uso: /reject_phase <initiative_id> <requirements|design|plan>"
+	}
+	initiativeID := strings.TrimSpace(fields[0])
+	phase := domain.InitiativePhase(strings.TrimSpace(fields[1]))
+	item, err := b.postgres.GetInitiative(ctx, initiativeID)
+	if err != nil {
+		return "Error leyendo iniciativa: " + err.Error()
+	}
+	if item == nil {
+		return "Iniciativa no encontrada."
+	}
+	if !domain.IsRecognizedInitiativePhase(phase) {
+		return "Fase inválida."
+	}
+	activeMarkdownID, activeJSONID := activeArtifactIDsForPhase(item, phase)
+	decision := domain.InitiativeReviewRejected
+	if approve {
+		decision = domain.InitiativeReviewApproved
+	}
+	if strings.TrimSpace(operator) == "" {
+		operator = "telegram"
+	}
+	if _, err := b.postgres.CreateInitiativePhaseReview(ctx, store.CreateInitiativePhaseReviewParams{
+		InitiativeID:       item.ID,
+		Phase:              phase,
+		Decision:           decision,
+		GeneratedBy:        &operator,
+		ArtifactMarkdownID: activeMarkdownID,
+		ArtifactJSONID:     activeJSONID,
+	}); err != nil {
+		return "Error registrando review de fase: " + err.Error()
+	}
+	var nextStatus domain.InitiativeStatus
+	var nextPhase domain.InitiativePhase
+	if approve {
+		switch phase {
+		case domain.InitiativePhaseRequirements:
+			nextStatus = domain.InitiativeStatusDesignDraft
+			nextPhase = domain.InitiativePhaseDesign
+		case domain.InitiativePhaseDesign:
+			nextStatus = domain.InitiativeStatusPlanDraft
+			nextPhase = domain.InitiativePhasePlan
+		case domain.InitiativePhasePlan:
+			nextStatus = domain.InitiativeStatusExecutionReady
+			nextPhase = domain.InitiativePhaseExecution
+		default:
+			return "Fase no aprobable."
+		}
+	} else {
+		switch phase {
+		case domain.InitiativePhaseRequirements:
+			nextStatus = domain.InitiativeStatusRequirementsDraft
+			nextPhase = domain.InitiativePhaseRequirements
+		case domain.InitiativePhaseDesign:
+			nextStatus = domain.InitiativeStatusDesignDraft
+			nextPhase = domain.InitiativePhaseDesign
+		case domain.InitiativePhasePlan:
+			nextStatus = domain.InitiativeStatusPlanDraft
+			nextPhase = domain.InitiativePhasePlan
+		default:
+			return "Fase no rechazable."
+		}
+	}
+	if _, err := b.postgres.UpdateInitiative(ctx, item.ID, store.UpdateInitiativeParams{
+		Status:       &nextStatus,
+		CurrentPhase: &nextPhase,
+	}); err != nil {
+		return "Error actualizando iniciativa: " + err.Error()
+	}
+	if approve {
+		return fmt.Sprintf("Phase approved\n- Initiative: %s\n- Next: %s", item.ID, nextStatus)
+	}
+	return fmt.Sprintf("Phase rejected\n- Initiative: %s\n- Back to: %s", item.ID, nextStatus)
+}
+
+func (b *Bot) cmdInitiativeTasks(ctx context.Context, initiativeID string) string {
+	initiativeID = strings.TrimSpace(initiativeID)
+	if initiativeID == "" {
+		return "Uso: /initiative_tasks <initiative_id>"
+	}
+	items, err := b.postgres.ListInitiativeTasks(ctx, initiativeID)
+	if err != nil {
+		return "Error leyendo tareas de iniciativa: " + err.Error()
+	}
+	if len(items) == 0 {
+		return "La iniciativa no tiene tareas generadas."
+	}
+	lines := []string{"Initiative tasks"}
+	for _, item := range items {
+		lines = append(lines, fmt.Sprintf("- %s | %s | %s | %s", item.TaskID, item.Task.State, item.ExecutionMode, item.Task.Description))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (b *Bot) cmdLaunchInitiativeTasks(ctx context.Context, initiativeID string) string {
+	initiativeID = strings.TrimSpace(initiativeID)
+	if initiativeID == "" {
+		return "Uso: /launch_tasks <initiative_id>"
+	}
+	item, err := b.postgres.GetInitiative(ctx, initiativeID)
+	if err != nil {
+		return "Error leyendo iniciativa: " + err.Error()
+	}
+	if item == nil {
+		return "Iniciativa no encontrada."
+	}
+	links, err := b.postgres.ListInitiativeTasks(ctx, initiativeID)
+	if err != nil {
+		return "Error leyendo tareas de iniciativa: " + err.Error()
+	}
+	launched := 0
+	for _, link := range links {
+		if strings.TrimSpace(link.ExecutionMode) == domain.TaskLaunchModeManual {
+			continue
+		}
+		if err := b.postgres.UpdateTaskLaunchMode(ctx, link.TaskID, link.ExecutionMode); err != nil {
+			return "Error preparando tarea: " + err.Error()
+		}
+		task, err := b.postgres.QueueTaskForLaunch(ctx, link.TaskID, "telegram:initiative_launch", "Queued from Telegram")
+		if err != nil {
+			return "Error lanzando tarea: " + err.Error()
+		}
+		if task.ExecutionTarget != domain.ExecutionTargetLocal && task.AssignedAgent != nil {
+			if err := b.redis.EnqueueTask(ctx, task.ID, *task.AssignedAgent, task.Priority); err != nil {
+				return "Error encolando tarea remota: " + err.Error()
+			}
+		}
+		launched++
+	}
+	status := domain.InitiativeStatusExecuting
+	nextPhase := domain.InitiativePhaseExecution
+	if _, err := b.postgres.UpdateInitiative(ctx, initiativeID, store.UpdateInitiativeParams{Status: &status, CurrentPhase: &nextPhase}); err != nil {
+		return "Error actualizando iniciativa: " + err.Error()
+	}
+	return fmt.Sprintf("Initiative launch queued\n- Initiative: %s\n- Tasks launched: %d", initiativeID, launched)
+}
+
+func (b *Bot) resolveWorkspaceAlias(ctx context.Context, alias string) (string, error) {
+	alias = strings.TrimSpace(alias)
+	switch alias {
+	case "remote", "server":
+		return strings.TrimSpace(b.cfg.WorkspaceRoot), nil
+	}
+	if strings.HasPrefix(alias, "/") {
+		return alias, nil
+	}
+	bridges, err := b.postgres.ListLocalBridges(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, item := range bridges {
+		if alias == item.Name || alias == item.ID || alias == "local" {
+			return item.WorkspaceRoot, nil
+		}
+	}
+	return "", fmt.Errorf("workspace alias %q not found", alias)
 }
 
 func (b *Bot) cmdApprovals(ctx context.Context) string {
@@ -648,6 +948,28 @@ func trimForButton(text string, max int) string {
 	return text[:max-3] + "..."
 }
 
+func activeArtifactIDsForPhase(item *domain.InitiativeResponse, phase domain.InitiativePhase) (*string, *string) {
+	switch phase {
+	case domain.InitiativePhaseRequirements:
+		return item.ActiveRequirementsArtifactID, item.ActiveRequirementsArtifactID
+	case domain.InitiativePhaseDesign:
+		return item.ActiveDesignArtifactID, item.ActiveDesignArtifactID
+	case domain.InitiativePhasePlan:
+		return item.ActivePlanArtifactID, item.ActivePlanArtifactID
+	default:
+		return nil, nil
+	}
+}
+
+func isPhaseReviewStatus(status domain.InitiativeStatus) bool {
+	switch status {
+	case domain.InitiativeStatusRequirementsReview, domain.InitiativeStatusDesignReview, domain.InitiativeStatusPlanReview:
+		return true
+	default:
+		return false
+	}
+}
+
 func parseCommand(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" || !strings.HasPrefix(text, "/") {
@@ -670,6 +992,25 @@ func (b *Bot) handleCallback(ctx context.Context, query *callbackQuery) error {
 	}
 	var reply string
 	switch {
+	case strings.HasPrefix(data, "initiative:"):
+		if err := b.sendInitiativeDetail(ctx, query.Message.Chat.ID, strings.TrimSpace(strings.TrimPrefix(data, "initiative:"))); err != nil {
+			return err
+		}
+		return b.answerCallbackQuery(ctx, query.ID, "Cargada")
+	case strings.HasPrefix(data, "phaseapprove:"):
+		parts := strings.Split(strings.TrimSpace(strings.TrimPrefix(data, "phaseapprove:")), ":")
+		if len(parts) == 2 {
+			reply = b.cmdResolveInitiativePhase(ctx, parts[0]+" "+parts[1], true, query.From.Username)
+		}
+	case strings.HasPrefix(data, "phasereject:"):
+		parts := strings.Split(strings.TrimSpace(strings.TrimPrefix(data, "phasereject:")), ":")
+		if len(parts) == 2 {
+			reply = b.cmdResolveInitiativePhase(ctx, parts[0]+" "+parts[1], false, query.From.Username)
+		}
+	case strings.HasPrefix(data, "launchinitiative:"):
+		reply = b.cmdLaunchInitiativeTasks(ctx, strings.TrimSpace(strings.TrimPrefix(data, "launchinitiative:")))
+	case strings.HasPrefix(data, "initiative_tasks:"):
+		reply = b.cmdInitiativeTasks(ctx, strings.TrimSpace(strings.TrimPrefix(data, "initiative_tasks:")))
 	case strings.HasPrefix(data, "task:"):
 		reply = b.cmdTask(ctx, strings.TrimSpace(strings.TrimPrefix(data, "task:")))
 	case strings.HasPrefix(data, "approve:"):
@@ -691,6 +1032,9 @@ func (b *Bot) reconcileRootTask(ctx context.Context, taskID string) {
 	task, err := b.postgres.GetTask(ctx, taskID)
 	if err != nil || task == nil {
 		return
+	}
+	if task.InitiativeID != nil && strings.TrimSpace(*task.InitiativeID) != "" {
+		_, _ = b.postgres.ReconcileInitiativeExecution(ctx, strings.TrimSpace(*task.InitiativeID))
 	}
 	rootID := task.ID
 	if task.RootTaskID != nil && strings.TrimSpace(*task.RootTaskID) != "" {

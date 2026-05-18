@@ -82,6 +82,10 @@ class Task(Base):
         Enum(AgentType, name="agenttype", values_callable=lambda e: [x.value for x in e]),
         nullable=True,
     )
+    planned_agent: Mapped[str | None] = mapped_column(
+        Enum(AgentType, name="agenttype", values_callable=lambda e: [x.value for x in e]),
+        nullable=True,
+    )
     priority: Mapped[str] = mapped_column(
         Enum(Priority, name="priority", values_callable=lambda e: [x.value for x in e]),
         nullable=False,
@@ -95,6 +99,11 @@ class Task(Base):
         ),
         nullable=False,
         default=ExecutionTarget.REMOTE,
+    )
+    initiative_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("initiatives.id", ondelete="SET NULL"),
+        nullable=True,
     )
     workspace_path: Mapped[str | None] = mapped_column(
         String(512), nullable=True
@@ -145,6 +154,7 @@ class Task(Base):
     artifacts: Mapped[list["Artifact"]] = relationship(
         "Artifact", back_populates="task", cascade="all, delete-orphan"
     )
+    initiative: Mapped["Initiative | None"] = relationship("Initiative", back_populates="tasks")
     parent_task: Mapped["Task | None"] = relationship(
         "Task",
         remote_side="Task.id",
@@ -169,6 +179,7 @@ class Task(Base):
         Index("ix_tasks_parent_task_id", "parent_task_id"),
         Index("ix_tasks_root_task_id", "root_task_id"),
         Index("ix_tasks_execution_target_state", "execution_target", "state"),
+        Index("ix_tasks_initiative_id", "initiative_id"),
         # Partial unique index: idempotency_key must be unique when not NULL
         Index(
             "ix_tasks_idempotency_key",
@@ -300,6 +311,85 @@ class AuditLog(Base):
         Index("ix_audit_log_timestamp", "timestamp"),
         Index("ix_audit_log_actor_action", "actor", "action"),
         Index("ix_audit_log_resource", "resource_type", "resource_id"),
+    )
+
+
+class Initiative(Base):
+    """High-level delivery initiative bound to a single workspace."""
+
+    __tablename__ = "initiatives"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    workspace_root: Mapped[str] = mapped_column(Text, nullable=False)
+    goal: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    current_phase: Mapped[str] = mapped_column(String(64), nullable=False)
+    active_requirements_artifact_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    active_design_artifact_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    active_plan_artifact_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="selective")
+    archived_at: Mapped[str | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    tasks: Mapped[list["Task"]] = relationship("Task", back_populates="initiative")
+    phase_reviews: Mapped[list["InitiativePhaseReview"]] = relationship(
+        "InitiativePhaseReview", back_populates="initiative", cascade="all, delete-orphan"
+    )
+    task_links: Mapped[list["InitiativeTaskLink"]] = relationship(
+        "InitiativeTaskLink", back_populates="initiative", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("ix_initiatives_workspace_root", "workspace_root"),
+        Index("ix_initiatives_status_phase", "status", "current_phase"),
+    )
+
+
+class InitiativePhaseReview(Base):
+    """Decision log for initiative requirements, design, and plan phases."""
+
+    __tablename__ = "initiative_phase_reviews"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    initiative_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("initiatives.id", ondelete="CASCADE"), nullable=False)
+    phase: Mapped[str] = mapped_column(String(32), nullable=False)
+    decision: Mapped[str] = mapped_column(String(32), nullable=False)
+    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    generated_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    artifact_markdown_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    artifact_json_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    initiative: Mapped["Initiative"] = relationship("Initiative", back_populates="phase_reviews")
+
+    __table_args__ = (
+        Index("ix_initiative_phase_reviews_initiative_phase", "initiative_id", "phase", "created_at"),
+    )
+
+
+class InitiativeTaskLink(Base):
+    """Link table between initiatives and generated execution tasks."""
+
+    __tablename__ = "initiative_task_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    initiative_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("initiatives.id", ondelete="CASCADE"), nullable=False)
+    task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False)
+    phase_origin: Mapped[str] = mapped_column(String(32), nullable=False)
+    epic: Mapped[str | None] = mapped_column(Text, nullable=True)
+    launch_group: Mapped[str | None] = mapped_column(Text, nullable=True)
+    execution_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="agent_local")
+    launch_order: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
+    created_at: Mapped[str] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    initiative: Mapped["Initiative"] = relationship("Initiative", back_populates="task_links")
+    task: Mapped["Task"] = relationship("Task")
+
+    __table_args__ = (
+        Index("ix_initiative_task_links_initiative_launch_order", "initiative_id", "launch_order"),
     )
 
 

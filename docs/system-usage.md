@@ -15,7 +15,7 @@ There are four practical ways to use the system:
 4. `Capability Layer`
    Best when you need web search, URL fetch, document parsing, or image analysis with traceable artifacts.
 5. `Local Bridge + TUI`
-   Best when you want the orchestrator to execute work inside a real workspace on the control machine.
+   Best when you want to manage initiatives and execute approved work inside a real workspace on the control machine.
 
 There is also a fourth entry point if you enjoy pain: editing production `site-packages`. Do not use that one.
 
@@ -27,7 +27,7 @@ There is also a fourth entry point if you enjoy pain: editing production `site-p
 | Open WebUI | `https://<chat_domain>` | browser chat UI |
 | Orchestrator API | `https://<cockpit_domain>/orchestrator/` | HTTP control plane |
 | Capability Layer | API + Telegram + `orchestrator-tools` model | web, documents, images, traceable sources |
-| Local Bridge + TUI | `lab-agent`, `lab-agentd`, `lab-agent tui` | local execution and project scaffolding |
+| Local Bridge + TUI | `lab-agent`, `lab-agentd`, `lab-agent tui` | initiative governance, local execution, and project scaffolding |
 | Direct health | `http://127.0.0.1:8100/health` | local health check on the host |
 | Metrics | `http://127.0.0.1:8100/metrics` | Prometheus scrape target |
 
@@ -41,7 +41,8 @@ Use this sequence if you want signal without ceremony:
 4. Launch autonomous work with `/run` or `/plan` from Telegram.
 5. Use Telegram approvals when a task is gated.
 6. Use the capability endpoints or commands when you need context from the web, documents, or images.
-7. Use the local bridge when the work must touch a real workspace on your machine instead of the remote runtime workspace.
+7. Use the local bridge and TUI when the work must touch a real workspace on your machine instead of the remote runtime workspace.
+8. Use initiatives when the work is larger than one task and needs requirements, design, plan, approvals, and selective execution.
 
 ## Telegram
 
@@ -75,6 +76,13 @@ The bot is access-restricted to the Telegram user IDs configured in `LAB_TELEGRA
 | `/server status` | Read-only host summary |
 | `/server services` | Service status snapshot |
 | `/server disk` | Disk usage snapshot |
+| `/initiatives` | List recent initiatives |
+| `/initiative <initiative_id>` | Show initiative summary |
+| `/idea <workspace_alias> <texto>` | Create initiative from an idea |
+| `/approve_phase <initiative_id> <requirements\|design\|plan>` | Approve one initiative phase |
+| `/reject_phase <initiative_id> <requirements\|design\|plan>` | Reject one initiative phase |
+| `/launch_tasks <initiative_id>` | Launch initiative tasks that are not manual |
+| `/initiative_tasks <initiative_id>` | List initiative-linked tasks |
 
 ### Current limitations
 
@@ -140,14 +148,14 @@ Open WebUI is exposed at `https://<chat_domain>` and connected to the local `lla
 | `utility` | lightweight questions, short transformations, cheap helper tasks |
 | `orchestrator-tools` | research mode with web, documents and images, returning direct answers with source refs |
 
-## Local Bridge and TUI
+## Local Bridge, TUI, and Initiatives
 
 The validated local execution flow is no longer theoretical:
 
-1. `lab-agent tui` creates a root `planner` task
-2. the orchestrator expands it into `researcher`, `coder`, and `reviewer` subtasks
-3. `lab-agentd` executes those subtasks in the registered local workspace
-4. the root task completes only when the full local flow completes
+1. `lab-agent tui` creates an `initiative` or launches initiative-linked planned work
+2. the orchestrator generates phase artifacts and, after approval, a task backlog
+3. `lab-agentd` executes selected `agent_local` tasks in the registered local workspace
+4. the initiative only advances to execution and completion when the approved local flow completes
 
 Use this when you want real files on disk, not just remote worker output.
 
@@ -157,6 +165,30 @@ Important operational note:
 - when bridge behavior changes, rebuild the local macOS/Linux agent binaries before testing
 
 Full bridge install and TUI usage lives in [Local Bridge and CLI](./local-bridge.md).
+
+## Initiative API
+
+Use initiatives when one task is too small a unit and you need governed progression:
+
+1. idea
+2. requirements
+3. design
+4. plan
+5. selective execution
+
+Main endpoints:
+
+- `POST /initiatives`
+- `GET /initiatives`
+- `GET /initiatives/{id}`
+- `GET /initiatives/{id}/artifacts`
+- `POST /initiatives/{id}/advance`
+- `POST /initiatives/{id}/approve/{phase}`
+- `POST /initiatives/{id}/reject/{phase}`
+- `POST /initiatives/{id}/tasks/generate`
+- `GET /initiatives/{id}/tasks`
+- `POST /initiatives/{id}/tasks/{task_id}/mode`
+- `POST /initiatives/{id}/tasks/launch`
 
 ## Orchestrator HTTP API
 

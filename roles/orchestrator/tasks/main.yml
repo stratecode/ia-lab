@@ -171,7 +171,58 @@
           - |
             ALTER TABLE tasks
               ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ NULL;
+            ALTER TABLE tasks
+              ADD COLUMN IF NOT EXISTS initiative_id UUID NULL;
+            ALTER TABLE tasks
+              ADD COLUMN IF NOT EXISTS planned_agent agenttype NULL;
             CREATE INDEX IF NOT EXISTS ix_tasks_archived_at ON tasks (archived_at);
+            CREATE INDEX IF NOT EXISTS ix_tasks_initiative_id ON tasks (initiative_id);
+
+            CREATE TABLE IF NOT EXISTS initiatives (
+              id UUID PRIMARY KEY,
+              title TEXT NOT NULL,
+              workspace_root TEXT NOT NULL,
+              goal TEXT NOT NULL,
+              status TEXT NOT NULL,
+              current_phase TEXT NOT NULL,
+              active_requirements_artifact_id UUID NULL,
+              active_design_artifact_id UUID NULL,
+              active_plan_artifact_id UUID NULL,
+              created_by TEXT NOT NULL,
+              execution_mode TEXT NOT NULL,
+              archived_at TIMESTAMPTZ NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS ix_initiatives_workspace_root ON initiatives (workspace_root);
+            CREATE INDEX IF NOT EXISTS ix_initiatives_status_phase ON initiatives (status, current_phase);
+
+            CREATE TABLE IF NOT EXISTS initiative_phase_reviews (
+              id UUID PRIMARY KEY,
+              initiative_id UUID NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE,
+              phase TEXT NOT NULL,
+              decision TEXT NOT NULL,
+              feedback TEXT NULL,
+              generated_by TEXT NULL,
+              artifact_markdown_id UUID NULL,
+              artifact_json_id UUID NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS ix_initiative_phase_reviews_initiative_phase ON initiative_phase_reviews (initiative_id, phase, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS initiative_task_links (
+              id UUID PRIMARY KEY,
+              initiative_id UUID NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE,
+              task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+              phase_origin TEXT NOT NULL,
+              epic TEXT NULL,
+              launch_group TEXT NULL,
+              execution_mode TEXT NOT NULL,
+              launch_order INTEGER NOT NULL DEFAULT 10,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              UNIQUE (initiative_id, task_id)
+            );
+            CREATE INDEX IF NOT EXISTS ix_initiative_task_links_initiative_launch_order ON initiative_task_links (initiative_id, launch_order);
       register: orchestrator_schema_patch
       changed_when: false
 

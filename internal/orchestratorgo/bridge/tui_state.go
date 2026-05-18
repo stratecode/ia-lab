@@ -13,6 +13,7 @@ type TUIState struct {
 	ShowCompleted  bool              `json:"show_completed"`
 	ShowArchived   bool              `json:"show_archived"`
 	RecentProjects []RecentProject   `json:"recent_projects"`
+	RecentInitiatives []RecentInitiative `json:"recent_initiatives"`
 	WizardPresets  map[string]string `json:"wizard_presets"`
 }
 
@@ -23,6 +24,14 @@ type RecentProject struct {
 	RuntimeOrStack  string `json:"runtime_or_stack"`
 	TaskID          string `json:"task_id"`
 	CreatedAt       string `json:"created_at"`
+}
+
+type RecentInitiative struct {
+	ID            string `json:"id"`
+	Title         string `json:"title"`
+	WorkspaceRoot string `json:"workspace_root"`
+	Status        string `json:"status"`
+	CreatedAt     string `json:"created_at"`
 }
 
 type TUIStateStore struct {
@@ -73,6 +82,7 @@ func defaultTUIState() TUIState {
 		ShowCompleted:  false,
 		ShowArchived:   false,
 		RecentProjects: []RecentProject{},
+		RecentInitiatives: []RecentInitiative{},
 		WizardPresets:  map[string]string{},
 	}
 }
@@ -85,10 +95,16 @@ func normalizeTUIState(state *TUIState) {
 	if state.RecentProjects == nil {
 		state.RecentProjects = []RecentProject{}
 	}
+	if state.RecentInitiatives == nil {
+		state.RecentInitiatives = []RecentInitiative{}
+	}
 	if state.WizardPresets == nil {
 		state.WizardPresets = map[string]string{}
 	}
 	if len(state.RecentProjects) > 8 {
 		state.RecentProjects = state.RecentProjects[:8]
+	}
+	if len(state.RecentInitiatives) > 8 {
+		state.RecentInitiatives = state.RecentInitiatives[:8]
 	}
 }

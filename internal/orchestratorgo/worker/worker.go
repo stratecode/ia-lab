@@ -363,6 +363,9 @@ func (w *RuntimeWorker) reconcileRootTask(ctx context.Context, taskID string) {
 	if err != nil || task == nil {
 		return
 	}
+	if task.InitiativeID != nil && strings.TrimSpace(*task.InitiativeID) != "" {
+		_, _ = w.postgres.ReconcileInitiativeExecution(ctx, strings.TrimSpace(*task.InitiativeID))
+	}
 	rootID := task.ID
 	if task.RootTaskID != nil && strings.TrimSpace(*task.RootTaskID) != "" {
 		rootID = strings.TrimSpace(*task.RootTaskID)

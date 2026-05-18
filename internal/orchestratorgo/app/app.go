@@ -10,6 +10,7 @@ import (
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
 	"github.com/stratecode/lab/internal/orchestratorgo/httpapi"
+	"github.com/stratecode/lab/internal/orchestratorgo/initiative"
 	"github.com/stratecode/lab/internal/orchestratorgo/logging"
 	"github.com/stratecode/lab/internal/orchestratorgo/research"
 	"github.com/stratecode/lab/internal/orchestratorgo/store"
@@ -65,6 +66,7 @@ func New() (*Runtime, error) {
 		UtilityAPIKey:        cfg.LlamaUtilityAPIKey,
 		UtilityTimeoutSeconds: cfg.LlamaTimeoutSeconds,
 	})
+	initiativeService := initiative.New(cfg, researchService)
 	runtimeWorker := worker.New(cfg, postgres, redisStore, researchService)
 	safeMode := httpapi.NewSafeModeState(cfg.SafeMode)
 	server := &httpapi.Server{
@@ -72,6 +74,7 @@ func New() (*Runtime, error) {
 		Postgres:      postgres,
 		Redis:         redisStore,
 		Research:      researchService,
+		Initiatives:   initiativeService,
 		Capabilities:  capabilityClient,
 		SafeMode:      safeMode,
 		Now:           time.Now,
@@ -92,7 +95,7 @@ func New() (*Runtime, error) {
 		postgres.Close()
 		return nil, err
 	}
-	bot := telegram.New(cfg, postgres, redisStore, researchService, capabilityClient, safeMode)
+	bot := telegram.New(cfg, postgres, redisStore, researchService, initiativeService, capabilityClient, safeMode)
 	if err := bot.Start(backgroundCtx); err != nil {
 		runtimeWorker.Stop()
 		_ = redisStore.Close()

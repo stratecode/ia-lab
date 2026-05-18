@@ -21,6 +21,7 @@ import (
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
+	"github.com/stratecode/lab/internal/orchestratorgo/initiative"
 	"github.com/stratecode/lab/internal/orchestratorgo/research"
 	"github.com/stratecode/lab/internal/orchestratorgo/store"
 )
@@ -30,6 +31,7 @@ type Server struct {
 	Postgres      *store.PostgresStore
 	Redis         *store.RedisStore
 	Research      *research.Service
+	Initiatives   *initiative.Service
 	Capabilities  *capabilities.Client
 	SafeMode      *SafeModeState
 	Now           func() time.Time
@@ -75,6 +77,19 @@ func (s *Server) Router(auth *Authenticator) http.Handler {
 	r.Post("/config/safe-mode", s.toggleSafeMode)
 	r.Post("/workspaces/cleanup", s.cleanupWorkspaces)
 	r.Get("/capabilities", s.listCapabilities)
+	r.Route("/initiatives", func(r chi.Router) {
+		r.Get("/", s.listInitiatives)
+		r.Post("/", s.createInitiative)
+		r.Get("/{initiativeID}", s.getInitiative)
+		r.Get("/{initiativeID}/artifacts", s.getInitiativeArtifacts)
+		r.Get("/{initiativeID}/tasks", s.listInitiativeTasks)
+		r.Post("/{initiativeID}/advance", s.advanceInitiative)
+		r.Post("/{initiativeID}/approve/{phase}", s.approveInitiativePhase)
+		r.Post("/{initiativeID}/reject/{phase}", s.rejectInitiativePhase)
+		r.Post("/{initiativeID}/tasks/generate", s.generateInitiativeTasks)
+		r.Post("/{initiativeID}/tasks/launch", s.launchInitiativeTasks)
+		r.Post("/{initiativeID}/tasks/{taskID}/mode", s.updateInitiativeTaskMode)
+	})
 	r.Post("/tools/web/search", s.webSearch)
 	r.Post("/tools/web/fetch", s.webFetch)
 	r.Post("/tools/documents/read", s.documentRead)
@@ -191,6 +206,7 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 		Agent:           domain.AgentType(r.URL.Query().Get("agent")),
 		Priority:        domain.Priority(r.URL.Query().Get("priority")),
 		ExecutionTarget: domain.ExecutionTarget(r.URL.Query().Get("execution_target")),
+		InitiativeID:    r.URL.Query().Get("initiative_id"),
 		IncludeArchived: strings.EqualFold(r.URL.Query().Get("archived"), "include"),
 		OnlyArchived:    strings.EqualFold(r.URL.Query().Get("archived"), "only"),
 		ParentTaskID:    r.URL.Query().Get("parent_task_id"),
@@ -251,8 +267,8 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agentType := classifyAgent(body.Description, body.AssignedAgent)
-	if agentType != domain.AgentTypePlanner && agentType != domain.AgentTypeCoder {
-		writeDetail(w, http.StatusBadRequest, "Current Go runtime only supports planner and coder")
+	if !isSupportedAgent(agentType) {
+		writeDetail(w, http.StatusBadRequest, "Current Go runtime only supports planner, researcher, coder and reviewer")
 		return
 	}
 
@@ -309,10 +325,12 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		AllowedCapabilities: body.AllowedCapabilities,
 		Priority:            body.Priority,
 		AssignedAgent:       agentType,
+		PlannedAgent:        body.PlannedAgent,
 		ExecutionTarget:     body.ExecutionTarget,
 		IdempotencyKey:      idempotencyPtr,
 		Entrypoint:          "api",
 		WorkspacePath:       workspacePath,
+		InitiativeID:        body.InitiativeID,
 		QueueOnCreate:       true,
 	})
 	if err != nil {
@@ -1757,6 +1775,9 @@ func (s *Server) reconcileRootTask(ctx context.Context, taskID string) {
 	if err != nil || task == nil {
 		return
 	}
+	if task.InitiativeID != nil && strings.TrimSpace(*task.InitiativeID) != "" {
+		_, _ = s.Postgres.ReconcileInitiativeExecution(ctx, strings.TrimSpace(*task.InitiativeID))
+	}
 	rootID := task.ID
 	if task.RootTaskID != nil && strings.TrimSpace(*task.RootTaskID) != "" {
 		rootID = strings.TrimSpace(*task.RootTaskID)
@@ -1800,6 +1821,15 @@ func (s *Server) reconcileRootTask(ctx context.Context, taskID string) {
 	}
 	if allCompleted && root.State != domain.TaskStateCompleted {
 		_, _ = s.Postgres.CompleteTask(ctx, root.ID, "api:aggregate", "All subtasks completed", root.Results)
+	}
+}
+
+func isSupportedAgent(agent domain.AgentType) bool {
+	switch agent {
+	case domain.AgentTypePlanner, domain.AgentTypeResearcher, domain.AgentTypeCoder, domain.AgentTypeReviewer:
+		return true
+	default:
+		return false
 	}
 }
 

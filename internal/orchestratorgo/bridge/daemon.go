@@ -120,7 +120,19 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 func bridgeCapabilities() map[string]any {
 	return map[string]any{
-		"tools": []string{"read_file", "list_files", "write_file", "apply_patch", "run_command", "git_status", "git_diff", "run_tests"},
+		"tools": []string{
+			"read_file",
+			"list_files",
+			"write_file",
+			"research_project",
+			"scaffold_project",
+			"review_project",
+			"apply_patch",
+			"run_command",
+			"git_status",
+			"git_diff",
+			"run_tests",
+		},
 	}
 }
 

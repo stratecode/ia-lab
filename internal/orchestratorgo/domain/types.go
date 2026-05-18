@@ -84,8 +84,10 @@ type TaskResponse struct {
 	RootTaskID          *string         `json:"root_task_id"`
 	TaskKind            TaskKind        `json:"task_kind"`
 	AssignedAgent       *AgentType      `json:"assigned_agent"`
+	PlannedAgent        *AgentType      `json:"planned_agent"`
 	Priority            Priority        `json:"priority"`
 	ExecutionTarget     ExecutionTarget `json:"execution_target"`
+	InitiativeID        *string         `json:"initiative_id"`
 	WorkspacePath       *string         `json:"workspace_path"`
 	RetryCount          int             `json:"retry_count"`
 	CorrelationID       string          `json:"correlation_id"`
@@ -105,6 +107,8 @@ type TaskCreateRequest struct {
 	Priority            Priority        `json:"priority"`
 	AssignedAgent       *AgentType      `json:"assigned_agent"`
 	ExecutionTarget     ExecutionTarget `json:"execution_target"`
+	InitiativeID        *string         `json:"initiative_id,omitempty"`
+	PlannedAgent        *AgentType      `json:"planned_agent,omitempty"`
 }
 
 type TaskUpdateRequest struct {

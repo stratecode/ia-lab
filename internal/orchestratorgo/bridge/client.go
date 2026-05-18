@@ -173,6 +173,120 @@ func (c *Client) ListApprovals(ctx context.Context) (*domain.ApprovalListRespons
 	return &out, nil
 }
 
+func (c *Client) ListInitiatives(ctx context.Context, includeArchived bool) (*domain.InitiativeListResponse, error) {
+	path := "/initiatives?limit=100"
+	if includeArchived {
+		path += "&archived=include"
+	}
+	var out domain.InitiativeListResponse
+	if err := c.requestJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateInitiative(ctx context.Context, body domain.InitiativeCreateRequest) (*domain.InitiativeResponse, error) {
+	var out domain.InitiativeResponse
+	if err := c.requestJSON(ctx, http.MethodPost, "/initiatives", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) GetInitiative(ctx context.Context, initiativeID string) (*domain.InitiativeResponse, []domain.InitiativePhaseReviewResponse, error) {
+	var out struct {
+		Initiative *domain.InitiativeResponse          `json:"initiative"`
+		Reviews    []domain.InitiativePhaseReviewResponse `json:"reviews"`
+	}
+	if err := c.requestJSON(ctx, http.MethodGet, "/initiatives/"+strings.TrimSpace(initiativeID), nil, &out); err != nil {
+		return nil, nil, err
+	}
+	return out.Initiative, out.Reviews, nil
+}
+
+func (c *Client) GetInitiativeArtifacts(ctx context.Context, initiativeID string) ([]domain.ArtifactResponse, error) {
+	var out domain.InitiativeArtifactsResponse
+	if err := c.requestJSON(ctx, http.MethodGet, "/initiatives/"+strings.TrimSpace(initiativeID)+"/artifacts", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Items, nil
+}
+
+func (c *Client) ListInitiativeTasks(ctx context.Context, initiativeID string) (*domain.InitiativeTaskListResponse, error) {
+	var out domain.InitiativeTaskListResponse
+	if err := c.requestJSON(ctx, http.MethodGet, "/initiatives/"+strings.TrimSpace(initiativeID)+"/tasks", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) AdvanceInitiative(ctx context.Context, initiativeID, feedback string) (*domain.InitiativeResponse, error) {
+	var out struct {
+		Initiative *domain.InitiativeResponse `json:"initiative"`
+	}
+	if err := c.requestJSON(ctx, http.MethodPost, "/initiatives/"+strings.TrimSpace(initiativeID)+"/advance", domain.InitiativeAdvanceRequest{Feedback: strings.TrimSpace(feedback)}, &out); err != nil {
+		return nil, err
+	}
+	return out.Initiative, nil
+}
+
+func (c *Client) ApproveInitiativePhase(ctx context.Context, initiativeID string, phase domain.InitiativePhase, operator, feedback string) (*domain.InitiativeResponse, error) {
+	var out domain.InitiativeResponse
+	path := fmt.Sprintf("/initiatives/%s/approve/%s", strings.TrimSpace(initiativeID), strings.TrimSpace(string(phase)))
+	if err := c.requestJSON(ctx, http.MethodPost, path, domain.InitiativeReviewRequest{Operator: strings.TrimSpace(operator), Feedback: strings.TrimSpace(feedback)}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) RejectInitiativePhase(ctx context.Context, initiativeID string, phase domain.InitiativePhase, operator, feedback string) (*domain.InitiativeResponse, error) {
+	var out domain.InitiativeResponse
+	path := fmt.Sprintf("/initiatives/%s/reject/%s", strings.TrimSpace(initiativeID), strings.TrimSpace(string(phase)))
+	if err := c.requestJSON(ctx, http.MethodPost, path, domain.InitiativeReviewRequest{Operator: strings.TrimSpace(operator), Feedback: strings.TrimSpace(feedback)}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) GenerateInitiativeTasks(ctx context.Context, initiativeID, feedback string) (*domain.InitiativeResponse, *domain.InitiativeTaskListResponse, error) {
+	var out struct {
+		Initiative *domain.InitiativeResponse   `json:"initiative"`
+		Tasks      []domain.InitiativeTaskLinkResponse `json:"tasks"`
+		Total      int                          `json:"total"`
+	}
+	path := fmt.Sprintf("/initiatives/%s/tasks/generate", strings.TrimSpace(initiativeID))
+	if err := c.requestJSON(ctx, http.MethodPost, path, domain.InitiativeAdvanceRequest{Feedback: strings.TrimSpace(feedback)}, &out); err != nil {
+		return nil, nil, err
+	}
+	return out.Initiative, &domain.InitiativeTaskListResponse{Items: out.Tasks, Total: out.Total}, nil
+}
+
+func (c *Client) LaunchInitiativeTasks(ctx context.Context, initiativeID string, taskIDs []string, groups []string, modeOverrides map[string]string) (*domain.InitiativeResponse, *domain.TaskListResponse, error) {
+	var out struct {
+		Initiative *domain.InitiativeResponse `json:"initiative"`
+		Tasks      []domain.TaskResponse      `json:"tasks"`
+		Total      int                        `json:"total"`
+	}
+	path := fmt.Sprintf("/initiatives/%s/tasks/launch", strings.TrimSpace(initiativeID))
+	if err := c.requestJSON(ctx, http.MethodPost, path, domain.InitiativeLaunchTasksRequest{
+		TaskIDs:       taskIDs,
+		Groups:        groups,
+		ModeOverrides: modeOverrides,
+	}, &out); err != nil {
+		return nil, nil, err
+	}
+	return out.Initiative, &domain.TaskListResponse{Items: out.Tasks, Total: out.Total}, nil
+}
+
+func (c *Client) UpdateInitiativeTaskMode(ctx context.Context, initiativeID, taskID, mode string) (*domain.InitiativeTaskLinkResponse, error) {
+	var out domain.InitiativeTaskLinkResponse
+	path := fmt.Sprintf("/initiatives/%s/tasks/%s/mode", strings.TrimSpace(initiativeID), strings.TrimSpace(taskID))
+	if err := c.requestJSON(ctx, http.MethodPost, path, domain.InitiativeTaskModeRequest{ExecutionMode: strings.TrimSpace(mode)}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (c *Client) ResolveApproval(ctx context.Context, approvalID, operator string, approve bool) (*domain.ApprovalResponse, error) {
 	path := "/approvals/" + strings.TrimSpace(approvalID)
 	if approve {

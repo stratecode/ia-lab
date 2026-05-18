@@ -83,12 +83,14 @@ type CreateTaskParams struct {
 	AllowedCapabilities []string
 	Priority            domain.Priority
 	AssignedAgent       domain.AgentType
+	PlannedAgent        *domain.AgentType
 	ExecutionTarget     domain.ExecutionTarget
 	IdempotencyKey      *string
 	Entrypoint          string
 	WorkspacePath       *string
 	ParentTaskID        *string
 	RootTaskID          *string
+	InitiativeID        *string
 	TaskKind            domain.TaskKind
 	QueueOnCreate       bool
 }
@@ -132,6 +134,14 @@ func (s *PostgresStore) CreateTask(ctx context.Context, params CreateTaskParams)
 	if params.RootTaskID != nil && strings.TrimSpace(*params.RootTaskID) != "" {
 		rootTaskID = strings.TrimSpace(*params.RootTaskID)
 	}
+	var plannedAgent any
+	if params.PlannedAgent != nil && strings.TrimSpace(string(*params.PlannedAgent)) != "" {
+		plannedAgent = string(*params.PlannedAgent)
+	}
+	var initiativeID any
+	if params.InitiativeID != nil && strings.TrimSpace(*params.InitiativeID) != "" {
+		initiativeID = *params.InitiativeID
+	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, err
@@ -143,12 +153,12 @@ func (s *PostgresStore) CreateTask(ctx context.Context, params CreateTaskParams)
 			id, state, description, metadata, assigned_agent, priority, execution_target,
 			workspace_path, retry_count, max_retries, idempotency_key, correlation_id, results,
 			error_message, created_at, updated_at, started_at, completed_at, queued_at,
-			parent_task_id, root_task_id, task_kind
+			parent_task_id, root_task_id, task_kind, initiative_id, planned_agent
 		) VALUES (
 			$1, $2, $3, $4::jsonb, $5, $6, $7, $8, 0, 3, $9, $10, NULL, NULL,
-			$11, $11, NULL, NULL, NULL, $12, $13, $14
+			$11, $11, NULL, NULL, NULL, $12, $13, $14, $15, $16
 		)
-	`, taskID, string(domain.TaskStateCreated), params.Description, string(metadataRaw), string(params.AssignedAgent), string(params.Priority), string(params.ExecutionTarget), effectiveWorkspacePath, params.IdempotencyKey, correlationID, now, params.ParentTaskID, rootTaskID, string(taskKind)); err != nil {
+	`, taskID, string(domain.TaskStateCreated), params.Description, string(metadataRaw), string(params.AssignedAgent), string(params.Priority), string(params.ExecutionTarget), effectiveWorkspacePath, params.IdempotencyKey, correlationID, now, params.ParentTaskID, rootTaskID, string(taskKind), initiativeID, plannedAgent); err != nil {
 		return nil, err
 	}
 
@@ -244,6 +254,9 @@ func (s *PostgresStore) ListTasks(ctx context.Context, filter TaskListFilter) ([
 	}
 	if filter.ExecutionTarget != "" {
 		clauses = append(clauses, "execution_target = "+nextArg(string(filter.ExecutionTarget)))
+	}
+	if strings.TrimSpace(filter.InitiativeID) != "" {
+		clauses = append(clauses, "initiative_id = "+nextArg(filter.InitiativeID))
 	}
 	if filter.OnlyArchived {
 		clauses = append(clauses, "archived_at IS NOT NULL")
@@ -1216,6 +1229,7 @@ type TaskListFilter struct {
 	Agent           domain.AgentType
 	Priority        domain.Priority
 	ExecutionTarget domain.ExecutionTarget
+	InitiativeID    string
 	IncludeArchived bool
 	OnlyArchived    bool
 	ParentTaskID    string
@@ -1232,8 +1246,8 @@ type ApprovalListFilter struct {
 }
 
 const taskSelectSQL = `
-	SELECT id::text, state::text, description, metadata, assigned_agent::text, priority::text,
-	       execution_target::text, workspace_path, retry_count, correlation_id::text, results,
+	SELECT id::text, state::text, description, metadata, assigned_agent::text, planned_agent::text, priority::text,
+	       execution_target::text, initiative_id::text, workspace_path, retry_count, correlation_id::text, results,
 	       error_message, created_at, updated_at, started_at, completed_at, archived_at,
 	       parent_task_id::text, root_task_id::text, task_kind::text
 	FROM tasks
@@ -1399,7 +1413,9 @@ func scanTask(row taskScanner) (*domain.TaskResponse, error) {
 		metadataRaw     []byte
 		resultsRaw      []byte
 		assignedAgent   *string
+		plannedAgent    *string
 		errorMessage    *string
+		initiativeID    *string
 		workspacePath   *string
 		parentTaskID    *string
 		rootTaskID      *string
@@ -1418,8 +1434,10 @@ func scanTask(row taskScanner) (*domain.TaskResponse, error) {
 		&item.Description,
 		&metadataRaw,
 		&assignedAgent,
+		&plannedAgent,
 		&priority,
 		&executionTarget,
+		&initiativeID,
 		&workspacePath,
 		&item.RetryCount,
 		&correlationID,
@@ -1442,6 +1460,7 @@ func scanTask(row taskScanner) (*domain.TaskResponse, error) {
 	item.ExecutionTarget = domain.ExecutionTarget(executionTarget)
 	item.TaskKind = domain.TaskKind(taskKind)
 	item.CorrelationID = correlationID
+	item.InitiativeID = initiativeID
 	item.WorkspacePath = workspacePath
 	item.ErrorMessage = errorMessage
 	item.ParentTaskID = parentTaskID
@@ -1452,6 +1471,10 @@ func scanTask(row taskScanner) (*domain.TaskResponse, error) {
 	if assignedAgent != nil && *assignedAgent != "" {
 		value := domain.AgentType(*assignedAgent)
 		item.AssignedAgent = &value
+	}
+	if plannedAgent != nil && *plannedAgent != "" {
+		value := domain.AgentType(*plannedAgent)
+		item.PlannedAgent = &value
 	}
 	if len(metadataRaw) > 0 {
 		_ = json.Unmarshal(metadataRaw, &item.Metadata)
