@@ -393,8 +393,9 @@ orchestrator_enabled: "{{ lookup('env', 'LAB_ORCHESTRATOR_ENABLED') | default('t
 orchestrator_user: orchestrator
 orchestrator_group: orchestrator
 orchestrator_root_dir: /srv/ai-lab/orchestrator
-orchestrator_src_dir: /srv/ai-lab/orchestrator/src
-orchestrator_venv_dir: /srv/ai-lab/orchestrator/venv
+orchestrator_runtime_dir: /srv/ai-lab/orchestrator/runtime
+orchestrator_sidecar_root_dir: /srv/ai-lab/orchestrator/sidecars
+orchestrator_sidecar_venv_dir: /srv/ai-lab/orchestrator/sidecars-venv
 orchestrator_workspace_root: /srv/ai-lab/orchestrator/workspaces
 orchestrator_log_dir: /var/log/orchestrator
 orchestrator_config_dir: /etc/orchestrator
@@ -439,7 +440,7 @@ orchestrator_openai_reference_model: "{{ lookup('env', 'LAB_OPENAI_REFERENCE_MOD
 orchestrator_openai_judge_model: "{{ lookup('env', 'LAB_OPENAI_JUDGE_MODEL') | default('gpt-5.4-mini', true) }}"
 orchestrator_openai_base_url: "{{ lookup('env', 'LAB_OPENAI_BASE_URL') | default('https://api.openai.com/v1', true) }}"
 orchestrator_openai_timeout_seconds: "{{ lookup('env', 'LAB_OPENAI_TIMEOUT_SECONDS') | default('45', true) | int }}"
-orchestrator_go_binary_path: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_BINARY_PATH') | default(lookup('env', 'LAB_ORCHESTRATOR_GO_SHADOW_BINARY_PATH') | default(inventory_dir ~ '/dist/orchestrator-go-linux-amd64', true), true) }}"
+orchestrator_go_binary_path: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_BINARY_PATH') | default(inventory_dir ~ '/dist/orchestrator-go-linux-amd64', true) }}"
 orchestrator_go_host: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_HOST') | default(orchestrator_host, true) }}"
 orchestrator_go_port: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_PORT') | default(orchestrator_port, true) | int }}"
 orchestrator_docs_sidecar_host: "{{ lookup('env', 'LAB_CAPABILITIES_DOCS_SIDECAR_HOST') | default('127.0.0.1', true) }}"

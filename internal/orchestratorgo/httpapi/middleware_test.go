@@ -27,3 +27,10 @@ func TestCheckScopeBlocksBotOnAdminPath(t *testing.T) {
 		t.Fatal("expected scope error for bot on admin path")
 	}
 }
+
+func TestCheckScopeBlocksBotOnBridgePath(t *testing.T) {
+	errText := checkScope(domain.ScopeBot, http.MethodPost, "/bridges/register")
+	if errText == "" {
+		t.Fatal("expected scope error for bot on bridge path")
+	}
+}

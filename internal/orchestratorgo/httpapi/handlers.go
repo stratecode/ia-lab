@@ -62,6 +62,13 @@ func (s *Server) Router(auth *Authenticator) http.Handler {
 		r.Post("/{approvalID}/approve", s.approveApproval)
 		r.Post("/{approvalID}/reject", s.rejectApproval)
 	})
+	r.Route("/bridges", func(r chi.Router) {
+		r.Get("/", s.listBridges)
+		r.Post("/register", s.registerBridge)
+		r.Post("/{bridgeID}/heartbeat", s.heartbeatBridge)
+		r.Post("/{bridgeID}/claim-next", s.claimNextBridgeTask)
+		r.Post("/{bridgeID}/tasks/{taskID}/result", s.submitBridgeTaskResult)
+	})
 	r.Get("/workers", s.listWorkers)
 	r.Post("/config/safe-mode", s.toggleSafeMode)
 	r.Post("/workspaces/cleanup", s.cleanupWorkspaces)
@@ -264,25 +271,28 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	totalDepth, err := s.Redis.TotalQueueDepth(r.Context())
-	if err != nil {
-		writeDetail(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if totalDepth >= int64(s.Config.QueueMaxGlobal) {
-		w.Header().Set("Retry-After", "30")
-		writeDetail(w, http.StatusTooManyRequests, "global queue capacity reached")
-		return
-	}
-	agentDepth, err := s.Redis.QueueDepth(r.Context(), agentType)
-	if err != nil {
-		writeDetail(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if agentDepth >= int64(s.Config.QueueMaxPerAgent) {
-		w.Header().Set("Retry-After", "30")
-		writeDetail(w, http.StatusTooManyRequests, "agent queue capacity reached")
-		return
+	shouldEnqueueRedis := body.ExecutionTarget != domain.ExecutionTargetLocal
+	if shouldEnqueueRedis {
+		totalDepth, err := s.Redis.TotalQueueDepth(r.Context())
+		if err != nil {
+			writeDetail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if totalDepth >= int64(s.Config.QueueMaxGlobal) {
+			w.Header().Set("Retry-After", "30")
+			writeDetail(w, http.StatusTooManyRequests, "global queue capacity reached")
+			return
+		}
+		agentDepth, err := s.Redis.QueueDepth(r.Context(), agentType)
+		if err != nil {
+			writeDetail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if agentDepth >= int64(s.Config.QueueMaxPerAgent) {
+			w.Header().Set("Retry-After", "30")
+			writeDetail(w, http.StatusTooManyRequests, "agent queue capacity reached")
+			return
+		}
 	}
 
 	var idempotencyPtr *string
@@ -314,10 +324,12 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.Redis.EnqueueTask(r.Context(), task.ID, agentType, body.Priority); err != nil {
-		_ = s.Postgres.CancelTask(r.Context(), task.ID, "api:create", "queue enqueue failed: "+err.Error())
-		writeDetail(w, http.StatusServiceUnavailable, "failed to enqueue task")
-		return
+	if shouldEnqueueRedis {
+		if err := s.Redis.EnqueueTask(r.Context(), task.ID, agentType, body.Priority); err != nil {
+			_ = s.Postgres.CancelTask(r.Context(), task.ID, "api:create", "queue enqueue failed: "+err.Error())
+			writeDetail(w, http.StatusServiceUnavailable, "failed to enqueue task")
+			return
+		}
 	}
 	updatedTask, err := s.Postgres.GetTask(r.Context(), task.ID)
 	if err != nil || updatedTask == nil {
@@ -553,7 +565,7 @@ func (s *Server) resolveApproval(w http.ResponseWriter, r *http.Request, approve
 		return
 	}
 
-	if approve && task != nil && task.AssignedAgent != nil {
+	if approve && task != nil && task.AssignedAgent != nil && task.ExecutionTarget != domain.ExecutionTargetLocal {
 		if err := s.Redis.EnqueueTask(r.Context(), task.ID, *task.AssignedAgent, task.Priority); err != nil {
 			writeDetail(w, http.StatusServiceUnavailable, "approval resolved but failed to enqueue task")
 			return
@@ -1385,7 +1397,7 @@ func (s *Server) callUtilityChat(ctx context.Context, prompt string) (string, er
 		"model": "utility",
 		"messages": []map[string]string{
 			{
-				"role": "system",
+				"role":    "system",
 				"content": "Responde de forma directa y útil usando conocimiento general estable. No uses ni menciones búsqueda web salvo que el usuario pida explícitamente verificación o fuentes. Si el dato puede haber cambiado recientemente, dilo en una frase breve. No inventes términos ni detalles técnicos; usa terminología estándar y, si no estás seguro de un matiz, admítelo con claridad.",
 			},
 			{
@@ -1784,8 +1796,7 @@ func (s *Server) workspacePath(target domain.ExecutionTarget, metadata map[strin
 		if raw == "" {
 			return nil, errors.New("execution_target=local requires metadata.workspace_root")
 		}
-		value := filepath.Clean(raw)
-		return &value, nil
+		return nil, nil
 	}
 	base := strings.TrimSpace(s.Config.WorkspaceRoot)
 	if base == "" {

@@ -80,7 +80,7 @@ Roles are applied in dependency order:
 | 3 | `wireguard` | WireGuard VPN server + client profiles |
 | 4 | `llama_cpp` | Build llama.cpp with Vulkan, systemd services |
 | 5 | `aider` | Aider task runtime and shell wrappers |
-| 6 | `orchestrator` | FastAPI control plane, PostgreSQL, timers, Telegram bot |
+| 6 | `orchestrator` | Go control plane, PostgreSQL, Python capability sidecars, timers, Telegram bot |
 | 7 | `open_webui` | Chat UI connected to local llama.cpp endpoints |
 | 8 | `monitor` | Cockpit + Nginx reverse proxy + TLS (Let's Encrypt) |
 | 9 | `observability` | Prometheus, Grafana (Docker), Alertmanager, alert rules |
@@ -146,7 +146,7 @@ OpenAI-compatible API (`/v1/chat/completions`, `/v1/completions`).
 
 ## Orchestrator
 
-The platform includes a FastAPI orchestrator on `127.0.0.1:8100` with:
+The platform now runs a Go orchestrator on `127.0.0.1:8100` with:
 
 - PostgreSQL persistence in Docker
 - Redis-backed queue/event bus
@@ -154,8 +154,9 @@ The platform includes a FastAPI orchestrator on `127.0.0.1:8100` with:
 - Telegram bot for status, approvals, model chat, and constrained server ops
 - cleanup and database backup timers
 - Prometheus metrics at `/metrics`
+- Python sidecars only for document and image capabilities
 
-The canonical deployment path is the `orchestrator` role plus the Python package in `src/orchestrator/`. Manual edits in the live `venv` are no longer part of the intended workflow, which is good, because archaeology is not a deployment strategy.
+The canonical deployment path is the `orchestrator` role plus the Go binary built from `cmd/orchestrator-go`. The remaining Python runtime is intentionally narrow and limited to `src/cap_sidecars/` because PDF/DOCX/OCR tooling is still better there than in a performative rewrite.
 
 ## Observability
 
@@ -188,6 +189,7 @@ Sensitive variables in the vault:
 
 - [Getting Started](docs/getting-started.md) — full setup guide from scratch (SSH keys, vault, first run)
 - [System Usage Guide](docs/system-usage.md) — Telegram, Open WebUI, and orchestrator API usage
-- [Orchestrator Go Runtime](docs/orchestrator-go-shadow.md) — Go runtime architecture, build flow, and deployment model
+- [Orchestrator Go Runtime](docs/orchestrator-go-runtime.md) — Go runtime architecture, build flow, and deployment model
+- [Local Bridge and CLI](docs/local-bridge.md) — install, operate, and troubleshoot the local execution bridge
 - [Server Baseline](docs/server-baseline.md) — base configuration details
 - [WireGuard](docs/wireguard.md) — VPN setup and client guide

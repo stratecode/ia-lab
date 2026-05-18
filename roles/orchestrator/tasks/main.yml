@@ -47,9 +47,8 @@
         mode: "{{ item.mode }}"
       loop:
         - { path: "{{ orchestrator_root_dir }}", mode: "0755" }
-        - { path: "{{ orchestrator_root_dir }}/go-shadow", mode: "0755" }
-        - { path: "{{ orchestrator_src_dir }}", mode: "0755" }
-        - { path: "{{ orchestrator_src_dir }}/src", mode: "0755" }
+        - { path: "{{ orchestrator_runtime_dir }}", mode: "0755" }
+        - { path: "{{ orchestrator_sidecar_root_dir }}", mode: "0755" }
         - { path: "{{ orchestrator_workspace_root }}", mode: "0755" }
         - { path: "{{ orchestrator_log_dir }}", mode: "0755" }
         - { path: "{{ orchestrator_config_dir }}", owner: "root", mode: "0750" }
@@ -59,39 +58,21 @@
         - { path: "/var/snap/prometheus/common/file_sd", owner: "root", group: "root", mode: "0755" }
         - { path: "/var/lib/prometheus/node-exporter", owner: "root", group: "root", mode: "0755" }
 
-    - name: Install orchestrator pyproject
+    - name: Install sidecar requirements manifest
       ansible.builtin.copy:
-        src: "{{ inventory_dir }}/pyproject.toml"
-        dest: "{{ orchestrator_src_dir }}/pyproject.toml"
+        src: "{{ inventory_dir }}/requirements-sidecars.txt"
+        dest: "{{ orchestrator_sidecar_root_dir }}/requirements-sidecars.txt"
         owner: "{{ orchestrator_user }}"
         group: "{{ orchestrator_group }}"
         mode: "0644"
       notify:
-        - Restart orchestrator service
         - Restart orchestrator docs sidecar service
         - Restart orchestrator images sidecar service
-
-    - name: Install orchestrator Alembic config
-      ansible.builtin.copy:
-        src: "{{ inventory_dir }}/alembic.ini"
-        dest: "{{ orchestrator_src_dir }}/alembic.ini"
-        owner: "{{ orchestrator_user }}"
-        group: "{{ orchestrator_group }}"
-        mode: "0644"
-
-    - name: Install orchestrator source tree
-      ansible.builtin.copy:
-        src: "{{ inventory_dir }}/src/orchestrator"
-        dest: "{{ orchestrator_src_dir }}/src/"
-        owner: "{{ orchestrator_user }}"
-        group: "{{ orchestrator_group }}"
-        mode: "0644"
-        directory_mode: "0755"
 
     - name: Install capability sidecar source tree
       ansible.builtin.copy:
         src: "{{ inventory_dir }}/src/cap_sidecars"
-        dest: "{{ orchestrator_src_dir }}/src/"
+        dest: "{{ orchestrator_sidecar_root_dir }}/"
         owner: "{{ orchestrator_user }}"
         group: "{{ orchestrator_group }}"
         mode: "0644"
@@ -100,16 +81,27 @@
         - Restart orchestrator docs sidecar service
         - Restart orchestrator images sidecar service
 
-    - name: Remove deployment artifacts from orchestrator source tree
+    - name: Remove stale deployment artifacts from sidecar source tree
       ansible.builtin.shell: |
         set -euo pipefail
-        find "{{ orchestrator_src_dir }}/src/orchestrator" \
+        find "{{ orchestrator_sidecar_root_dir }}/cap_sidecars" \
           \( -name '__pycache__' -o -name '.DS_Store' -o -name '._*' -o -name '*.pyc' \) \
           -print0 | xargs -0r rm -rf
       args:
         executable: /bin/bash
       changed_when: false
-      notify: Restart orchestrator service
+      notify:
+        - Restart orchestrator docs sidecar service
+        - Restart orchestrator images sidecar service
+
+    - name: Remove retired Python API source tree
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ orchestrator_root_dir }}/src"
+        - "{{ orchestrator_root_dir }}/venv"
+        - "{{ orchestrator_root_dir }}/go-shadow"
 
     - name: Install PostgreSQL compose file for orchestrator
       ansible.builtin.copy:
@@ -233,11 +225,20 @@
     - name: Install orchestrator-go main runtime binary
       ansible.builtin.copy:
         src: "{{ orchestrator_go_binary_path }}"
-        dest: "{{ orchestrator_root_dir }}/go-shadow/orchestrator-go"
+        dest: "{{ orchestrator_runtime_dir }}/orchestrator-go"
         owner: "{{ orchestrator_user }}"
         group: "{{ orchestrator_group }}"
         mode: "0755"
       notify: Restart orchestrator service
+
+    - name: Install sidecar dependencies in dedicated virtualenv
+      ansible.builtin.pip:
+        requirements: "{{ orchestrator_sidecar_root_dir }}/requirements-sidecars.txt"
+        virtualenv: "{{ orchestrator_sidecar_venv_dir }}"
+        virtualenv_command: /usr/bin/python3 -m venv
+      notify:
+        - Restart orchestrator docs sidecar service
+        - Restart orchestrator images sidecar service
 
     - name: Install capability docs sidecar service unit
       ansible.builtin.copy:
@@ -255,15 +256,15 @@
           Type=simple
           User={{ orchestrator_user }}
           Group={{ orchestrator_group }}
-          WorkingDirectory={{ orchestrator_src_dir }}
-          ExecStart={{ orchestrator_venv_dir }}/bin/uvicorn cap_sidecars.docs_server:app --app-dir {{ orchestrator_src_dir }}/src --host {{ orchestrator_docs_sidecar_host }} --port {{ orchestrator_docs_sidecar_port }}
+          WorkingDirectory={{ orchestrator_sidecar_root_dir }}
+          ExecStart={{ orchestrator_sidecar_venv_dir }}/bin/uvicorn cap_sidecars.docs_server:app --app-dir {{ orchestrator_sidecar_root_dir }} --host {{ orchestrator_docs_sidecar_host }} --port {{ orchestrator_docs_sidecar_port }}
           Restart=always
           RestartSec=5
           NoNewPrivileges=true
           PrivateTmp=true
           ProtectSystem=strict
           ProtectHome=true
-          ReadWritePaths={{ orchestrator_src_dir }} {{ orchestrator_log_dir }}
+          ReadWritePaths={{ orchestrator_sidecar_root_dir }} {{ orchestrator_log_dir }}
 
           [Install]
           WantedBy=multi-user.target
@@ -285,15 +286,15 @@
           Type=simple
           User={{ orchestrator_user }}
           Group={{ orchestrator_group }}
-          WorkingDirectory={{ orchestrator_src_dir }}
-          ExecStart={{ orchestrator_venv_dir }}/bin/uvicorn cap_sidecars.images_server:app --app-dir {{ orchestrator_src_dir }}/src --host {{ orchestrator_images_sidecar_host }} --port {{ orchestrator_images_sidecar_port }}
+          WorkingDirectory={{ orchestrator_sidecar_root_dir }}
+          ExecStart={{ orchestrator_sidecar_venv_dir }}/bin/uvicorn cap_sidecars.images_server:app --app-dir {{ orchestrator_sidecar_root_dir }} --host {{ orchestrator_images_sidecar_host }} --port {{ orchestrator_images_sidecar_port }}
           Restart=always
           RestartSec=5
           NoNewPrivileges=true
           PrivateTmp=true
           ProtectSystem=strict
           ProtectHome=true
-          ReadWritePaths={{ orchestrator_src_dir }} {{ orchestrator_log_dir }}
+          ReadWritePaths={{ orchestrator_sidecar_root_dir }} {{ orchestrator_log_dir }}
 
           [Install]
           WantedBy=multi-user.target
@@ -440,9 +441,9 @@
           Type=exec
           User={{ orchestrator_user }}
           Group={{ orchestrator_group }}
-          WorkingDirectory={{ orchestrator_root_dir }}/go-shadow
+          WorkingDirectory={{ orchestrator_runtime_dir }}
           EnvironmentFile={{ orchestrator_config_dir }}/orchestrator.env
-          ExecStart={{ orchestrator_root_dir }}/go-shadow/orchestrator-go
+          ExecStart={{ orchestrator_runtime_dir }}/orchestrator-go
           Restart=on-failure
           RestartSec=5
           NoNewPrivileges=true
@@ -461,16 +462,6 @@
       notify:
         - Reload systemd for orchestrator
         - Restart orchestrator service
-
-    - name: Install orchestrator package in virtualenv
-      ansible.builtin.pip:
-        name: "{{ orchestrator_src_dir }}"
-        editable: true
-        virtualenv: "{{ orchestrator_venv_dir }}"
-        virtualenv_command: /usr/bin/python3 -m venv
-      notify:
-        - Restart orchestrator docs sidecar service
-        - Restart orchestrator images sidecar service
 
     - name: Install Prometheus scrape target for orchestrator
       ansible.builtin.copy:
@@ -512,25 +503,6 @@
       retries: 20
       delay: 3
       until: orchestrator_health.status == 200
-
-    - name: Stop and disable retired orchestrator python shadow service
-      ansible.builtin.systemd:
-        name: orchestrator-python-shadow.service
-        state: stopped
-        enabled: false
-        daemon_reload: true
-      failed_when: false
-
-    - name: Remove retired orchestrator python shadow service unit
-      ansible.builtin.file:
-        path: /etc/systemd/system/orchestrator-python-shadow.service
-        state: absent
-      notify: Reload systemd for orchestrator
-
-    - name: Remove retired orchestrator python shadow environment file
-      ansible.builtin.file:
-        path: "{{ orchestrator_config_dir }}/orchestrator-python-shadow.env"
-        state: absent
 
     - name: Ensure cleanup API key exists in orchestrator database
       ansible.builtin.shell: |

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/google/uuid"
 
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 )
@@ -21,8 +21,8 @@ type PostgresStore struct {
 }
 
 var (
-	ErrApprovalNotFound         = errors.New("approval not found")
-	ErrApprovalAlreadyResolved  = errors.New("approval already resolved")
+	ErrApprovalNotFound        = errors.New("approval not found")
+	ErrApprovalAlreadyResolved = errors.New("approval already resolved")
 )
 
 func NewPostgresStore(ctx context.Context, dsn string) (*PostgresStore, error) {
@@ -91,6 +91,16 @@ type CreateTaskParams struct {
 	RootTaskID          *string
 	TaskKind            domain.TaskKind
 	QueueOnCreate       bool
+}
+
+type UpsertLocalBridgeParams struct {
+	ID            string
+	Name          string
+	Hostname      string
+	WorkspaceRoot string
+	Capabilities  map[string]any
+	APIKeyName    *string
+	Status        string
 }
 
 func (s *PostgresStore) CreateTask(ctx context.Context, params CreateTaskParams) (*domain.TaskResponse, error) {
@@ -275,6 +285,176 @@ func (s *PostgresStore) ListTasks(ctx context.Context, filter TaskListFilter) ([
 	return items, cursor, nil
 }
 
+func (s *PostgresStore) UpsertLocalBridge(ctx context.Context, params UpsertLocalBridgeParams) (*domain.LocalBridgeResponse, error) {
+	capabilitiesRaw, err := json.Marshal(nonNilMap(params.Capabilities))
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	if strings.TrimSpace(params.Status) == "" {
+		params.Status = "active"
+	}
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO local_bridges (
+			id, name, hostname, workspace_root, status, capabilities, api_key_name, last_heartbeat, created_at, updated_at
+		) VALUES (
+			$1, $2, $3, $4, $5, $6::jsonb, $7, $8, $8, $8
+		)
+		ON CONFLICT (id) DO UPDATE SET
+			name = EXCLUDED.name,
+			hostname = EXCLUDED.hostname,
+			workspace_root = EXCLUDED.workspace_root,
+			status = EXCLUDED.status,
+			capabilities = EXCLUDED.capabilities,
+			api_key_name = EXCLUDED.api_key_name,
+			last_heartbeat = EXCLUDED.last_heartbeat,
+			updated_at = EXCLUDED.updated_at
+	`, params.ID, params.Name, params.Hostname, params.WorkspaceRoot, params.Status, string(capabilitiesRaw), params.APIKeyName, now); err != nil {
+		return nil, err
+	}
+	return s.GetLocalBridge(ctx, params.ID)
+}
+
+func (s *PostgresStore) GetLocalBridge(ctx context.Context, bridgeID string) (*domain.LocalBridgeResponse, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id::text, name, hostname, workspace_root, status, capabilities, api_key_name, last_heartbeat, created_at, updated_at
+		FROM local_bridges
+		WHERE id = $1
+	`, bridgeID)
+	item, err := scanLocalBridge(row)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	return item, err
+}
+
+func (s *PostgresStore) HeartbeatLocalBridge(ctx context.Context, bridgeID, status string) (*domain.LocalBridgeResponse, error) {
+	now := time.Now().UTC()
+	if strings.TrimSpace(status) == "" {
+		status = "active"
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE local_bridges
+		   SET status = $2,
+		       last_heartbeat = $3,
+		       updated_at = $3
+		 WHERE id = $1
+	`, bridgeID, status, now)
+	if err != nil {
+		return nil, err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, nil
+	}
+	return s.GetLocalBridge(ctx, bridgeID)
+}
+
+func (s *PostgresStore) ListLocalBridges(ctx context.Context) ([]domain.LocalBridgeResponse, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, name, hostname, workspace_root, status, capabilities, api_key_name, last_heartbeat, created_at, updated_at
+		FROM local_bridges
+		WHERE status = 'active'
+		ORDER BY updated_at DESC, id ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]domain.LocalBridgeResponse, 0)
+	for rows.Next() {
+		item, err := scanLocalBridge(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) ClaimNextLocalBridgeTask(ctx context.Context, bridgeID string) (*domain.LocalBridgeTaskClaimResponse, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	bridge, err := getLocalBridgeForUpdateTx(ctx, tx, bridgeID)
+	if err != nil {
+		return nil, err
+	}
+	if bridge == nil {
+		return nil, nil
+	}
+
+	row := tx.QueryRow(ctx, taskSelectSQL+`
+		WHERE execution_target = 'local'
+		  AND assigned_agent = 'coder'
+		  AND state = 'queued'
+		  AND (COALESCE(metadata->>'workspace_root', '') = '' OR metadata->>'workspace_root' = $1)
+		ORDER BY created_at ASC, id ASC
+		LIMIT 1
+		FOR UPDATE SKIP LOCKED
+	`, bridge.WorkspaceRoot)
+	task, err := scanTask(row)
+	if err == pgx.ErrNoRows {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	if err := transitionTaskStateTx(ctx, tx, task.ID, domain.TaskStateQueued, domain.TaskStateAssigned, "bridge:"+bridgeID, "Dequeued for local bridge", now); err != nil {
+		return nil, err
+	}
+	if err := transitionTaskStateTx(ctx, tx, task.ID, domain.TaskStateAssigned, domain.TaskStateInProgress, "bridge:"+bridgeID, "Execution started in local bridge", now); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	metadata := task.Metadata
+	workspaceRoot := strings.TrimSpace(asString(metadata["workspace_root"]))
+	if workspaceRoot == "" {
+		workspaceRoot = bridge.WorkspaceRoot
+	}
+	repoPath := strings.TrimSpace(asString(metadata["repo_path"]))
+	if repoPath == "" {
+		repoPath = workspaceRoot
+	}
+	branch := strings.TrimSpace(asString(metadata["branch"]))
+	if branch == "" {
+		branch = "main"
+	}
+
+	assignedAgent := ""
+	if task.AssignedAgent != nil {
+		assignedAgent = string(*task.AssignedAgent)
+	}
+	workspacePath := ""
+	if task.WorkspacePath != nil {
+		workspacePath = *task.WorkspacePath
+	}
+
+	return &domain.LocalBridgeTaskClaimResponse{
+		TaskID:          task.ID,
+		RootTaskID:      task.RootTaskID,
+		ParentTaskID:    task.ParentTaskID,
+		Description:     task.Description,
+		AssignedAgent:   assignedAgent,
+		ExecutionTarget: string(task.ExecutionTarget),
+		WorkspacePath:   workspacePath,
+		WorkspaceRoot:   workspaceRoot,
+		Metadata:        metadata,
+		RepoPath:        repoPath,
+		Branch:          branch,
+	}, nil
+}
+
 func (s *PostgresStore) ListChildren(ctx context.Context, parentTaskID string) ([]domain.TaskResponse, error) {
 	rows, err := s.pool.Query(ctx, taskSelectSQL+` WHERE parent_task_id = $1 ORDER BY created_at ASC, id ASC`, parentTaskID)
 	if err != nil {
@@ -344,8 +524,8 @@ func (s *PostgresStore) ResolveApproval(ctx context.Context, approvalID string, 
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var (
-		approval domain.ApprovalResponse
-		taskID string
+		approval      domain.ApprovalResponse
+		taskID        string
 		currentStatus string
 	)
 	row := tx.QueryRow(ctx, `
@@ -405,6 +585,28 @@ func (s *PostgresStore) ResolveApproval(ctx context.Context, approvalID string, 
 		       resolved_at = $4
 		 WHERE id = $1
 	`, approvalID, string(newApprovalStatus), operator, now); err != nil {
+		return nil, nil, err
+	}
+
+	mergedMetadata := cloneMap(task.Metadata)
+	if mergedMetadata == nil {
+		mergedMetadata = map[string]any{}
+	}
+	if approve {
+		mergedMetadata["approval_granted"] = true
+		delete(mergedMetadata, "approval_requested")
+	} else {
+		mergedMetadata["approval_granted"] = false
+	}
+	metadataRaw, err := json.Marshal(mergedMetadata)
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE tasks
+		   SET metadata = $2::jsonb
+		 WHERE id = $1
+	`, taskID, string(metadataRaw)); err != nil {
 		return nil, nil, err
 	}
 
@@ -513,17 +715,17 @@ type CreateResearchRunParams struct {
 }
 
 type CreateToolInvocationParams struct {
-	TaskID         *string
-	AgentType      *string
-	Entrypoint     string
-	Capability     string
-	InputPayload   map[string]any
-	OutputPayload  map[string]any
-	Status         string
-	DurationMS     int
-	SourceRefs     []domain.SourceRef
-	ArtifactIDs    []string
-	ErrorMessage   *string
+	TaskID        *string
+	AgentType     *string
+	Entrypoint    string
+	Capability    string
+	InputPayload  map[string]any
+	OutputPayload map[string]any
+	Status        string
+	DurationMS    int
+	SourceRefs    []domain.SourceRef
+	ArtifactIDs   []string
+	ErrorMessage  *string
 }
 
 type CreateArtifactParams struct {
@@ -605,12 +807,12 @@ func (s *PostgresStore) GetResearchRun(ctx context.Context, researchRunID string
 		WHERE id = $1
 	`, researchRunID)
 	var (
-		item domain.ResearchRunResponse
-		taskID *string
-		selectedRaw []byte
-		sourceRaw []byte
+		item          domain.ResearchRunResponse
+		taskID        *string
+		selectedRaw   []byte
+		sourceRaw     []byte
 		invocationRaw []byte
-		metadataRaw []byte
+		metadataRaw   []byte
 	)
 	if err := row.Scan(
 		&item.ID,
@@ -724,10 +926,10 @@ func (s *PostgresStore) GetToolInvocation(ctx context.Context, invocationID stri
 		WHERE id = $1
 	`, invocationID)
 	var (
-		item domain.ToolInvocationResponse
-		taskID *string
-		outputRaw []byte
-		sourceRaw []byte
+		item        domain.ToolInvocationResponse
+		taskID      *string
+		outputRaw   []byte
+		sourceRaw   []byte
 		artifactRaw []byte
 	)
 	if err := row.Scan(
@@ -832,8 +1034,8 @@ func (s *PostgresStore) GetEvaluationRun(ctx context.Context, evaluationRunID st
 		WHERE id = $1
 	`, evaluationRunID)
 	var (
-		item          domain.EvaluationRunResponse
-		verdictRaw    []byte
+		item           domain.EvaluationRunResponse
+		verdictRaw     []byte
 		judgeScoresRaw []byte
 	)
 	if err := row.Scan(
@@ -1088,7 +1290,7 @@ type artifactScanner interface {
 
 func scanArtifact(row artifactScanner) (*domain.ArtifactResponse, error) {
 	var (
-		item domain.ArtifactResponse
+		item        domain.ArtifactResponse
 		metadataRaw []byte
 	)
 	if err := row.Scan(
@@ -1116,10 +1318,10 @@ type evaluationDatasetScanner interface {
 
 func scanEvaluationDatasetItem(row evaluationDatasetScanner) (*domain.EvaluationDatasetItemResponse, error) {
 	var (
-		item         domain.EvaluationDatasetItemResponse
-		sourceRaw    []byte
-		scoreRaw     []byte
-		metadataRaw  []byte
+		item        domain.EvaluationDatasetItemResponse
+		sourceRaw   []byte
+		scoreRaw    []byte
+		metadataRaw []byte
 	)
 	if err := row.Scan(
 		&item.ID,
@@ -1239,6 +1441,50 @@ func scanTask(row taskScanner) (*domain.TaskResponse, error) {
 		item.Results = results
 	}
 	return &item, nil
+}
+
+type localBridgeScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanLocalBridge(row localBridgeScanner) (*domain.LocalBridgeResponse, error) {
+	var (
+		item            domain.LocalBridgeResponse
+		capabilitiesRaw []byte
+	)
+	if err := row.Scan(
+		&item.ID,
+		&item.Name,
+		&item.Hostname,
+		&item.WorkspaceRoot,
+		&item.Status,
+		&capabilitiesRaw,
+		&item.APIKeyName,
+		&item.LastHeartbeat,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+	); err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(capabilitiesRaw, &item.Capabilities)
+	if item.Capabilities == nil {
+		item.Capabilities = map[string]any{}
+	}
+	return &item, nil
+}
+
+func getLocalBridgeForUpdateTx(ctx context.Context, tx pgx.Tx, bridgeID string) (*domain.LocalBridgeResponse, error) {
+	row := tx.QueryRow(ctx, `
+		SELECT id::text, name, hostname, workspace_root, status, capabilities, api_key_name, last_heartbeat, created_at, updated_at
+		FROM local_bridges
+		WHERE id = $1
+		FOR UPDATE
+	`, bridgeID)
+	item, err := scanLocalBridge(row)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	return item, err
 }
 
 func collectTasks(rows pgx.Rows) ([]domain.TaskResponse, error) {

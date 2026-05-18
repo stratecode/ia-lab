@@ -30,6 +30,7 @@ var publicPaths = map[string]struct{}{
 }
 
 var adminOnlyPrefixes = []string{"/config/", "/audit"}
+var operatorOnlyPrefixes = []string{"/bridges"}
 
 var scopeAllowedMethods = map[domain.ApiKeyScope]map[string]struct{}{
 	domain.ScopeAdmin:    {"GET": {}, "POST": {}, "PUT": {}, "PATCH": {}, "DELETE": {}, "HEAD": {}, "OPTIONS": {}},
@@ -131,6 +132,11 @@ func checkScope(scope domain.ApiKeyScope, method, path string) string {
 	for _, prefix := range adminOnlyPrefixes {
 		if strings.HasPrefix(path, prefix) && scope != domain.ScopeAdmin {
 			return "Path '" + path + "' requires 'admin' scope, got '" + string(scope) + "'"
+		}
+	}
+	for _, prefix := range operatorOnlyPrefixes {
+		if strings.HasPrefix(path, prefix) && scope != domain.ScopeAdmin && scope != domain.ScopeOperator {
+			return "Path '" + path + "' requires 'operator' or 'admin' scope, got '" + string(scope) + "'"
 		}
 	}
 	if _, ok := scopeAllowedMethods[scope][method]; !ok {

@@ -22,7 +22,7 @@ type Runtime struct {
 	Router   http.Handler
 	Postgres *store.PostgresStore
 	Redis    *store.RedisStore
-	Worker   *worker.ShadowWorker
+	Worker   *worker.RuntimeWorker
 	Research *research.Service
 	Bot      *telegram.Bot
 	SafeMode *httpapi.SafeModeState
@@ -65,7 +65,7 @@ func New() (*Runtime, error) {
 		UtilityAPIKey:        cfg.LlamaUtilityAPIKey,
 		UtilityTimeoutSeconds: cfg.LlamaTimeoutSeconds,
 	})
-	shadowWorker := worker.New(cfg, postgres, redisStore, researchService)
+	runtimeWorker := worker.New(cfg, postgres, redisStore, researchService)
 	safeMode := httpapi.NewSafeModeState(cfg.SafeMode)
 	server := &httpapi.Server{
 		Config:        cfg,
@@ -87,14 +87,14 @@ func New() (*Runtime, error) {
 	router := server.Router(auth)
 	router = middleware.RequestID(router)
 	backgroundCtx, _ := context.WithCancel(context.Background())
-	if err := shadowWorker.Start(backgroundCtx); err != nil {
+	if err := runtimeWorker.Start(backgroundCtx); err != nil {
 		_ = redisStore.Close()
 		postgres.Close()
 		return nil, err
 	}
 	bot := telegram.New(cfg, postgres, redisStore, researchService, capabilityClient, safeMode)
 	if err := bot.Start(backgroundCtx); err != nil {
-		shadowWorker.Stop()
+		runtimeWorker.Stop()
 		_ = redisStore.Close()
 		postgres.Close()
 		return nil, err
@@ -104,7 +104,7 @@ func New() (*Runtime, error) {
 		Router:   router,
 		Postgres: postgres,
 		Redis:    redisStore,
-		Worker:   shadowWorker,
+		Worker:   runtimeWorker,
 		Research: researchService,
 		Bot:      bot,
 		SafeMode: safeMode,

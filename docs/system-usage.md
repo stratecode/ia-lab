@@ -376,7 +376,7 @@ curl -sk "$ORCH_BASE/tasks/<task_id>/tree" \
 LAB_AGENT_BASE_URL="$ORCH_BASE" \
 LAB_AGENT_API_KEY="$ORCH_KEY" \
 LAB_AGENT_WORKSPACE_ROOT="/abs/path/to/current/workspace" \
-PYTHONPATH=src .venv-phase4/bin/python -m orchestrator.local_bridge.cli register
+./dist/lab-agent-linux-amd64 bridge register
 ```
 
 ### Run the local bridge daemon
@@ -385,7 +385,24 @@ PYTHONPATH=src .venv-phase4/bin/python -m orchestrator.local_bridge.cli register
 LAB_AGENT_BASE_URL="$ORCH_BASE" \
 LAB_AGENT_API_KEY="$ORCH_KEY" \
 LAB_AGENT_WORKSPACE_ROOT="/abs/path/to/current/workspace" \
-PYTHONPATH=src .venv-phase4/bin/python -m orchestrator.local_bridge.daemon
+./dist/lab-agentd-linux-amd64
+```
+
+### Inspect local bridge state
+
+```bash
+LAB_AGENT_BASE_URL="$ORCH_BASE" \
+LAB_AGENT_API_KEY="$ORCH_KEY" \
+./dist/lab-agent-linux-amd64 bridge status
+```
+
+### Smoke-test the bridge handshake
+
+```bash
+LAB_AGENT_BASE_URL="$ORCH_BASE" \
+LAB_AGENT_API_KEY="$ORCH_KEY" \
+LAB_AGENT_WORKSPACE_ROOT="/abs/path/to/current/workspace" \
+./dist/lab-agent-linux-amd64 bridge smoke
 ```
 
 ## Research mode notes
@@ -402,12 +419,17 @@ If `LAB_OPENAI_REFERENCE_API_KEY` is configured, the system can also generate a 
 
 ## Local Agent Bridge
 
-The Local Agent Bridge still exists, but it is no longer the closure criterion for Phase 5. It remains the controlled path for local execution:
+The Local Agent Bridge is now the controlled path for local execution from the Go runtime:
 
 - it registers one workspace root
 - it polls the orchestrator for `execution_target=local` work
 - it only operates inside that workspace
 - it only runs a limited tool set
+- it now uses Go binaries:
+  - `lab-agent`
+  - `lab-agentd`
+- full operational guide:
+  - [Local Bridge and CLI](local-bridge.md)
 
 ### Supported tools
 
@@ -428,6 +450,7 @@ The Local Agent Bridge still exists, but it is no longer the closure criterion f
 - No arbitrary filesystem access exists outside that root.
 - No shell free-for-all exists. `run_command` is allowlisted on purpose.
 - The remote `coder` path still requires a real repo configured on the host via `repo_name`.
+- `lab-agent` is a CLI, not a TUI. It is deliberately plain because reliability beats cosplay.
 
 ### Cancel a task
 

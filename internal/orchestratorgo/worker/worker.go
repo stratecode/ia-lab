@@ -18,7 +18,7 @@ import (
 	"github.com/stratecode/lab/internal/orchestratorgo/store"
 )
 
-type ShadowWorker struct {
+type RuntimeWorker struct {
 	cfg         config.Config
 	postgres    *store.PostgresStore
 	redis       *store.RedisStore
@@ -31,8 +31,8 @@ type ShadowWorker struct {
 	mu          sync.RWMutex
 }
 
-func New(cfg config.Config, postgres *store.PostgresStore, redis *store.RedisStore, researchService *research.Service) *ShadowWorker {
-	return &ShadowWorker{
+func New(cfg config.Config, postgres *store.PostgresStore, redis *store.RedisStore, researchService *research.Service) *RuntimeWorker {
+	return &RuntimeWorker{
 		cfg:       cfg,
 		postgres:  postgres,
 		redis:     redis,
@@ -43,7 +43,7 @@ func New(cfg config.Config, postgres *store.PostgresStore, redis *store.RedisSto
 	}
 }
 
-func (w *ShadowWorker) Start(parent context.Context) error {
+func (w *RuntimeWorker) Start(parent context.Context) error {
 	if !w.cfg.WorkerEnabled() {
 		return nil
 	}
@@ -59,20 +59,20 @@ func (w *ShadowWorker) Start(parent context.Context) error {
 	return nil
 }
 
-func (w *ShadowWorker) Stop() {
+func (w *RuntimeWorker) Stop() {
 	if w.cancel != nil {
 		w.cancel()
 		<-w.done
 	}
 }
 
-func (w *ShadowWorker) run(ctx context.Context) {
+func (w *RuntimeWorker) run(ctx context.Context) {
 	defer close(w.done)
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := w.redis.DeregisterWorker(cleanupCtx, w.workerID); err != nil {
-			log.Warn().Err(err).Str("worker_id", w.workerID).Msg("failed to deregister shadow worker")
+			log.Warn().Err(err).Str("worker_id", w.workerID).Msg("failed to deregister runtime worker")
 		}
 	}()
 
@@ -101,7 +101,7 @@ func (w *ShadowWorker) run(ctx context.Context) {
 	}
 }
 
-func (w *ShadowWorker) tryClaimTask(ctx context.Context, agentType domain.AgentType) {
+func (w *RuntimeWorker) tryClaimTask(ctx context.Context, agentType domain.AgentType) {
 	taskID, ok, err := w.redis.DequeueTask(ctx, agentType)
 	if err != nil {
 		log.Warn().Err(err).Str("worker_id", w.workerID).Str("agent_type", string(agentType)).Msg("failed to dequeue task")
@@ -117,6 +117,10 @@ func (w *ShadowWorker) tryClaimTask(ctx context.Context, agentType domain.AgentT
 	}
 	if task.State != domain.TaskStateQueued {
 		log.Warn().Str("task_id", taskID).Str("state", string(task.State)).Msg("dequeued task not queued anymore")
+		return
+	}
+	if task.ExecutionTarget == domain.ExecutionTargetLocal {
+		log.Info().Str("task_id", taskID).Msg("skipping local task in embedded worker; reserved for local bridge")
 		return
 	}
 	if err := w.postgres.UpdateTaskState(ctx, taskID, domain.TaskStateAssigned, "worker:"+w.workerID, "Dequeued for "+string(agentType)); err != nil {
@@ -138,11 +142,11 @@ func (w *ShadowWorker) tryClaimTask(ctx context.Context, agentType domain.AgentT
 	if err := w.redis.EmitWorkerHeartbeat(ctx, w.workerID, w.cfg.WorkerHeartbeatInterval, w.getCurrentTask(), w.startedAt); err != nil && !errors.Is(err, context.Canceled) {
 		log.Warn().Err(err).Str("worker_id", w.workerID).Msg("failed to emit immediate heartbeat after claim")
 	}
-	log.Info().Str("worker_id", w.workerID).Str("task_id", taskID).Str("agent_type", string(agentType)).Msg("shadow worker claimed task")
+	log.Info().Str("worker_id", w.workerID).Str("task_id", taskID).Str("agent_type", string(agentType)).Msg("runtime worker claimed task")
 	go w.executeTask(context.Background(), taskID)
 }
 
-func (w *ShadowWorker) executeTask(ctx context.Context, taskID string) {
+func (w *RuntimeWorker) executeTask(ctx context.Context, taskID string) {
 	task, err := w.postgres.GetTask(ctx, taskID)
 	if err != nil || task == nil {
 		log.Warn().Err(err).Str("task_id", taskID).Msg("failed to load task for execution")
@@ -203,7 +207,7 @@ func (w *ShadowWorker) executeTask(ctx context.Context, taskID string) {
 	w.releaseTask(ctx)
 }
 
-func (w *ShadowWorker) handlePlannerSuccess(ctx context.Context, task *domain.TaskResponse, result runner.Result) error {
+func (w *RuntimeWorker) handlePlannerSuccess(ctx context.Context, task *domain.TaskResponse, result runner.Result) error {
 	if task == nil {
 		return fmt.Errorf("planner task is nil")
 	}
@@ -311,7 +315,7 @@ func (w *ShadowWorker) handlePlannerSuccess(ctx context.Context, task *domain.Ta
 	return nil
 }
 
-func (w *ShadowWorker) childWorkspacePath(task *domain.TaskResponse, rootID string) *string {
+func (w *RuntimeWorker) childWorkspacePath(task *domain.TaskResponse, rootID string) *string {
 	if task == nil {
 		return nil
 	}
@@ -335,7 +339,7 @@ func (w *ShadowWorker) childWorkspacePath(task *domain.TaskResponse, rootID stri
 	return &value
 }
 
-func (w *ShadowWorker) reconcileRootTask(ctx context.Context, taskID string) {
+func (w *RuntimeWorker) reconcileRootTask(ctx context.Context, taskID string) {
 	task, err := w.postgres.GetTask(ctx, taskID)
 	if err != nil || task == nil {
 		return
@@ -488,7 +492,7 @@ func derefAgent(agent *domain.AgentType) domain.AgentType {
 	return *agent
 }
 
-func (w *ShadowWorker) getCurrentTask() *string {
+func (w *RuntimeWorker) getCurrentTask() *string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if w.currentTask == nil {
@@ -498,7 +502,7 @@ func (w *ShadowWorker) getCurrentTask() *string {
 	return &value
 }
 
-func (w *ShadowWorker) setCurrentTask(taskID *string) {
+func (w *RuntimeWorker) setCurrentTask(taskID *string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if taskID == nil {
@@ -509,7 +513,7 @@ func (w *ShadowWorker) setCurrentTask(taskID *string) {
 	w.currentTask = &value
 }
 
-func (w *ShadowWorker) releaseTask(ctx context.Context) {
+func (w *RuntimeWorker) releaseTask(ctx context.Context) {
 	w.setCurrentTask(nil)
 	if err := w.redis.UpdateWorkerCurrentTask(ctx, w.workerID, nil); err != nil {
 		log.Warn().Err(err).Str("worker_id", w.workerID).Msg("failed to clear current task")

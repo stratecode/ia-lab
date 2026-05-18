@@ -1,6 +1,6 @@
 # Orchestrator Go Runtime
 
-This document defines the production-oriented Go runtime that now takes the primary `orchestrator.service` role. The legacy Python API shadow has been retired; only the Python sidecars for heavy document/image capabilities remain.
+This document defines the production-oriented Go runtime that now owns `orchestrator.service`. The legacy Python API runtime has been retired. Python remains only where it still earns its keep: the document and image sidecars.
 
 ## Current scope
 
@@ -19,6 +19,11 @@ The Go runtime covers the compatibility base and the first write-oriented lifecy
 - `POST /approvals/{id}/approve`
 - `POST /approvals/{id}/reject`
 - `GET /workers`
+- `GET /bridges`
+- `POST /bridges/register`
+- `POST /bridges/{bridge_id}/heartbeat`
+- `POST /bridges/{bridge_id}/claim-next`
+- `POST /bridges/{bridge_id}/tasks/{task_id}/result`
 - `GET /capabilities`
 - `POST /tools/web/search`
 - `POST /tools/web/fetch`
@@ -48,6 +53,7 @@ Current write support is intentionally narrow:
 - `POST /approvals/{id}/approve` resolves a pending approval, transitions the task back to `queued`, and re-enqueues it for worker pickup.
 - `POST /approvals/{id}/reject` resolves a pending approval and cancels the task.
 - an embedded worker registers itself in Redis, emits heartbeats, claims queued planner/coder tasks, and moves them into `in_progress`.
+- local bridge registration, heartbeat, task claim, and result submission now live in the Go runtime instead of the retired Python API.
 - `planner` tasks can now call the configured planner LLM endpoint and persist the returned structured plan.
 - `coder` tasks can now execute real `aider-task` runs when `metadata.repo_name` or `metadata.repo_path` is provided.
 - the fallback coder path still supports:
@@ -57,6 +63,9 @@ Current write support is intentionally narrow:
 - `coder` tasks marked with `metadata.requires_approval=true` request approval once, pause in `waiting_approval`, and resume after approval.
 - `web.fetch` now fetches and strips HTML content in the Go core.
 - `document.read` and `image.analyze` now run through HTTP sidecars so the Go core stops swallowing PDF/DOCX/OCR complexity whole.
+- `execution_target=local` is now serviced by Go binaries:
+  - `lab-agent`
+  - `lab-agentd`
 - `research.query` now supports URL-oriented research with direct summary output.
 - `research.query` now detects and serves:
   - document paths or URLs via `document.read`
@@ -75,24 +84,21 @@ Current write support is intentionally narrow:
 - `POST /evaluations/judge` now scores orchestrator vs reference and stores the resulting dataset item.
 - `POST /research/query` now supports `evaluate_against_reference=true` for inline evaluation during research.
 
-The remaining routes are exposed as explicit `501 Not Implemented` placeholders to preserve route intent without pretending full parity.
-
-What the worker does not do yet:
-
-- create planner-generated child tasks or reconcile parent-child trees
-- implement full multi-source research parity with the Python orchestrator
-- replace the Python capability sidecars; they remain transitional on purpose
+The remaining routes are exposed as explicit `501 Not Implemented` placeholders where parity is still unfinished. No cosplay of completeness.
 
 ## Deployment shape
 
 - binary name: `orchestrator-go-linux-amd64`
 - default primary port: `8100`
-- same PostgreSQL and Redis as the Python orchestrator
+- runtime directory on host: `/srv/ai-lab/orchestrator/runtime`
+- same PostgreSQL and Redis contract as the previous runtime
 - same auth model via `api_keys`
 - same safe-mode, logging, and environment contract
-- optional sidecars for heavy capabilities:
+- dedicated Python sidecars for heavy capabilities:
   - docs: `LAB_CAPABILITIES_DOCS_SIDECAR_URL`
   - images: `LAB_CAPABILITIES_IMAGES_SIDECAR_URL`
+- sidecar source root on host: `/srv/ai-lab/orchestrator/sidecars`
+- sidecar virtualenv on host: `/srv/ai-lab/orchestrator/sidecars-venv`
 
 ## Build
 
@@ -102,22 +108,31 @@ What the worker does not do yet:
 
 This uses a Dockerized Go toolchain so the repo does not depend on a local Go installation.
 
-## Deployment shape
-
-The Ansible role now deploys:
+## Deployment
 
 - `orchestrator.service` -> Go runtime on the primary orchestrator port
 - `orchestrator-cap-docs.service` -> document sidecar
 - `orchestrator-cap-images.service` -> image sidecar
+- `requirements-sidecars.txt` -> minimal Python dependency set for the sidecars only
+- old `go-shadow` naming is retired; the main runtime now lives under `runtime/` because words should describe reality at least once in their lives.
 
 Useful variables:
 
 - `LAB_ORCHESTRATOR_GO_BINARY_PATH`
 - `LAB_ORCHESTRATOR_GO_HOST`
 - `LAB_ORCHESTRATOR_GO_PORT`
+- `LAB_AGENT_BASE_URL`
+- `LAB_AGENT_API_KEY`
+- `LAB_AGENT_WORKSPACE_ROOT`
+- `LAB_AGENT_BRIDGE_ID`
 - `LAB_CAPABILITIES_DOCS_SIDECAR_URL`
 - `LAB_CAPABILITIES_IMAGES_SIDECAR_URL`
 
+## Related docs
+
+- [Local Bridge and CLI](local-bridge.md)
+- [System Usage Guide](system-usage.md)
+
 ## Compatibility intent
 
-The Go runtime must remain API-and-persistence compatible with the previous Python system of record during migration. It is not allowed to introduce new public payload shapes casually just because the implementation language changed.
+The Go runtime must remain API-and-persistence compatible with the previous system of record during migration. It is not allowed to introduce new public payload shapes casually just because the implementation language changed.
