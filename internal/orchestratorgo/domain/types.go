@@ -95,6 +95,7 @@ type TaskResponse struct {
 	UpdatedAt           time.Time       `json:"updated_at"`
 	StartedAt           *time.Time      `json:"started_at"`
 	CompletedAt         *time.Time      `json:"completed_at"`
+	ArchivedAt          *time.Time      `json:"archived_at"`
 }
 
 type TaskCreateRequest struct {

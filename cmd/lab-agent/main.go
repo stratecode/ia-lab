@@ -26,7 +26,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if len(filteredArgs) < 2 {
+	if len(filteredArgs) < 1 {
 		usage()
 		os.Exit(1)
 	}
@@ -59,6 +59,8 @@ func main() {
 		runErr = bridge.RunTasksWatch(ctx, opts)
 	case "approvals list":
 		runErr = bridge.RunApprovalsList(ctx, opts)
+	case "tui":
+		runErr = bridge.RunTUI(ctx, opts)
 	default:
 		usage()
 		os.Exit(1)
@@ -71,13 +73,18 @@ func main() {
 
 func parseCLI(args []string) (bridge.CLIOptions, string, error) {
 	opts := defaultCLIOptions()
-	if len(args) < 2 {
+	if len(args) < 1 {
 		return opts, "", fmt.Errorf("subcommand is required")
 	}
-	command := strings.Join(args[:2], " ")
+	command := ""
+	if args[0] == "tui" {
+		command = "tui"
+	} else if len(args) >= 2 {
+		command = strings.Join(args[:2], " ")
+	}
 	var fs *flag.FlagSet
 	switch command {
-	case "bridge register", "bridge heartbeat", "bridge status", "bridge smoke", "bridge start", "tasks list", "tasks watch", "approvals list":
+	case "bridge register", "bridge heartbeat", "bridge status", "bridge smoke", "bridge start", "tasks list", "tasks watch", "approvals list", "tui":
 		fs = flag.NewFlagSet(command, flag.ContinueOnError)
 	default:
 		return opts, "", fmt.Errorf("unsupported command: %s", command)
@@ -91,7 +98,14 @@ func parseCLI(args []string) (bridge.CLIOptions, string, error) {
 	fs.StringVar(&opts.Hostname, "hostname", opts.Hostname, "Host name override")
 	fs.DurationVar(&opts.PollInterval, "poll-interval", opts.PollInterval, "Poll interval")
 	fs.DurationVar(&opts.HeartbeatInterval, "heartbeat-interval", opts.HeartbeatInterval, "Heartbeat interval")
-	if err := fs.Parse(args[2:]); err != nil {
+	parseArgs := []string{}
+	if len(args) > 2 {
+		parseArgs = args[2:]
+	}
+	if command == "tui" {
+		parseArgs = args[1:]
+	}
+	if err := fs.Parse(parseArgs); err != nil {
 		return opts, "", err
 	}
 	if strings.TrimSpace(opts.APIKey) == "" {
@@ -143,7 +157,8 @@ func usage() {
   lab-agent [--env-file .env.bridge] bridge start [--bridge-id ... --workspace-root ...]
   lab-agent [--env-file .env.bridge] tasks list
   lab-agent [--env-file .env.bridge] tasks watch
-  lab-agent [--env-file .env.bridge] approvals list`)
+  lab-agent [--env-file .env.bridge] approvals list
+  lab-agent [--env-file .env.bridge] tui`)
 }
 
 type ioDiscard struct{}

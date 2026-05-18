@@ -27,6 +27,9 @@ Supported local tools:
 | `read_file` | Read one file inside the registered workspace |
 | `list_files` | List files from a workspace-relative path |
 | `write_file` | Create or replace a file inside the workspace |
+| `research_project` | Produce structured project constraints and validation context |
+| `scaffold_project` | Create a small test project boilerplate inside the workspace |
+| `review_project` | Validate the generated project structure and test command |
 | `apply_patch` | Apply a git patch inside the workspace |
 | `run_command` | Run an allowlisted command |
 | `git_status` | Capture `git status --short --untracked-files=all` |
@@ -151,11 +154,51 @@ Daemon responsibilities:
 4. execute it inside the workspace
 5. submit results, artifacts, diffs, stdout, stderr, and test output
 
-## CLI usage
+Important:
 
-The normal operational surface for the bridge is the CLI, not raw `curl`.
+- when the bridge contract changes, rebuild the local binaries before blaming the daemon
+- if the host runtime and `lab-agentd` are on different versions, local tasks can fail with `unsupported local tool`
+- the failure mode is honest but annoying, which is still better than silent corruption
 
-### Bridge commands
+## CLI and TUI usage
+
+The normal operational surface for the bridge is `lab-agent`: CLI for direct commands, TUI for day-to-day operation, and raw `curl` only when you need API-level integration.
+
+### Start the TUI
+
+Linux:
+
+```bash
+./dist/lab-agent-linux-amd64 --env-file .env.bridge tui
+```
+
+macOS:
+
+```bash
+./dist/lab-agent-darwin-arm64 --env-file .env.bridge tui
+```
+
+The TUI gives you:
+
+- overview of health, bridge, local tasks, and approvals
+- task inspection with results and artifacts
+- approval actions without hunting UUIDs by hand
+- bridge register/heartbeat/smoke/start-stop actions
+- chat with the agent
+- a wizard to create mini projects for lab testing
+
+The validated project flow is:
+
+1. the TUI creates a root `planner` task on the orchestrator
+2. the planner emits local subtasks for `researcher`, `coder`, and `reviewer`
+3. the local bridge executes those subtasks inside the registered workspace
+4. the root task completes only when all children complete
+
+It is a cockpit, not a shrine to terminal aesthetics.
+
+### CLI commands
+
+#### Bridge commands
 
 Register:
 
@@ -187,7 +230,7 @@ Start polling daemon from the CLI wrapper:
 ./dist/lab-agent-linux-amd64 --env-file .env.bridge bridge start
 ```
 
-### Task and approval commands
+#### Task and approval commands
 
 List tasks:
 
@@ -207,15 +250,36 @@ List approvals:
 ./dist/lab-agent-linux-amd64 --env-file .env.bridge approvals list
 ```
 
+## Rebuild local binaries after bridge changes
+
+Linux runtime binaries:
+
+```bash
+./scripts/build-orchestrator-go.sh
+```
+
+macOS local bridge binaries:
+
+```bash
+docker run --rm \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  golang:1.23 \
+  /bin/bash -lc 'export PATH=/usr/local/go/bin:$PATH; export GOTELEMETRY=off; go mod download && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/lab-agent-darwin-arm64 ./cmd/lab-agent && CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/lab-agentd-darwin-arm64 ./cmd/lab-agentd'
+```
+
+If you skip this after changing bridge tools, the daemon can still connect and still fail usefully. That is not compatibility; that is a polite crash.
+
 ## Recommended workflow
 
 1. register the workspace with `lab-agent`
-2. start `lab-agentd`
-3. inspect local task/approval flow with:
-   - `lab-agent ... bridge status`
-   - `lab-agent ... tasks list`
-   - `lab-agent ... approvals list`
-4. only use direct API calls when you are integrating the orchestrator or creating tasks programmatically
+2. start the bridge from:
+   - `lab-agent ... tui`
+   - or `lab-agentd`
+3. create a mini project from the TUI `Projects` wizard for the fastest end-to-end check
+4. inspect task tree, artifacts, approvals, and final state from the TUI first
+5. use CLI commands for scripted or direct operational work
+6. only use direct API calls when you are integrating the orchestrator or creating tasks programmatically
 
 ## Creating local tasks
 

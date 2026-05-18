@@ -91,3 +91,91 @@ func TestAiderExecutionRequiresRepoMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPlannerBoilerplateFlowGeneratesMultiAgentSubtasks(t *testing.T) {
+	plannerAgent := domain.AgentTypePlanner
+	task := &domain.TaskResponse{
+		ID:            "task-project-root",
+		Description:   "Create a CLI boilerplate",
+		AssignedAgent: &plannerAgent,
+		Metadata: map[string]any{
+			"workspace_root": "/tmp/lab-tui-e2e",
+			"project_request": map[string]any{
+				"project_name":     "demo-cli",
+				"parent_directory": "/tmp/lab-tui-e2e/projects",
+				"project_type":     "cli_simple",
+				"runtime_or_stack": "python",
+				"goal":             "Validate project scaffolding",
+				"test_focus":       "bridge execution",
+				"initialize_git":   true,
+			},
+		},
+	}
+	r := New(config.Config{DefaultGitBranch: "main"}, nil)
+	result := r.Execute(task)
+	if result.Status != "success" {
+		t.Fatalf("unexpected planner status: %#v", result)
+	}
+	subtasks, ok := result.Results["subtasks"].([]map[string]any)
+	if !ok {
+		t.Fatalf("expected structured subtasks, got %#v", result.Results["subtasks"])
+	}
+	if len(subtasks) != 3 {
+		t.Fatalf("expected 3 subtasks, got %#v", subtasks)
+	}
+	if subtasks[0]["assigned_agent"] != "researcher" || subtasks[1]["assigned_agent"] != "coder" || subtasks[2]["assigned_agent"] != "reviewer" {
+		t.Fatalf("unexpected planner subtasks: %#v", subtasks)
+	}
+	requestedAgents, ok := result.Results["requested_agents"].([]string)
+	if !ok || len(requestedAgents) != 3 {
+		t.Fatalf("unexpected requested_agents payload: %#v", result.Results["requested_agents"])
+	}
+}
+
+func TestReviewerValidatesGeneratedProject(t *testing.T) {
+	root := t.TempDir()
+	projectRoot := filepath.Join(root, "demo-cli")
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"README.md":           "# demo\n",
+		"main.py":             "print('hello')\n",
+		"tests/test_smoke.py": "def test_smoke():\n    assert True\n",
+		"lab.json":            "{\"project\":\"demo-cli\"}\n",
+	}
+	for rel, content := range files {
+		path := filepath.Join(projectRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reviewerAgent := domain.AgentTypeReviewer
+	task := &domain.TaskResponse{
+		ID:            "task-review-1",
+		Description:   "Review generated project",
+		AssignedAgent: &reviewerAgent,
+		Metadata: map[string]any{
+			"workspace_root": root,
+			"project_request": map[string]any{
+				"project_name":     "demo-cli",
+				"parent_directory": root,
+				"project_type":     "cli_simple",
+				"runtime_or_stack": "python",
+				"test_command":     []string{"python3", "-c", "print('ok')"},
+				"expected_files":   []string{"README.md", "main.py", "tests/test_smoke.py", "lab.json"},
+			},
+		},
+	}
+	r := New(config.Config{DefaultGitBranch: "main"}, nil)
+	result := r.Execute(task)
+	if result.Status != "success" {
+		t.Fatalf("unexpected reviewer status: %#v", result)
+	}
+	if asString(result.Results["validation_summary"]) == "" {
+		t.Fatalf("expected validation summary, got %#v", result.Results)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -51,8 +52,12 @@ func (r *TaskRunner) Execute(task *domain.TaskResponse) Result {
 	switch agent := derefAgent(task.AssignedAgent); agent {
 	case domain.AgentTypePlanner:
 		return r.executePlanner(task)
+	case domain.AgentTypeResearcher:
+		return r.executeResearcher(task)
 	case domain.AgentTypeCoder:
 		return r.executeCoder(task)
+	case domain.AgentTypeReviewer:
+		return r.executeReviewer(task)
 	default:
 		return Result{
 			Status:       "error",
@@ -63,6 +68,9 @@ func (r *TaskRunner) Execute(task *domain.TaskResponse) Result {
 
 func (r *TaskRunner) executePlanner(task *domain.TaskResponse) Result {
 	metadata := cloneMap(task.Metadata)
+	if boilerplate, ok := buildBoilerplatePlan(task, metadata); ok {
+		return boilerplate
+	}
 	if asBool(metadata["research_mode"]) && r.research != nil {
 		queryResult, err := r.research.Query(context.Background(), task.Description)
 		if err == nil {
@@ -99,6 +107,71 @@ func (r *TaskRunner) executePlanner(task *domain.TaskResponse) Result {
 			"plan_markdown": "# Execution plan\n\n1. Scope\n2. Prepare\n3. Deliver",
 			"subtasks":      []map[string]any{},
 			"plan_only":     asBool(task.Metadata["plan_only"]),
+		},
+	}
+}
+
+func (r *TaskRunner) executeResearcher(task *domain.TaskResponse) Result {
+	projectRequest, _ := task.Metadata["project_request"].(map[string]any)
+	if projectRequest == nil {
+		if r.research != nil {
+			queryResult, err := r.research.Query(context.Background(), task.Description)
+			if err == nil {
+				return Result{
+					Status:  "success",
+					Summary: "researcher completed",
+					Results: map[string]any{
+						"status":         "success",
+						"intent":         string(queryResult.Intent),
+						"recommendations": []string{queryResult.Answer},
+						"sources":        queryResult.Sources,
+						"confidence":     queryResult.Confidence,
+					},
+				}
+			}
+		}
+		return Result{
+			Status:  "success",
+			Summary: "researcher produced fallback context",
+			Results: map[string]any{
+				"status": "success",
+				"recommendations": []string{
+					"Keep the project intentionally small and deterministic.",
+					"Prefer a runnable local test command with zero or near-zero external dependencies.",
+				},
+			},
+		}
+	}
+
+	projectType := firstNonEmptyMetadata(projectRequest, "project_type")
+	stack := firstNonEmptyMetadata(projectRequest, "runtime_or_stack")
+	goal := firstNonEmptyMetadata(projectRequest, "goal")
+	testFocus := firstNonEmptyMetadata(projectRequest, "test_focus")
+	testCommand := defaultProjectTestCommand(projectType, stack)
+	return Result{
+		Status:  "success",
+		Summary: "researcher prepared project context",
+		Results: map[string]any{
+			"status": "success",
+			"project_type": projectType,
+			"runtime_or_stack": stack,
+			"recommendations": []string{
+				fmt.Sprintf("Keep %s minimal and directly testable.", projectType),
+				fmt.Sprintf("Bias toward %s for runtime consistency.", stack),
+				"Expose exactly one obvious success path for the reviewer.",
+			},
+			"stack_rationale": []string{
+				fmt.Sprintf("Goal: %s", goal),
+				fmt.Sprintf("Primary test focus: %s", testFocus),
+				fmt.Sprintf("Suggested test command: %s", strings.Join(testCommand, " ")),
+			},
+			"checklist": []string{
+				"Project directory exists",
+				"README explains purpose",
+				"At least one runnable test file exists",
+				"Test command is deterministic",
+			},
+			"test_command": testCommand,
 		},
 	}
 }
@@ -160,6 +233,213 @@ func (r *TaskRunner) executeCoder(task *domain.TaskResponse) Result {
 			},
 		},
 	}
+}
+
+func (r *TaskRunner) executeReviewer(task *domain.TaskResponse) Result {
+	metadata := cloneMap(task.Metadata)
+	projectRequest, _ := metadata["project_request"].(map[string]any)
+	workspaceRoot := strings.TrimSpace(firstNonEmptyMetadata(metadata, "workspace_root"))
+	if projectRequest == nil || workspaceRoot == "" {
+		return Result{Status: "error", ErrorMessage: "reviewer requires metadata.project_request and metadata.workspace_root"}
+	}
+	parentDirectory := strings.TrimSpace(asString(projectRequest["parent_directory"]))
+	projectName := sanitizeProjectName(asString(projectRequest["project_name"]))
+	projectRootInput := filepath.Join(parentDirectory, projectName)
+	if filepath.IsAbs(parentDirectory) {
+		projectRootInput = parentDirectory
+		if filepath.Base(parentDirectory) != projectName {
+			projectRootInput = filepath.Join(parentDirectory, projectName)
+		}
+	}
+	projectRoot, err := safeResolve(workspaceRoot, projectRootInput)
+	if err != nil {
+		return Result{Status: "error", ErrorMessage: err.Error()}
+	}
+	info, err := os.Stat(projectRoot)
+	if err != nil || !info.IsDir() {
+		return Result{Status: "error", ErrorMessage: fmt.Sprintf("project directory missing: %s", projectRoot)}
+	}
+	projectType := firstNonEmptyMetadata(projectRequest, "project_type")
+	stack := firstNonEmptyMetadata(projectRequest, "runtime_or_stack")
+	expectedFiles := anyStringSliceDefault(projectRequest["expected_files"], expectedProjectFiles(projectType))
+	missing := make([]string, 0)
+	for _, rel := range expectedFiles {
+		if _, err := os.Stat(filepath.Join(projectRoot, rel)); err != nil {
+			missing = append(missing, rel)
+		}
+	}
+	testCommand := anyStringSliceDefault(projectRequest["test_command"], defaultProjectTestCommand(projectType, stack))
+	testResult := map[string]any{
+		"argv": testCommand,
+		"executed": false,
+	}
+	if len(testCommand) > 0 {
+		stdout, stderr, exitCode, cmdErr := runCommandInDir(projectRoot, testCommand)
+		testResult["executed"] = true
+		testResult["stdout"] = truncateOutput(stdout, 8000)
+		testResult["stderr"] = truncateOutput(stderr, 8000)
+		testResult["exit_code"] = exitCode
+		if cmdErr != nil {
+			testResult["error"] = cmdErr.Error()
+			return Result{
+				Status:  "error",
+				Summary: "reviewer detected failing project tests",
+				ErrorMessage: firstNonEmptyMetadata(
+					map[string]any{
+						"stderr": strings.TrimSpace(stderr),
+						"stdout": strings.TrimSpace(stdout),
+						"error":  cmdErr.Error(),
+					},
+					"stderr", "stdout", "error",
+				),
+				Results: map[string]any{
+					"status":            "error",
+					"validation_summary": "Project scaffold failed reviewer checks",
+					"missing_files":     missing,
+					"test_result":       testResult,
+				},
+			}
+		}
+	}
+	if len(missing) > 0 {
+		return Result{
+			Status:       "error",
+			Summary:      "reviewer detected missing files",
+			ErrorMessage: "project scaffold is incomplete",
+			Results: map[string]any{
+				"status":             "error",
+				"validation_summary": "Project scaffold is missing expected files",
+				"missing_files":      missing,
+				"test_result":        testResult,
+			},
+		}
+	}
+	return Result{
+		Status:  "success",
+		Summary: "reviewer validated scaffolded project",
+		Results: map[string]any{
+			"status":             "success",
+			"validation_summary": "Project scaffold passed reviewer checks",
+			"project_root":       projectRoot,
+			"expected_files":     expectedFiles,
+			"test_result":        testResult,
+			"pass_checks": []string{
+				"project directory exists",
+				"expected files present",
+				"test command succeeded",
+			},
+		},
+	}
+}
+
+func buildBoilerplatePlan(task *domain.TaskResponse, metadata map[string]any) (Result, bool) {
+	projectRequest, _ := metadata["project_request"].(map[string]any)
+	if projectRequest == nil {
+		return Result{}, false
+	}
+	projectName := sanitizeProjectName(asString(projectRequest["project_name"]))
+	projectType := firstNonEmptyMetadata(projectRequest, "project_type")
+	stack := firstNonEmptyMetadata(projectRequest, "runtime_or_stack")
+	parentDirectory := firstNonEmptyMetadata(projectRequest, "parent_directory")
+	testCommand := defaultProjectTestCommand(projectType, stack)
+	projectRequest["project_name"] = projectName
+	projectRequest["test_command"] = testCommand
+	projectRequest["expected_files"] = expectedProjectFiles(projectType)
+	projectRootRel := filepath.ToSlash(filepath.Join(parentDirectory, projectName))
+	researcherMetadata := map[string]any{
+		"project_request": projectRequest,
+		"workspace_root":  firstNonEmptyMetadata(metadata, "workspace_root"),
+		"tool_request": map[string]any{
+			"tool":            "research_project",
+			"project_request": projectRequest,
+		},
+	}
+	coderMetadata := map[string]any{
+		"project_request": projectRequest,
+		"workspace_root":  firstNonEmptyMetadata(metadata, "workspace_root"),
+		"tool_request": map[string]any{
+			"tool":             "scaffold_project",
+			"project_name":     projectName,
+			"parent_directory": parentDirectory,
+			"project_type":     projectType,
+			"runtime_or_stack": stack,
+			"goal":             firstNonEmptyMetadata(projectRequest, "goal"),
+			"test_focus":       firstNonEmptyMetadata(projectRequest, "test_focus"),
+			"initialize_git":   asBool(projectRequest["initialize_git"]),
+			"test_command":     testCommand,
+			"expected_files":   expectedProjectFiles(projectType),
+			"files_plan": []string{
+				"README.md",
+				"tests/*",
+			},
+		},
+	}
+	reviewerMetadata := map[string]any{
+		"project_request": projectRequest,
+		"workspace_root":  firstNonEmptyMetadata(metadata, "workspace_root"),
+		"tool_request": map[string]any{
+			"tool":           "review_project",
+			"project_root":   projectRootRel,
+			"expected_files": expectedProjectFiles(projectType),
+			"test_command":   testCommand,
+		},
+	}
+
+	subtasks := []map[string]any{
+		{
+			"title":            "Research scaffold constraints",
+			"description":      fmt.Sprintf("Prepare constraints and validation checklist for %s", projectRootRel),
+			"assigned_agent":   string(domain.AgentTypeResearcher),
+			"priority":         string(domain.PriorityNormal),
+			"requires_approval": false,
+			"execution_target": string(domain.ExecutionTargetLocal),
+			"metadata":         researcherMetadata,
+			"tool_request": map[string]any{
+				"tool": "research_project",
+				"project_request": projectRequest,
+			},
+		},
+		{
+			"title":            "Scaffold project files",
+			"description":      fmt.Sprintf("Create boilerplate for %s", projectRootRel),
+			"assigned_agent":   string(domain.AgentTypeCoder),
+			"priority":         string(domain.PriorityNormal),
+			"requires_approval": asBool(metadata["requires_approval"]),
+			"execution_target": string(domain.ExecutionTargetLocal),
+			"metadata":         coderMetadata,
+			"tool_request":     coderMetadata["tool_request"],
+		},
+		{
+			"title":            "Review scaffolded project",
+			"description":      fmt.Sprintf("Validate generated project at %s", projectRootRel),
+			"assigned_agent":   string(domain.AgentTypeReviewer),
+			"priority":         string(domain.PriorityNormal),
+			"requires_approval": false,
+			"execution_target": string(domain.ExecutionTargetLocal),
+			"metadata":         reviewerMetadata,
+			"tool_request": map[string]any{
+				"tool":          "review_project",
+				"project_root":  projectRootRel,
+				"expected_files": expectedProjectFiles(projectType),
+				"test_command":  testCommand,
+			},
+		},
+	}
+	return Result{
+		Status:  "success",
+		Summary: "planner prepared deterministic multi-agent boilerplate flow",
+		Results: map[string]any{
+			"status":            "success",
+			"plan_summary":      fmt.Sprintf("Create and validate boilerplate project %s with planner, researcher, coder, and reviewer", projectName),
+			"plan_markdown":     fmt.Sprintf("1. Research constraints\n2. Scaffold files\n3. Review and test\n\nTarget: `%s`", projectRootRel),
+			"subtasks":          subtasks,
+			"project_flow":      "boilerplate_v1",
+			"requested_agents":  []string{"researcher", "coder", "reviewer"},
+			"project_root_rel":  projectRootRel,
+			"test_command":      testCommand,
+			"plan_only":         false,
+		},
+	}, true
 }
 
 func (r *TaskRunner) executeAiderTask(task *domain.TaskResponse, repo string) Result {
@@ -297,7 +577,11 @@ func safeResolve(workspaceRoot, rawPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	candidate, err := filepath.Abs(filepath.Join(root, rawPath))
+	candidateInput := rawPath
+	if !filepath.IsAbs(candidateInput) {
+		candidateInput = filepath.Join(root, candidateInput)
+	}
+	candidate, err := filepath.Abs(candidateInput)
 	if err != nil {
 		return "", err
 	}
@@ -378,4 +662,92 @@ func cloneMap(input map[string]any) map[string]any {
 		output[key] = value
 	}
 	return output
+}
+
+var runnerProjectNameSanitizer = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
+
+func sanitizeProjectName(value string) string {
+	value = strings.TrimSpace(value)
+	value = runnerProjectNameSanitizer.ReplaceAllString(value, "-")
+	value = strings.Trim(value, "-.")
+	return value
+}
+
+func defaultProjectTestCommand(projectType, stack string) []string {
+	switch strings.ToLower(strings.TrimSpace(stack)) {
+	case "node":
+		return []string{"node", "--check", "app.js"}
+	case "static":
+		return []string{"python3", "-c", "from pathlib import Path; html=Path('index.html').read_text(); assert '<html' in html.lower()"}
+	}
+	switch strings.ToLower(strings.TrimSpace(projectType)) {
+	case "api_http":
+		return []string{"python3", "-m", "py_compile", "app.py"}
+	case "worker_background":
+		return []string{"python3", "-m", "py_compile", "worker.py"}
+	case "debug_regression":
+		return []string{"python3", "-m", "py_compile", "calculator.py"}
+	case "toy_repo":
+		return []string{"python3", "-m", "py_compile", "src/service.py"}
+	case "web_small":
+		return []string{"python3", "-c", "from pathlib import Path; html=Path('index.html').read_text(); assert '<html' in html.lower()"}
+	default:
+		return []string{"python3", "-m", "py_compile", "main.py"}
+	}
+}
+
+func expectedProjectFiles(projectType string) []string {
+	switch strings.ToLower(strings.TrimSpace(projectType)) {
+	case "api_http":
+		return []string{"README.md", "app.py", "tests/test_app.py", "lab.json"}
+	case "web_small":
+		return []string{"README.md", "index.html", "app.js", "style.css", "tests/test_static.py", "lab.json"}
+	case "worker_background":
+		return []string{"README.md", "worker.py", "tests/test_worker.py", "lab.json"}
+	case "debug_regression":
+		return []string{"README.md", "calculator.py", "tests/test_calculator.py", "lab.json"}
+	case "toy_repo":
+		return []string{"README.md", "src/service.py", "tests/test_service.py", "docs/notes.md", "lab.json"}
+	default:
+		return []string{"README.md", "main.py", "tests/test_main.py", "lab.json"}
+	}
+}
+
+func anyStringSliceDefault(value any, fallback []string) []string {
+	switch items := value.(type) {
+	case []string:
+		if len(items) > 0 {
+			return items
+		}
+	case []any:
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			text := strings.TrimSpace(asString(item))
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return fallback
+}
+
+func runCommandInDir(dir string, argv []string) (string, string, int, error) {
+	if len(argv) == 0 {
+		return "", "", -1, fmt.Errorf("argv is required")
+	}
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	text := string(output)
+	exitCode := 0
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
+	if err != nil {
+		return text, text, exitCode, err
+	}
+	return text, "", exitCode, nil
 }

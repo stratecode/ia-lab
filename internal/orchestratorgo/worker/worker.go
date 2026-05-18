@@ -49,7 +49,7 @@ func (w *RuntimeWorker) Start(parent context.Context) error {
 	}
 	ctx, cancel := context.WithCancel(parent)
 	w.cancel = cancel
-	if err := w.redis.RegisterWorker(ctx, w.workerID, "planner,coder"); err != nil {
+	if err := w.redis.RegisterWorker(ctx, w.workerID, "planner,researcher,coder,reviewer"); err != nil {
 		return err
 	}
 	if err := w.redis.EmitWorkerHeartbeat(ctx, w.workerID, w.cfg.WorkerHeartbeatInterval, nil, w.startedAt); err != nil {
@@ -95,7 +95,13 @@ func (w *RuntimeWorker) run(ctx context.Context) {
 			}
 			w.tryClaimTask(ctx, domain.AgentTypePlanner)
 			if w.getCurrentTask() == nil {
+				w.tryClaimTask(ctx, domain.AgentTypeResearcher)
+			}
+			if w.getCurrentTask() == nil {
 				w.tryClaimTask(ctx, domain.AgentTypeCoder)
+			}
+			if w.getCurrentTask() == nil {
+				w.tryClaimTask(ctx, domain.AgentTypeReviewer)
 			}
 		}
 	}
@@ -238,7 +244,7 @@ func (w *RuntimeWorker) handlePlannerSuccess(ctx context.Context, task *domain.T
 			description = title
 		}
 		agent := spec.AssignedAgent
-		if agent != domain.AgentTypePlanner && agent != domain.AgentTypeCoder {
+		if agent != domain.AgentTypePlanner && agent != domain.AgentTypeCoder && agent != domain.AgentTypeResearcher && agent != domain.AgentTypeReviewer {
 			agent = domain.AgentTypeCoder
 		}
 		priority := spec.Priority
@@ -255,17 +261,29 @@ func (w *RuntimeWorker) handlePlannerSuccess(ctx context.Context, task *domain.T
 			"workspace_root":       firstNonEmptyMetadata(task.Metadata, "workspace_root"),
 			"allowed_capabilities": task.AllowedCapabilities,
 		}
+		if spec.Metadata != nil {
+			for key, value := range spec.Metadata {
+				childMetadata[key] = value
+			}
+		}
 		if spec.ToolRequest != nil {
 			childMetadata["tool_request"] = spec.ToolRequest
 		}
-		workspacePath := w.childWorkspacePath(task, rootID)
+		executionTarget := task.ExecutionTarget
+		if spec.ExecutionTarget != "" {
+			executionTarget = spec.ExecutionTarget
+		}
+		var workspacePath *string
+		if executionTarget == domain.ExecutionTargetRemote {
+			workspacePath = w.childWorkspacePath(task, rootID)
+		}
 		child, err := w.postgres.CreateTask(ctx, store.CreateTaskParams{
 			Description:         description,
 			Metadata:            childMetadata,
 			AllowedCapabilities: task.AllowedCapabilities,
 			Priority:            priority,
 			AssignedAgent:       agent,
-			ExecutionTarget:     task.ExecutionTarget,
+			ExecutionTarget:     executionTarget,
 			Entrypoint:          firstNonEmptyMetadata(task.Metadata, "entrypoint"),
 			WorkspacePath:       workspacePath,
 			ParentTaskID:        &task.ID,
@@ -297,12 +315,18 @@ func (w *RuntimeWorker) handlePlannerSuccess(ctx context.Context, task *domain.T
 			continue
 		}
 
-		if err := w.redis.EnqueueTask(ctx, child.ID, agent, priority); err != nil {
-			_, _ = w.postgres.FailTask(ctx, child.ID, "worker:"+w.workerID, "queue enqueue failed", err.Error(), map[string]any{"status": "error"})
-			return err
-		}
-		if err := w.postgres.UpdateTaskState(ctx, child.ID, domain.TaskStateQueued, "worker:"+w.workerID, "Queued planner-generated subtask"); err != nil {
-			return err
+		if executionTarget == domain.ExecutionTargetLocal {
+			if err := w.postgres.UpdateTaskState(ctx, child.ID, domain.TaskStateQueued, "worker:"+w.workerID, "Queued planner-generated local subtask"); err != nil {
+				return err
+			}
+		} else {
+			if err := w.redis.EnqueueTask(ctx, child.ID, agent, priority); err != nil {
+				_, _ = w.postgres.FailTask(ctx, child.ID, "worker:"+w.workerID, "queue enqueue failed", err.Error(), map[string]any{"status": "error"})
+				return err
+			}
+			if err := w.postgres.UpdateTaskState(ctx, child.ID, domain.TaskStateQueued, "worker:"+w.workerID, "Queued planner-generated subtask"); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -331,12 +355,7 @@ func (w *RuntimeWorker) childWorkspacePath(task *domain.TaskResponse, rootID str
 		value := filepath.Clean(filepath.Join(base, rootID))
 		return &value
 	}
-	workspaceRoot := strings.TrimSpace(firstNonEmptyMetadata(task.Metadata, "workspace_root"))
-	if workspaceRoot == "" {
-		return task.WorkspacePath
-	}
-	value := filepath.Clean(filepath.Join(workspaceRoot, ".lab-tasks", rootID))
-	return &value
+	return nil
 }
 
 func (w *RuntimeWorker) reconcileRootTask(ctx context.Context, taskID string) {
@@ -395,8 +414,10 @@ type plannerSubtask struct {
 	Description      string
 	AssignedAgent    domain.AgentType
 	Priority         domain.Priority
+	ExecutionTarget  domain.ExecutionTarget
 	RequiresApproval bool
 	ToolRequest      map[string]any
+	Metadata         map[string]any
 }
 
 func parsePlannerSubtasks(raw any) []plannerSubtask {
@@ -423,10 +444,14 @@ func parsePlannerSubtasks(raw any) []plannerSubtask {
 			Description:      strings.TrimSpace(asStringMap(entry, "description")),
 			AssignedAgent:    domain.AgentType(strings.TrimSpace(asStringMap(entry, "assigned_agent"))),
 			Priority:         domain.Priority(strings.TrimSpace(asStringMap(entry, "priority"))),
+			ExecutionTarget:  domain.ExecutionTarget(strings.TrimSpace(asStringMap(entry, "execution_target"))),
 			RequiresApproval: asBoolAny(entry["requires_approval"]),
 		}
 		if toolRequest, ok := entry["tool_request"].(map[string]any); ok {
 			spec.ToolRequest = toolRequest
+		}
+		if metadata, ok := entry["metadata"].(map[string]any); ok {
+			spec.Metadata = metadata
 		}
 		out = append(out, spec)
 	}

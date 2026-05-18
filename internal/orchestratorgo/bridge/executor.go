@@ -89,6 +89,12 @@ func (e *WorkspaceExecutor) Execute(ctx context.Context, claim domain.LocalBridg
 		return e.listFiles(toolRequest)
 	case "write_file":
 		return e.writeFile(toolRequest)
+	case "research_project":
+		return e.researchProject(toolRequest)
+	case "scaffold_project":
+		return e.scaffoldProject(toolRequest)
+	case "review_project":
+		return e.reviewProject(ctx, toolRequest)
 	case "apply_patch":
 		return e.applyPatch(ctx, toolRequest)
 	case "run_command":
@@ -182,6 +188,131 @@ func (e *WorkspaceExecutor) writeFile(request map[string]any) (domain.LocalBridg
 	}
 	summary := fmt.Sprintf("Wrote %s", rel)
 	return e.withGitArtifacts(domain.LocalBridgeResultRequest{Status: "success", Summary: &summary})
+}
+
+func (e *WorkspaceExecutor) researchProject(request map[string]any) (domain.LocalBridgeResultRequest, error) {
+	projectRequest, _ := request["project_request"].(map[string]any)
+	projectType := firstNonEmptyString(strings.TrimSpace(asString(projectRequest["project_type"])), strings.TrimSpace(asString(request["project_type"])))
+	stack := firstNonEmptyString(strings.TrimSpace(asString(projectRequest["runtime_or_stack"])), strings.TrimSpace(asString(request["runtime_or_stack"])))
+	goal := firstNonEmptyString(strings.TrimSpace(asString(projectRequest["goal"])), strings.TrimSpace(asString(request["goal"])))
+	testFocus := firstNonEmptyString(strings.TrimSpace(asString(projectRequest["test_focus"])), strings.TrimSpace(asString(request["test_focus"])))
+	testCommand := anyStringSliceDefault(request["test_command"], defaultBridgeTestCommand(projectType, stack))
+	payload := fmt.Sprintf(`{
+  "project_type": %q,
+  "runtime_or_stack": %q,
+  "goal": %q,
+  "test_focus": %q,
+  "recommendations": [
+    "Keep the project tiny and deterministic.",
+    "Expose one obvious entrypoint and one obvious validation path.",
+    "Prefer a test command with no external network dependency."
+  ],
+  "checklist": [
+    "README present",
+    "At least one test file present",
+    "Declared test command is runnable"
+  ],
+  "test_command": %q
+}`, projectType, stack, goal, testFocus, strings.Join(testCommand, " "))
+	summary := fmt.Sprintf("Researched scaffold constraints for %s/%s", projectType, stack)
+	return domain.LocalBridgeResultRequest{
+		Status:  "success",
+		Summary: &summary,
+		Stdout:  &payload,
+		Artifacts: []map[string]any{
+			{
+				"type":         "research_context",
+				"title":        "Project research context",
+				"media_type":   "application/json",
+				"content_text": payload,
+			},
+		},
+	}, nil
+}
+
+func (e *WorkspaceExecutor) reviewProject(ctx context.Context, request map[string]any) (domain.LocalBridgeResultRequest, error) {
+	projectRootValue := strings.TrimSpace(asString(request["project_root"]))
+	if projectRootValue == "" {
+		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: "project_root is required"}
+	}
+	projectRoot, rel, err := e.resolve(projectRootValue)
+	if err != nil {
+		return domain.LocalBridgeResultRequest{}, err
+	}
+	info, err := os.Stat(projectRoot)
+	if err != nil || !info.IsDir() {
+		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: "project_root does not exist"}
+	}
+	expectedFiles := anyStringSliceDefault(request["expected_files"], []string{"README.md"})
+	missing := make([]string, 0)
+	for _, file := range expectedFiles {
+		target, _, err := e.resolve(filepath.ToSlash(filepath.Join(projectRootValue, file)))
+		if err != nil {
+			return domain.LocalBridgeResultRequest{}, err
+		}
+		if _, err := os.Stat(target); err != nil {
+			missing = append(missing, file)
+		}
+	}
+	testCommand := anyStringSliceDefault(request["test_command"], []string{"pytest", "-q"})
+	stdout := ""
+	stderr := ""
+	exitCode := 0
+	if len(testCommand) > 0 {
+		cmd := exec.CommandContext(ctx, testCommand[0], testCommand[1:]...)
+		cmd.Dir = projectRoot
+		var outBuf, errBuf bytes.Buffer
+		cmd.Stdout = &outBuf
+		cmd.Stderr = &errBuf
+		runErr := cmd.Run()
+		stdout = outBuf.String()
+		stderr = errBuf.String()
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+		}
+		if runErr != nil {
+			message := firstNonEmptyString(strings.TrimSpace(stderr), strings.TrimSpace(stdout), runErr.Error())
+			summary := fmt.Sprintf("Review failed for %s", rel)
+			return domain.LocalBridgeResultRequest{
+				Status:       "error",
+				Summary:      &summary,
+				Stdout:       stringPtr(stdout),
+				Stderr:       stringPtr(stderr),
+				ExitCode:     intPtr(exitCode),
+				ErrorMessage: &message,
+				Artifacts: []map[string]any{
+					{"type": "review_report", "title": "Project review failure", "media_type": "text/plain", "content_text": message},
+				},
+			}, nil
+		}
+	}
+	if len(missing) > 0 {
+		message := "missing expected files: " + strings.Join(missing, ", ")
+		summary := fmt.Sprintf("Review failed for %s", rel)
+		return domain.LocalBridgeResultRequest{
+			Status:       "error",
+			Summary:      &summary,
+			Stdout:       stringPtr(stdout),
+			Stderr:       stringPtr(stderr),
+			ExitCode:     intPtr(exitCode),
+			ErrorMessage: &message,
+			Artifacts: []map[string]any{
+				{"type": "review_report", "title": "Project review failure", "media_type": "text/plain", "content_text": message},
+			},
+		}, nil
+	}
+	summary := fmt.Sprintf("Review passed for %s", rel)
+	report := fmt.Sprintf("expected_files=%s\ntest_command=%s\n", strings.Join(expectedFiles, ","), strings.Join(testCommand, " "))
+	return domain.LocalBridgeResultRequest{
+		Status:   "success",
+		Summary:  &summary,
+		Stdout:   stringPtr(stdout),
+		Stderr:   stringPtr(stderr),
+		ExitCode: intPtr(exitCode),
+		Artifacts: []map[string]any{
+			{"type": "review_report", "title": "Project review report", "media_type": "text/plain", "content_text": report},
+		},
+	}, nil
 }
 
 func (e *WorkspaceExecutor) applyPatch(ctx context.Context, request map[string]any) (domain.LocalBridgeResultRequest, error) {
@@ -296,7 +427,11 @@ func (e *WorkspaceExecutor) resolveWithDefault(raw any, fallback string) (string
 	if path == "" {
 		return "", "", LocalExecutionError{Message: "path is required"}
 	}
-	candidate := filepath.Clean(filepath.Join(e.workspaceRoot, path))
+	candidate := path
+	if !filepath.IsAbs(candidate) {
+		candidate = filepath.Join(e.workspaceRoot, candidate)
+	}
+	candidate = filepath.Clean(candidate)
 	rel, err := filepath.Rel(e.workspaceRoot, candidate)
 	if err != nil {
 		return "", "", err
@@ -333,6 +468,13 @@ func anyStringSlice(value any) ([]string, bool) {
 	default:
 		return nil, false
 	}
+}
+
+func anyStringSliceDefault(value any, fallback []string) []string {
+	if items, ok := anyStringSlice(value); ok && len(items) > 0 {
+		return items
+	}
+	return fallback
 }
 
 func asBool(value any) bool {
@@ -374,4 +516,25 @@ func stringPtr(value string) *string {
 
 func intPtr(value int) *int {
 	return &value
+}
+
+func defaultBridgeTestCommand(projectType, stack string) []string {
+	switch strings.ToLower(strings.TrimSpace(stack)) {
+	case "static":
+		return []string{"python3", "-c", "from pathlib import Path; html=Path('index.html').read_text(); assert '<html' in html.lower()"}
+	case "node":
+		return []string{"node", "--check", "app.js"}
+	}
+	switch strings.ToLower(strings.TrimSpace(projectType)) {
+	case "api_http":
+		return []string{"python3", "-m", "py_compile", "app.py"}
+	case "worker_background":
+		return []string{"python3", "-m", "py_compile", "worker.py"}
+	case "debug_regression":
+		return []string{"python3", "-m", "py_compile", "calculator.py"}
+	case "toy_repo":
+		return []string{"python3", "-m", "py_compile", "src/service.py"}
+	default:
+		return []string{"python3", "-m", "py_compile", "main.py"}
+	}
 }

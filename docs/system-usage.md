@@ -14,6 +14,8 @@ There are four practical ways to use the system:
    Best for automation, task creation, approvals, system integration, and direct capability invocations.
 4. `Capability Layer`
    Best when you need web search, URL fetch, document parsing, or image analysis with traceable artifacts.
+5. `Local Bridge + TUI`
+   Best when you want the orchestrator to execute work inside a real workspace on the control machine.
 
 There is also a fourth entry point if you enjoy pain: editing production `site-packages`. Do not use that one.
 
@@ -25,6 +27,7 @@ There is also a fourth entry point if you enjoy pain: editing production `site-p
 | Open WebUI | `https://<chat_domain>` | browser chat UI |
 | Orchestrator API | `https://<cockpit_domain>/orchestrator/` | HTTP control plane |
 | Capability Layer | API + Telegram + `orchestrator-tools` model | web, documents, images, traceable sources |
+| Local Bridge + TUI | `lab-agent`, `lab-agentd`, `lab-agent tui` | local execution and project scaffolding |
 | Direct health | `http://127.0.0.1:8100/health` | local health check on the host |
 | Metrics | `http://127.0.0.1:8100/metrics` | Prometheus scrape target |
 
@@ -38,6 +41,7 @@ Use this sequence if you want signal without ceremony:
 4. Launch autonomous work with `/run` or `/plan` from Telegram.
 5. Use Telegram approvals when a task is gated.
 6. Use the capability endpoints or commands when you need context from the web, documents, or images.
+7. Use the local bridge when the work must touch a real workspace on your machine instead of the remote runtime workspace.
 
 ## Telegram
 
@@ -135,6 +139,24 @@ Open WebUI is exposed at `https://<chat_domain>` and connected to the local `lla
 | `planner` | decomposition, sequencing, architecture, higher-level reasoning |
 | `utility` | lightweight questions, short transformations, cheap helper tasks |
 | `orchestrator-tools` | research mode with web, documents and images, returning direct answers with source refs |
+
+## Local Bridge and TUI
+
+The validated local execution flow is no longer theoretical:
+
+1. `lab-agent tui` creates a root `planner` task
+2. the orchestrator expands it into `researcher`, `coder`, and `reviewer` subtasks
+3. `lab-agentd` executes those subtasks in the registered local workspace
+4. the root task completes only when the full local flow completes
+
+Use this when you want real files on disk, not just remote worker output.
+
+Important operational note:
+
+- if the host runtime and the local `lab-agentd` binary are on different versions, local tasks can fail with `unsupported local tool`
+- when bridge behavior changes, rebuild the local macOS/Linux agent binaries before testing
+
+Full bridge install and TUI usage lives in [Local Bridge and CLI](./local-bridge.md).
 
 ## Orchestrator HTTP API
 
@@ -412,6 +434,12 @@ LAB_AGENT_WORKSPACE_ROOT="/abs/path/to/current/workspace" \
 ./dist/lab-agent-linux-amd64 --env-file .env.bridge approvals list
 ```
 
+### Open the local bridge cockpit
+
+```bash
+./dist/lab-agent-linux-amd64 --env-file .env.bridge tui
+```
+
 ## Research mode notes
 
 `orchestrator-tools` is no longer just a thin tool gateway. It now runs a server-side research flow:
@@ -435,10 +463,12 @@ The Local Agent Bridge is now the controlled path for local execution from the G
 - it now uses Go binaries:
   - `lab-agent`
   - `lab-agentd`
+- it now also has a terminal cockpit through:
+  - `lab-agent tui`
 - full operational guide:
   - [Local Bridge and CLI](local-bridge.md)
 
-Use `lab-agent` and `lab-agentd` as the primary operator interface. Use `curl` against the orchestrator API when you need integration, automation, or low-level inspection.
+Use `lab-agent` as the primary operator interface. Use `lab-agentd` when you want the bridge daemon by itself. Use `curl` against the orchestrator API when you need integration, automation, or low-level inspection.
 
 ### Supported tools
 
@@ -459,7 +489,7 @@ Use `lab-agent` and `lab-agentd` as the primary operator interface. Use `curl` a
 - No arbitrary filesystem access exists outside that root.
 - No shell free-for-all exists. `run_command` is allowlisted on purpose.
 - The remote `coder` path still requires a real repo configured on the host via `repo_name`.
-- `lab-agent` is a CLI, not a TUI. It is deliberately plain because reliability beats cosplay.
+- The TUI is intentionally operational, not decorative. If you want a spaceship dashboard, Open WebUI already exists.
 
 ### Cancel a task
 

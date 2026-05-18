@@ -182,6 +182,26 @@ func (s *PostgresStore) CancelTask(ctx context.Context, taskID, actor, reason st
 	return s.UpdateTaskState(ctx, taskID, domain.TaskStateCancelled, actor, reason)
 }
 
+func (s *PostgresStore) ArchiveTask(ctx context.Context, taskID string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE tasks
+		   SET archived_at = NOW(),
+		       updated_at = NOW()
+		 WHERE id = $1
+	`, taskID)
+	return err
+}
+
+func (s *PostgresStore) UnarchiveTask(ctx context.Context, taskID string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE tasks
+		   SET archived_at = NULL,
+		       updated_at = NOW()
+		 WHERE id = $1
+	`, taskID)
+	return err
+}
+
 func (s *PostgresStore) UpdateTaskState(ctx context.Context, taskID string, targetState domain.TaskState, actor, reason string) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -224,6 +244,11 @@ func (s *PostgresStore) ListTasks(ctx context.Context, filter TaskListFilter) ([
 	}
 	if filter.ExecutionTarget != "" {
 		clauses = append(clauses, "execution_target = "+nextArg(string(filter.ExecutionTarget)))
+	}
+	if filter.OnlyArchived {
+		clauses = append(clauses, "archived_at IS NOT NULL")
+	} else if !filter.IncludeArchived {
+		clauses = append(clauses, "archived_at IS NULL")
 	}
 	if filter.ParentTaskID != "" {
 		clauses = append(clauses, "parent_task_id = "+nextArg(filter.ParentTaskID))
@@ -388,8 +413,9 @@ func (s *PostgresStore) ClaimNextLocalBridgeTask(ctx context.Context, bridgeID s
 
 	row := tx.QueryRow(ctx, taskSelectSQL+`
 		WHERE execution_target = 'local'
-		  AND assigned_agent = 'coder'
+		  AND assigned_agent IN ('coder', 'researcher', 'reviewer')
 		  AND state = 'queued'
+		  AND archived_at IS NULL
 		  AND (COALESCE(metadata->>'workspace_root', '') = '' OR metadata->>'workspace_root' = $1)
 		ORDER BY created_at ASC, id ASC
 		LIMIT 1
@@ -1190,6 +1216,8 @@ type TaskListFilter struct {
 	Agent           domain.AgentType
 	Priority        domain.Priority
 	ExecutionTarget domain.ExecutionTarget
+	IncludeArchived bool
+	OnlyArchived    bool
 	ParentTaskID    string
 	RootTaskID      string
 	DateFrom        *time.Time
@@ -1206,7 +1234,7 @@ type ApprovalListFilter struct {
 const taskSelectSQL = `
 	SELECT id::text, state::text, description, metadata, assigned_agent::text, priority::text,
 	       execution_target::text, workspace_path, retry_count, correlation_id::text, results,
-	       error_message, created_at, updated_at, started_at, completed_at,
+	       error_message, created_at, updated_at, started_at, completed_at, archived_at,
 	       parent_task_id::text, root_task_id::text, task_kind::text
 	FROM tasks
 `
@@ -1377,6 +1405,7 @@ func scanTask(row taskScanner) (*domain.TaskResponse, error) {
 		rootTaskID      *string
 		startedAt       *time.Time
 		completedAt     *time.Time
+		archivedAt      *time.Time
 		taskKind        string
 		executionTarget string
 		priority        string
@@ -1400,6 +1429,7 @@ func scanTask(row taskScanner) (*domain.TaskResponse, error) {
 		&item.UpdatedAt,
 		&startedAt,
 		&completedAt,
+		&archivedAt,
 		&parentTaskID,
 		&rootTaskID,
 		&taskKind,
@@ -1418,6 +1448,7 @@ func scanTask(row taskScanner) (*domain.TaskResponse, error) {
 	item.RootTaskID = rootTaskID
 	item.StartedAt = startedAt
 	item.CompletedAt = completedAt
+	item.ArchivedAt = archivedAt
 	if assignedAgent != nil && *assignedAgent != "" {
 		value := domain.AgentType(*assignedAgent)
 		item.AssignedAgent = &value

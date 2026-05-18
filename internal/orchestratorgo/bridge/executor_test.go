@@ -111,6 +111,118 @@ func TestWorkspaceExecutorSkipsRepeatApprovalAfterGrant(t *testing.T) {
 	}
 }
 
+func TestWorkspaceExecutorScaffoldProject(t *testing.T) {
+	root := initGitWorkspace(t)
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"tool_request": map[string]any{
+				"tool":             "scaffold_project",
+				"parent_directory": "projects",
+				"project_name":     "demo-tui",
+				"project_type":     "cli_simple",
+				"runtime_or_stack": "python",
+				"goal":             "test the TUI project wizard",
+				"test_focus":       "bridge execution",
+				"initialize_git":   true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" {
+		t.Fatalf("unexpected status: %s", result.Status)
+	}
+	readmePath := filepath.Join(root, "projects", "demo-tui", "README.md")
+	raw, err := os.ReadFile(readmePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "test the TUI project wizard") {
+		t.Fatalf("unexpected README content: %s", string(raw))
+	}
+	gitDir := filepath.Join(root, "projects", "demo-tui", ".git")
+	if _, err := os.Stat(gitDir); err != nil {
+		t.Fatalf("expected initialized git repo: %v", err)
+	}
+}
+
+func TestWorkspaceExecutorResearchAndReviewProject(t *testing.T) {
+	root := initGitWorkspace(t)
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectRequest := map[string]any{
+		"project_name":     "demo-review",
+		"parent_directory": "projects",
+		"project_type":     "cli_simple",
+		"runtime_or_stack": "python",
+		"goal":             "verify multiagent boilerplate",
+		"test_focus":       "review flow",
+		"initialize_git":   true,
+		"test_command":     []string{"python3", "-c", "print('ok')"},
+		"expected_files":   []string{"README.md", "main.py", "tests/test_main.py", "lab.json"},
+	}
+	if _, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"tool_request": map[string]any{
+				"tool":             "scaffold_project",
+				"parent_directory": "projects",
+				"project_name":     "demo-review",
+				"project_type":     "cli_simple",
+				"runtime_or_stack": "python",
+				"goal":             "verify multiagent boilerplate",
+				"test_focus":       "review flow",
+				"initialize_git":   true,
+				"test_command":     []any{"python3", "-c", "print('ok')"},
+				"expected_files":   []any{"README.md", "main.py", "tests/test_main.py", "lab.json"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	researchResult, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"tool_request": map[string]any{
+				"tool":            "research_project",
+				"project_request": projectRequest,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if researchResult.Status != "success" || len(researchResult.Artifacts) == 0 {
+		t.Fatalf("unexpected research result: %#v", researchResult)
+	}
+
+	reviewResult, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"tool_request": map[string]any{
+				"tool":          "review_project",
+				"project_root":  "projects/demo-review",
+				"expected_files": []any{"README.md", "main.py", "tests/test_main.py", "lab.json"},
+				"test_command":  []any{"python3", "-c", "print('ok')"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reviewResult.Status != "success" {
+		t.Fatalf("unexpected review result: %#v", reviewResult)
+	}
+	if len(reviewResult.Artifacts) == 0 {
+		t.Fatalf("expected review artifacts, got %#v", reviewResult)
+	}
+}
+
 func initGitWorkspace(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

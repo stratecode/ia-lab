@@ -125,6 +125,9 @@ class Task(Base):
     completed_at: Mapped[str | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    archived_at: Mapped[str | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     queued_at: Mapped[str | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -153,6 +153,28 @@
       delay: 3
       until: orchestrator_pg_isready.rc == 0
 
+    - name: Apply orchestrator task schema compatibility patch
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - -i
+          - orchestrator-postgres
+          - psql
+          - -U
+          - "{{ orchestrator_postgres_user }}"
+          - -d
+          - "{{ orchestrator_postgres_db }}"
+          - -v
+          - ON_ERROR_STOP=1
+          - -c
+          - |
+            ALTER TABLE tasks
+              ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ NULL;
+            CREATE INDEX IF NOT EXISTS ix_tasks_archived_at ON tasks (archived_at);
+      register: orchestrator_schema_patch
+      changed_when: false
+
     - name: Install orchestrator environment file
       ansible.builtin.copy:
         dest: "{{ orchestrator_config_dir }}/orchestrator.env"

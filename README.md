@@ -156,6 +156,8 @@ The platform now runs a Go orchestrator on `127.0.0.1:8100` with:
 - Prometheus metrics at `/metrics`
 - Python sidecars only for document and image capabilities
 
+Deployment now includes the minimum PostgreSQL compatibility patch required by the current Go runtime, including task archiving support. Bootstrap is expected to be reproducible without manual SQL after `ansible-playbook playbooks/bootstrap.yml`.
+
 The canonical deployment path is the `orchestrator` role plus the Go binary built from `cmd/orchestrator-go`. The remaining Python runtime is intentionally narrow and limited to `src/cap_sidecars/` because PDF/DOCX/OCR tooling is still better there than in a performative rewrite.
 
 ## Observability
@@ -190,6 +192,6 @@ Sensitive variables in the vault:
 - [Getting Started](docs/getting-started.md) — full setup guide from scratch (SSH keys, vault, first run)
 - [System Usage Guide](docs/system-usage.md) — Telegram, Open WebUI, and orchestrator API usage
 - [Orchestrator Go Runtime](docs/orchestrator-go-runtime.md) — Go runtime architecture, build flow, and deployment model
-- [Local Bridge and CLI](docs/local-bridge.md) — install, operate, and troubleshoot the local execution bridge
+- [Local Bridge and TUI/CLI](docs/local-bridge.md) — install, operate, and troubleshoot the local execution bridge
 - [Server Baseline](docs/server-baseline.md) — base configuration details
 - [WireGuard](docs/wireguard.md) — VPN setup and client guide

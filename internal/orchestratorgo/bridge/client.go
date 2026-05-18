@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -90,10 +91,75 @@ func (c *Client) SubmitResult(ctx context.Context, bridgeID, taskID string, body
 func (c *Client) ListTasks(ctx context.Context, executionTarget string) (*domain.TaskListResponse, error) {
 	path := "/tasks?limit=20"
 	if strings.TrimSpace(executionTarget) != "" {
-		path += "&execution_target=" + executionTarget
+		path += "&execution_target=" + url.QueryEscape(executionTarget)
 	}
 	var out domain.TaskListResponse
 	if err := c.requestJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) ListTasksFiltered(ctx context.Context, params map[string]string) (*domain.TaskListResponse, error) {
+	values := url.Values{}
+	values.Set("limit", "50")
+	for key, value := range params {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		values.Set(key, value)
+	}
+	var out domain.TaskListResponse
+	if err := c.requestJSON(ctx, http.MethodGet, "/tasks?"+values.Encode(), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) GetTask(ctx context.Context, taskID string) (*domain.TaskResponse, error) {
+	var out domain.TaskResponse
+	if err := c.requestJSON(ctx, http.MethodGet, "/tasks/"+strings.TrimSpace(taskID), nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) GetTaskTree(ctx context.Context, taskID string) (*domain.TaskTreeResponse, error) {
+	var out domain.TaskTreeResponse
+	if err := c.requestJSON(ctx, http.MethodGet, "/tasks/"+strings.TrimSpace(taskID)+"/tree", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CreateTask(ctx context.Context, body domain.TaskCreateRequest) (*domain.TaskResponse, error) {
+	var out domain.TaskResponse
+	if err := c.requestJSON(ctx, http.MethodPost, "/tasks", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) CancelTask(ctx context.Context, taskID string) (*domain.TaskResponse, error) {
+	var out domain.TaskResponse
+	if err := c.requestJSON(ctx, http.MethodPost, "/tasks/"+strings.TrimSpace(taskID)+"/cancel", map[string]any{}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) ArchiveTask(ctx context.Context, taskID string) (*domain.TaskResponse, error) {
+	var out domain.TaskResponse
+	if err := c.requestJSON(ctx, http.MethodPost, "/tasks/"+strings.TrimSpace(taskID)+"/archive", map[string]any{}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) UnarchiveTask(ctx context.Context, taskID string) (*domain.TaskResponse, error) {
+	var out domain.TaskResponse
+	if err := c.requestJSON(ctx, http.MethodPost, "/tasks/"+strings.TrimSpace(taskID)+"/unarchive", map[string]any{}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -105,6 +171,95 @@ func (c *Client) ListApprovals(ctx context.Context) (*domain.ApprovalListRespons
 		return nil, err
 	}
 	return &out, nil
+}
+
+func (c *Client) ResolveApproval(ctx context.Context, approvalID, operator string, approve bool) (*domain.ApprovalResponse, error) {
+	path := "/approvals/" + strings.TrimSpace(approvalID)
+	if approve {
+		path += "/approve"
+	} else {
+		path += "/reject"
+	}
+	var out domain.ApprovalResponse
+	if err := c.requestJSON(ctx, http.MethodPost, path, domain.ApprovalResolveRequest{Operator: strings.TrimSpace(operator)}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) Health(ctx context.Context) (*domain.HealthResponse, error) {
+	var out domain.HealthResponse
+	if err := c.requestJSON(ctx, http.MethodGet, "/health", nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func (c *Client) GetTaskSources(ctx context.Context, taskID string) ([]domain.ArtifactResponse, error) {
+	var out struct {
+		Items []domain.ArtifactResponse `json:"items"`
+		Total int                       `json:"total"`
+	}
+	if err := c.requestJSON(ctx, http.MethodGet, "/tasks/"+strings.TrimSpace(taskID)+"/sources", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Items, nil
+}
+
+func (c *Client) ListModels(ctx context.Context) ([]string, error) {
+	var out struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := c.requestJSON(ctx, http.MethodGet, "/v1/models", nil, &out); err != nil {
+		return nil, err
+	}
+	models := make([]string, 0, len(out.Data))
+	for _, item := range out.Data {
+		if value := strings.TrimSpace(item.ID); value != "" {
+			models = append(models, value)
+		}
+	}
+	return models, nil
+}
+
+func (c *Client) ChatCompletion(ctx context.Context, modelID, prompt string) (*ChatResponse, error) {
+	body := map[string]any{
+		"model": firstNonEmptyString(strings.TrimSpace(modelID), "orchestrator-tools"),
+		"messages": []map[string]any{
+			{"role": "user", "content": strings.TrimSpace(prompt)},
+		},
+	}
+	var out ChatResponse
+	if err := c.requestJSON(ctx, http.MethodPost, "/v1/chat/completions", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+type ChatResponse struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Model   string `json:"model"`
+	Choices []struct {
+		Index   int `json:"index"`
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+}
+
+func (c *Client) ChatText(ctx context.Context, modelID, prompt string) (string, error) {
+	response, err := c.ChatCompletion(ctx, modelID, prompt)
+	if err != nil {
+		return "", err
+	}
+	if len(response.Choices) == 0 {
+		return "", nil
+	}
+	return strings.TrimSpace(response.Choices[0].Message.Content), nil
 }
 
 func (c *Client) requestJSON(ctx context.Context, method, path string, input any, out any) error {

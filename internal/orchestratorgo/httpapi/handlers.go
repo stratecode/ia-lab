@@ -55,6 +55,8 @@ func (s *Server) Router(auth *Authenticator) http.Handler {
 		r.Post("/", s.createTask)
 		r.Patch("/{taskID}", s.updateTask)
 		r.Post("/{taskID}/cancel", s.cancelTask)
+		r.Post("/{taskID}/archive", s.archiveTask)
+		r.Post("/{taskID}/unarchive", s.unarchiveTask)
 	})
 	r.Route("/approvals", func(r chi.Router) {
 		r.Get("/", s.listApprovals)
@@ -189,6 +191,8 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 		Agent:           domain.AgentType(r.URL.Query().Get("agent")),
 		Priority:        domain.Priority(r.URL.Query().Get("priority")),
 		ExecutionTarget: domain.ExecutionTarget(r.URL.Query().Get("execution_target")),
+		IncludeArchived: strings.EqualFold(r.URL.Query().Get("archived"), "include"),
+		OnlyArchived:    strings.EqualFold(r.URL.Query().Get("archived"), "only"),
 		ParentTaskID:    r.URL.Query().Get("parent_task_id"),
 		RootTaskID:      r.URL.Query().Get("root_task_id"),
 		Cursor:          r.URL.Query().Get("cursor"),
@@ -446,6 +450,56 @@ func (s *Server) cancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if updatedTask == nil {
 		writeDetail(w, http.StatusNotFound, "task not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, updatedTask)
+}
+
+func (s *Server) archiveTask(w http.ResponseWriter, r *http.Request) {
+	taskID := chi.URLParam(r, "taskID")
+	task, err := s.Postgres.GetTask(r.Context(), taskID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if task == nil {
+		writeDetail(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if !domain.IsTerminalState(task.State) {
+		writeDetail(w, http.StatusConflict, "only terminal tasks can be archived")
+		return
+	}
+	if err := s.Postgres.ArchiveTask(r.Context(), taskID); err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	updatedTask, err := s.Postgres.GetTask(r.Context(), taskID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updatedTask)
+}
+
+func (s *Server) unarchiveTask(w http.ResponseWriter, r *http.Request) {
+	taskID := chi.URLParam(r, "taskID")
+	task, err := s.Postgres.GetTask(r.Context(), taskID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if task == nil {
+		writeDetail(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if err := s.Postgres.UnarchiveTask(r.Context(), taskID); err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	updatedTask, err := s.Postgres.GetTask(r.Context(), taskID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, updatedTask)

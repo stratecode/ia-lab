@@ -49,7 +49,7 @@ func (s *Service) CreatePlan(ctx context.Context, description string, metadata m
 		"Eres un planner operativo para un orquestador multiagente.",
 		`Devuelve SOLO JSON valido con esta forma exacta: {"summary":"...","plan":"...","subtasks":[{"title":"...","description":"...","assigned_agent":"coder","priority":"normal","requires_approval":false}]}`,
 		"Reglas:",
-		"- assigned_agent solo puede ser 'coder' o 'planner'",
+		"- assigned_agent solo puede ser 'planner', 'researcher', 'coder' o 'reviewer'",
 		"- No incluyas markdown ni texto fuera del JSON",
 		"- Crea subtareas ejecutables y concretas",
 		"- Usa requires_approval=true solo si la subtarea parece destructiva o sensible",
