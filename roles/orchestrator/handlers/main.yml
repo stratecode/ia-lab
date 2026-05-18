@@ -13,6 +13,12 @@
     state: restarted
     daemon_reload: true
 
+- name: Restart orchestrator go shadow service
+  ansible.builtin.systemd:
+    name: orchestrator-go-shadow.service
+    state: restarted
+    daemon_reload: true
+
 - name: Restart orchestrator backup timer
   ansible.builtin.systemd:
     name: orchestrator-pg-backup.timer

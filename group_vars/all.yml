@@ -436,3 +436,7 @@ orchestrator_openai_reference_model: "{{ lookup('env', 'LAB_OPENAI_REFERENCE_MOD
 orchestrator_openai_judge_model: "{{ lookup('env', 'LAB_OPENAI_JUDGE_MODEL') | default('gpt-5.4-mini', true) }}"
 orchestrator_openai_base_url: "{{ lookup('env', 'LAB_OPENAI_BASE_URL') | default('https://api.openai.com/v1', true) }}"
 orchestrator_openai_timeout_seconds: "{{ lookup('env', 'LAB_OPENAI_TIMEOUT_SECONDS') | default('45', true) | int }}"
+orchestrator_go_shadow_enabled: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_SHADOW_ENABLED') | default('false', true) | bool }}"
+orchestrator_go_shadow_host: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_SHADOW_HOST') | default('127.0.0.1', true) }}"
+orchestrator_go_shadow_port: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_SHADOW_PORT') | default('8110', true) | int }}"
+orchestrator_go_shadow_binary_path: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_SHADOW_BINARY_PATH') | default(inventory_dir ~ '/dist/orchestrator-go-linux-amd64', true) }}"

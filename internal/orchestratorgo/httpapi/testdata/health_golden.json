@@ -1,0 +1,26 @@
+{
+  "status": "healthy",
+  "timestamp": "2026-05-18T10:00:00Z",
+  "version": "0.1.0-go-shadow",
+  "safe_mode": true,
+  "components": {
+    "database": {
+      "status": "healthy",
+      "latency_ms": 1.25,
+      "details": {}
+    },
+    "redis": {
+      "status": "healthy",
+      "latency_ms": 0.75,
+      "details": {}
+    },
+    "workers": {
+      "status": "degraded",
+      "latency_ms": null,
+      "details": {
+        "registered_workers": 0,
+        "note": "No workers registered"
+      }
+    }
+  }
+}

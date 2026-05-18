@@ -6,6 +6,8 @@ ssh/
 .venv-phase4/
 .venv-research/
 .kiro
+dist/
+bin/
 
 # macOS
 .DS_Store
