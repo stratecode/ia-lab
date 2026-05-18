@@ -36,6 +36,7 @@ type Config struct {
 	OpenAIReferenceModel        string
 	OpenAIJudgeModel            string
 	OpenAITimeoutSeconds        int
+	WebSearchBaseURL            string
 }
 
 func Load() (Config, error) {
@@ -73,6 +74,7 @@ func Load() (Config, error) {
 		OpenAIReferenceModel:        getString(k, "lab.openai.reference.model", "gpt-4o-mini"),
 		OpenAIJudgeModel:            getString(k, "lab.openai.judge.model", "gpt-4o-mini"),
 		OpenAITimeoutSeconds:        getInt(k, "lab.openai.timeout.seconds", 45),
+		WebSearchBaseURL:            getString(k, "lab.web.search.base.url", "https://html.duckduckgo.com/html/"),
 	}
 
 	if cfg.PostgresPassword == "" {

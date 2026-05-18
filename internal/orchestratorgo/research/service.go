@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -32,20 +33,47 @@ type Source struct {
 }
 
 type Result struct {
-	Intent       Intent         `json:"intent"`
-	Answer       string         `json:"answer"`
-	Confidence   float64        `json:"confidence"`
-	Sources      []Source       `json:"sources"`
+	Intent        Intent        `json:"intent"`
+	Answer        string        `json:"answer"`
+	Confidence    float64       `json:"confidence"`
+	Sources       []Source      `json:"sources"`
 	SearchResults []SearchResult `json:"search_results,omitempty"`
 }
 
-type Service struct {
-	client *http.Client
+type Options struct {
+	Client        *http.Client
+	SearchBaseURL string
+	MaxFetchCount int
 }
 
-func New() *Service {
+type Service struct {
+	client        *http.Client
+	searchBaseURL string
+	maxFetchCount int
+}
+
+type fetchedSource struct {
+	Source
+	Content string
+}
+
+func New(options Options) *Service {
+	client := options.Client
+	if client == nil {
+		client = &http.Client{Timeout: 20 * time.Second}
+	}
+	searchBaseURL := strings.TrimSpace(options.SearchBaseURL)
+	if searchBaseURL == "" {
+		searchBaseURL = "https://html.duckduckgo.com/html/"
+	}
+	maxFetchCount := options.MaxFetchCount
+	if maxFetchCount <= 0 {
+		maxFetchCount = 5
+	}
 	return &Service{
-		client: &http.Client{Timeout: 20 * time.Second},
+		client:        client,
+		searchBaseURL: searchBaseURL,
+		maxFetchCount: maxFetchCount,
 	}
 }
 
@@ -61,7 +89,7 @@ func (s *Service) Query(ctx context.Context, query string) (Result, error) {
 }
 
 func (s *Service) WebSearch(ctx context.Context, query string) ([]SearchResult, error) {
-	endpoint := "https://html.duckduckgo.com/html/?q=" + url.QueryEscape(query)
+	endpoint := s.searchEndpoint(query)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -130,36 +158,62 @@ func (s *Service) searchAndSynthesize(ctx context.Context, query string) (Result
 	if len(results) == 0 {
 		return Result{}, fmt.Errorf("no web results found")
 	}
-	sources := make([]Source, 0, min(3, len(results)))
-	summaries := make([]string, 0, min(3, len(results)))
-	for _, item := range results[:min(3, len(results))] {
+
+	fetchCount := chooseSearchFetchCount(query, results, s.maxFetchCount)
+	fetched := make([]fetchedSource, 0, fetchCount)
+	seenURLs := map[string]struct{}{}
+	for _, item := range results {
+		if len(fetched) >= fetchCount {
+			break
+		}
+		canonicalURL := strings.TrimSpace(item.URL)
+		if _, exists := seenURLs[canonicalURL]; exists {
+			continue
+		}
 		source, text, err := s.WebFetch(ctx, item.URL)
 		if err != nil {
 			continue
 		}
-		sources = append(sources, source)
-		summaries = append(summaries, fmt.Sprintf("%s: %s", source.Title, truncateSentence(text, 320)))
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		seenURLs[canonicalURL] = struct{}{}
+		fetched = append(fetched, fetchedSource{
+			Source:  source,
+			Content: text,
+		})
 	}
-	if len(sources) == 0 {
+
+	answer := synthesizeSearchAnswer(query, fetched, results)
+	sources := make([]Source, 0, len(fetched))
+	if len(fetched) > 0 {
+		for _, item := range fetched {
+			sources = append(sources, item.Source)
+		}
+	} else {
 		for _, item := range results[:min(3, len(results))] {
 			sources = append(sources, Source{Title: item.Title, URI: item.URL, Kind: "search"})
-			if item.Snippet != "" {
-				summaries = append(summaries, fmt.Sprintf("%s: %s", item.Title, item.Snippet))
-			}
 		}
 	}
-	answer := "Resumen de la búsqueda:\n\n"
-	for i, line := range summaries {
-		answer += fmt.Sprintf("%d. %s\n", i+1, line)
-	}
-	answer += "\nConclusión: estas son las fuentes más relevantes encontradas para responder la consulta. Úsalas como base y no como evangelio grabado en piedra."
+
 	return Result{
 		Intent:        IntentSearchAnswer,
-		Answer:        strings.TrimSpace(answer),
-		Confidence:    0.64,
+		Answer:        answer,
+		Confidence:    confidenceForSearch(query, fetched, results),
 		Sources:       sources,
 		SearchResults: results[:min(5, len(results))],
 	}, nil
+}
+
+func (s *Service) searchEndpoint(query string) string {
+	base := strings.TrimSpace(s.searchBaseURL)
+	if strings.Contains(base, "{query}") {
+		return strings.ReplaceAll(base, "{query}", url.QueryEscape(query))
+	}
+	if strings.Contains(base, "?") {
+		return base + url.QueryEscape(query)
+	}
+	return strings.TrimRight(base, "/") + "/?q=" + url.QueryEscape(query)
 }
 
 func looksLikeURL(input string) bool {
@@ -182,12 +236,13 @@ func extractFirstURL(input string) string {
 }
 
 var (
-	reAnchor = regexp.MustCompile(`(?is)<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
+	reAnchor       = regexp.MustCompile(`(?is)<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>`)
 	reSnippetBlock = regexp.MustCompile(`(?is)<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>|<div[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</div>`)
-	reTitle = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
-	reScript = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>|<style[^>]*>.*?</style>`)
-	reTags = regexp.MustCompile(`(?is)<[^>]+>`)
-	reSpaces = regexp.MustCompile(`\s+`)
+	reTitle        = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+	reScript       = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>|<style[^>]*>.*?</style>`)
+	reTags         = regexp.MustCompile(`(?is)<[^>]+>`)
+	reSpaces       = regexp.MustCompile(`\s+`)
+	reSentence     = regexp.MustCompile(`[^.!?]+[.!?]?`)
 )
 
 func parseDuckDuckGoResults(body string) []SearchResult {
@@ -251,6 +306,167 @@ func synthesizeSingleSource(source Source, text string) string {
 	return strings.TrimSpace(fmt.Sprintf("Resumen de %s:\n\n%s", source.Title, summary))
 }
 
+func synthesizeSearchAnswer(query string, fetched []fetchedSource, results []SearchResult) string {
+	if len(fetched) == 0 {
+		lines := make([]string, 0, min(3, len(results)))
+		for idx, item := range results[:min(3, len(results))] {
+			line := fmt.Sprintf("%d. %s", idx+1, item.Title)
+			if item.Snippet != "" {
+				line += ": " + truncateSentence(item.Snippet, 220)
+			}
+			lines = append(lines, line)
+		}
+		return strings.TrimSpace(
+			"Respuesta preliminar para la consulta:\n\n" +
+				strings.Join(lines, "\n") +
+				"\n\nConclusión: solo hay snippets disponibles, así que la respuesta es útil pero todavía superficial.",
+		)
+	}
+
+	consensus := consensusBullets(fetched)
+	sourceLines := make([]string, 0, len(fetched))
+	for idx, item := range fetched {
+		sourceLines = append(sourceLines, fmt.Sprintf("%d. %s: %s", idx+1, item.Title, truncateSentence(item.Content, 220)))
+	}
+	answer := fmt.Sprintf("Respuesta a la consulta: %s\n\n", strings.TrimSpace(query))
+	if len(consensus) > 0 {
+		answer += "Síntesis:\n"
+		for _, bullet := range consensus {
+			answer += "- " + bullet + "\n"
+		}
+		answer += "\n"
+	}
+	answer += "Evidencia principal:\n" + strings.Join(sourceLines, "\n")
+	answer += "\n\nConclusión: la respuesta se apoya en varias fuentes distintas; útil para decidir, pero no para declararla verdad revelada sin revisar contexto adicional."
+	return strings.TrimSpace(answer)
+}
+
+func chooseSearchFetchCount(query string, results []SearchResult, maxFetchCount int) int {
+	if maxFetchCount <= 0 {
+		maxFetchCount = 5
+	}
+	target := 3
+	lowered := strings.ToLower(query)
+	comparativeTerms := []string{"compare", "vs", "versus", "difference", "mejor", "peor", "compar", "alternativa", "tradeoff"}
+	for _, term := range comparativeTerms {
+		if strings.Contains(lowered, term) {
+			target = maxFetchCount
+			break
+		}
+	}
+	domains := map[string]struct{}{}
+	totalSnippetLen := 0
+	snippetCount := 0
+	for _, item := range results[:min(5, len(results))] {
+		if host := canonicalHost(item.URL); host != "" {
+			domains[host] = struct{}{}
+		}
+		if strings.TrimSpace(item.Snippet) != "" {
+			totalSnippetLen += len(strings.TrimSpace(item.Snippet))
+			snippetCount++
+		}
+	}
+	avgSnippetLen := 0.0
+	if snippetCount > 0 {
+		avgSnippetLen = float64(totalSnippetLen) / float64(snippetCount)
+	}
+	if len(domains) < 3 || avgSnippetLen < 50 {
+		target = maxInt(target, min(maxFetchCount, 5))
+	}
+	if len(results) < target {
+		target = len(results)
+	}
+	if target < 1 {
+		target = 1
+	}
+	return target
+}
+
+func confidenceForSearch(query string, fetched []fetchedSource, results []SearchResult) float64 {
+	confidence := 0.60
+	if len(fetched) >= 3 {
+		confidence += 0.12
+	} else if len(fetched) == 2 {
+		confidence += 0.06
+	}
+	if uniqueSourceHosts(fetched) >= 3 {
+		confidence += 0.08
+	}
+	if strings.Contains(strings.ToLower(query), "compare") || strings.Contains(strings.ToLower(query), "mejor") {
+		confidence -= 0.01
+	}
+	if len(results) >= 5 {
+		confidence += 0.03
+	}
+	if confidence > 0.84 {
+		confidence = 0.84
+	}
+	return confidence
+}
+
+func consensusBullets(fetched []fetchedSource) []string {
+	if len(fetched) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(fetched))
+	for _, item := range fetched {
+		sentences := pickInterestingSentences(item.Content, 2)
+		if len(sentences) == 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s destaca %s", item.Title, strings.Join(sentences, " ")))
+	}
+	if len(parts) == 0 {
+		return []string{truncateSentence(fetched[0].Content, 220)}
+	}
+	sort.Slice(parts, func(i, j int) bool { return len(parts[i]) < len(parts[j]) })
+	return parts[:min(3, len(parts))]
+}
+
+func pickInterestingSentences(text string, maxSentences int) []string {
+	matches := reSentence.FindAllString(text, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	candidates := make([]string, 0, len(matches))
+	for _, match := range matches {
+		clean := strings.TrimSpace(match)
+		if len(clean) < 40 {
+			continue
+		}
+		if len(clean) > 220 {
+			clean = truncateSentence(clean, 220)
+		}
+		candidates = append(candidates, clean)
+	}
+	if len(candidates) == 0 {
+		return []string{truncateSentence(text, 220)}
+	}
+	return candidates[:min(maxSentences, len(candidates))]
+}
+
+func canonicalHost(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if strings.HasPrefix(host, "www.") {
+		host = strings.TrimPrefix(host, "www.")
+	}
+	return host
+}
+
+func uniqueSourceHosts(fetched []fetchedSource) int {
+	seen := map[string]struct{}{}
+	for _, item := range fetched {
+		if host := canonicalHost(item.URI); host != "" {
+			seen[host] = struct{}{}
+		}
+	}
+	return len(seen)
+}
+
 func truncateSentence(text string, max int) string {
 	text = strings.TrimSpace(text)
 	if len(text) <= max {
@@ -291,6 +507,13 @@ func firstNonEmpty(values ...string) string {
 
 func min(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b

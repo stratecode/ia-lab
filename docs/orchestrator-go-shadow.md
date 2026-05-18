@@ -55,6 +55,7 @@ Current write support in the shadow is intentionally narrow:
 - `research.query` now supports URL-oriented research with direct summary output.
 - `orchestrator-tools` now responds through `/v1/chat/completions` for URL-based prompts, returning answer, confidence, and sources.
 - `research.query` and `orchestrator-tools` now persist `research_runs` records in PostgreSQL.
+- `search_answer` in the Go shadow now performs adaptive multi-source fetch and synthesized answers instead of stopping at raw snippets.
 - the Go research flow now persists `tool_invocations` and `artifacts` for URL-based research runs.
 - `GET /tools/invocations/{id}` now returns the persisted invocation plus its artifacts.
 - `GET /tasks/{id}/sources` now returns persisted source artifacts linked to the task.

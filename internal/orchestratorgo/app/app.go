@@ -45,7 +45,9 @@ func New() (*Runtime, error) {
 	}
 	redisStore := store.NewRedisStore(redisOptions)
 	shadowWorker := worker.New(cfg, postgres, redisStore)
-	researchService := research.New()
+	researchService := research.New(research.Options{
+		SearchBaseURL: cfg.WebSearchBaseURL,
+	})
 	server := &httpapi.Server{
 		Config:        cfg,
 		Postgres:      postgres,
