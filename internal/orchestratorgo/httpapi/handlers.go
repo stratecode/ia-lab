@@ -241,7 +241,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 
 	agentType := classifyAgent(body.Description, body.AssignedAgent)
 	if agentType != domain.AgentTypePlanner && agentType != domain.AgentTypeCoder {
-		writeDetail(w, http.StatusBadRequest, "Phase 5 shadow core only supports planner and coder")
+		writeDetail(w, http.StatusBadRequest, "Current Go runtime only supports planner and coder")
 		return
 	}
 

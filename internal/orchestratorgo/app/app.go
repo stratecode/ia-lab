@@ -75,7 +75,7 @@ func New() (*Runtime, error) {
 		Capabilities:  capabilityClient,
 		SafeMode:      safeMode,
 		Now:           time.Now,
-		Version:       "0.1.0-go-shadow",
+		Version:       "0.1.0-go-runtime",
 		OpenAIToolsID: cfg.OpenAIToolsModelID,
 	}
 	auth := httpapi.NewAuthenticator(

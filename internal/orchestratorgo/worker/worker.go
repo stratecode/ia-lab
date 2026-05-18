@@ -125,7 +125,7 @@ func (w *ShadowWorker) tryClaimTask(ctx context.Context, agentType domain.AgentT
 		}
 		return
 	}
-	if err := w.postgres.UpdateTaskState(ctx, taskID, domain.TaskStateInProgress, "worker:"+w.workerID, "Execution started in Go shadow worker"); err != nil {
+	if err := w.postgres.UpdateTaskState(ctx, taskID, domain.TaskStateInProgress, "worker:"+w.workerID, "Execution started in Go worker"); err != nil {
 		if !strings.HasPrefix(err.Error(), "invalid_transition:") {
 			log.Warn().Err(err).Str("task_id", taskID).Msg("failed assigned->in_progress transition")
 		}

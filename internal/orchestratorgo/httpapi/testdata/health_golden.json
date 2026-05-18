@@ -1,7 +1,7 @@
 {
   "status": "healthy",
   "timestamp": "2026-05-18T10:00:00Z",
-  "version": "0.1.0-go-shadow",
+  "version": "0.1.0-go-runtime",
   "safe_mode": true,
   "components": {
     "database": {

@@ -38,7 +38,7 @@ func TestHealthResponseMatchesGoldenShape(t *testing.T) {
 	payload := domain.HealthResponse{
 		Status:    "healthy",
 		Timestamp: time.Date(2026, 5, 18, 10, 0, 0, 0, time.UTC),
-		Version:   "0.1.0-go-shadow",
+		Version:   "0.1.0-go-runtime",
 		SafeMode:  true,
 		Components: map[string]domain.ComponentHealth{
 			"database": {Status: "healthy", Details: map[string]any{}, LatencyMS: ptrFloat(1.25)},

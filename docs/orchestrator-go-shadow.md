@@ -1,10 +1,10 @@
-# Orchestrator Go Shadow
+# Orchestrator Go Runtime
 
-This document defines the production-oriented Go runtime that now takes the primary `orchestrator.service` role, with the Python runtime retained as a shadow fallback.
+This document defines the production-oriented Go runtime that now takes the primary `orchestrator.service` role. The legacy Python API shadow has been retired; only the Python sidecars for heavy document/image capabilities remain.
 
 ## Current scope
 
-The Go shadow service intentionally covers the compatibility base and the first write-oriented lifecycle wave:
+The Go runtime covers the compatibility base and the first write-oriented lifecycle wave:
 
 - `GET /health`
 - `GET /ready`
@@ -38,7 +38,7 @@ The Go shadow service intentionally covers the compatibility base and the first 
 - embedded minimal runner for `planner` and `coder`
 - embedded Telegram polling bot when `LAB_TELEGRAM_BOT_TOKEN` and `LAB_TELEGRAM_ALLOWED_USERS` are configured
 
-Current write support in the shadow is intentionally narrow:
+Current write support is intentionally narrow:
 
 - `POST /tasks` persists a root task, applies idempotency, classifies it into `planner` or `coder`, and enqueues it in Redis.
 - queue capacity is enforced with the same environment contract already used by the Python service.
@@ -47,7 +47,7 @@ Current write support in the shadow is intentionally narrow:
 - `POST /tasks/{id}/cancel` cancels a task only from cancellable states.
 - `POST /approvals/{id}/approve` resolves a pending approval, transitions the task back to `queued`, and re-enqueues it for worker pickup.
 - `POST /approvals/{id}/reject` resolves a pending approval and cancels the task.
-- an embedded shadow worker registers itself in Redis, emits heartbeats, claims queued planner/coder tasks, and moves them into `in_progress`.
+- an embedded worker registers itself in Redis, emits heartbeats, claims queued planner/coder tasks, and moves them into `in_progress`.
 - `planner` tasks can now call the configured planner LLM endpoint and persist the returned structured plan.
 - `coder` tasks can now execute real `aider-task` runs when `metadata.repo_name` or `metadata.repo_path` is provided.
 - the fallback coder path still supports:
@@ -55,7 +55,7 @@ Current write support in the shadow is intentionally narrow:
   - `tool_request.tool=write_file`
   - `tool_request.tool=append_file`
 - `coder` tasks marked with `metadata.requires_approval=true` request approval once, pause in `waiting_approval`, and resume after approval.
-- `web.fetch` now fetches and strips HTML content in the Go shadow core.
+- `web.fetch` now fetches and strips HTML content in the Go core.
 - `document.read` and `image.analyze` now run through HTTP sidecars so the Go core stops swallowing PDF/DOCX/OCR complexity whole.
 - `research.query` now supports URL-oriented research with direct summary output.
 - `research.query` now detects and serves:
@@ -64,11 +64,11 @@ Current write support in the shadow is intentionally narrow:
 - `orchestrator-tools` now responds through `/v1/chat/completions` for URL-based prompts, returning answer, confidence, and sources.
 - `orchestrator-tools` now also routes document and image prompts through the Go research flow.
 - `research.query` and `orchestrator-tools` now persist `research_runs` records in PostgreSQL.
-- `search_answer` in the Go shadow now performs adaptive multi-source fetch and synthesized answers instead of stopping at raw snippets.
+- `search_answer` now performs adaptive multi-source fetch and synthesized answers instead of stopping at raw snippets.
 - the Go research flow now persists `tool_invocations` and `artifacts` for URL-based research runs.
 - `GET /tools/invocations/{id}` now returns the persisted invocation plus its artifacts.
 - `GET /tasks/{id}/sources` now returns persisted source artifacts linked to the task.
-- the Go shadow now persists and serves:
+- the Go runtime now persists and serves:
   - `evaluation_runs`
   - `evaluation_dataset_items`
 - `POST /evaluations/reference` now creates a reference answer via the configured OpenAI-compatible endpoint.
@@ -86,7 +86,7 @@ What the worker does not do yet:
 ## Deployment shape
 
 - binary name: `orchestrator-go-linux-amd64`
-- default shadow port: `8110`
+- default primary port: `8100`
 - same PostgreSQL and Redis as the Python orchestrator
 - same auth model via `api_keys`
 - same safe-mode, logging, and environment contract
@@ -102,12 +102,11 @@ What the worker does not do yet:
 
 This uses a Dockerized Go toolchain so the repo does not depend on a local Go installation.
 
-## Shadow enablement
+## Deployment shape
 
 The Ansible role now deploys:
 
 - `orchestrator.service` -> Go runtime on the primary orchestrator port
-- `orchestrator-python-shadow.service` -> Python fallback API on the shadow port
 - `orchestrator-cap-docs.service` -> document sidecar
 - `orchestrator-cap-images.service` -> image sidecar
 
@@ -116,12 +115,9 @@ Useful variables:
 - `LAB_ORCHESTRATOR_GO_BINARY_PATH`
 - `LAB_ORCHESTRATOR_GO_HOST`
 - `LAB_ORCHESTRATOR_GO_PORT`
-- `LAB_ORCHESTRATOR_PYTHON_SHADOW_ENABLED`
-- `LAB_ORCHESTRATOR_PYTHON_SHADOW_HOST`
-- `LAB_ORCHESTRATOR_PYTHON_SHADOW_PORT`
 - `LAB_CAPABILITIES_DOCS_SIDECAR_URL`
 - `LAB_CAPABILITIES_IMAGES_SIDECAR_URL`
 
 ## Compatibility intent
 
-The Go shadow must remain API-and-persistence compatible with the Python system of record during migration. It is not allowed to introduce new public payload shapes in the shadow phase.
+The Go runtime must remain API-and-persistence compatible with the previous Python system of record during migration. It is not allowed to introduce new public payload shapes casually just because the implementation language changed.

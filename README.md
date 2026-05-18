@@ -188,6 +188,6 @@ Sensitive variables in the vault:
 
 - [Getting Started](docs/getting-started.md) — full setup guide from scratch (SSH keys, vault, first run)
 - [System Usage Guide](docs/system-usage.md) — Telegram, Open WebUI, and orchestrator API usage
-- [Orchestrator Go Shadow](docs/orchestrator-go-shadow.md) — Go migration baseline, build flow, and shadow deployment model
+- [Orchestrator Go Runtime](docs/orchestrator-go-shadow.md) — Go runtime architecture, build flow, and deployment model
 - [Server Baseline](docs/server-baseline.md) — base configuration details
 - [WireGuard](docs/wireguard.md) — VPN setup and client guide
