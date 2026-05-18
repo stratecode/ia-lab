@@ -16,6 +16,7 @@ type Config struct {
 	LogLevel                    string
 	SafeMode                    bool
 	WorkspaceRoot               string
+	WorkspaceRetentionHours     int
 	PostgresHost                string
 	PostgresPort                int
 	PostgresDB                  string
@@ -37,6 +38,25 @@ type Config struct {
 	OpenAIJudgeModel            string
 	OpenAITimeoutSeconds        int
 	WebSearchBaseURL            string
+	AllowedURLSchemes           []string
+	AllowedLocalRoots           []string
+	MaxDocumentBytes            int
+	MaxImageBytes               int
+	MaxArtifactTextChars        int
+	DocsSidecarURL              string
+	ImagesSidecarURL            string
+	TelegramBotToken            string
+	TelegramAllowedUsers        []int64
+	LlamaPlannerBaseURL         string
+	LlamaPlannerAPIKey          string
+	LlamaUtilityBaseURL         string
+	LlamaUtilityAPIKey          string
+	LlamaCodeBaseURL            string
+	LlamaCodeAPIKey             string
+	LlamaTimeoutSeconds         int
+	AiderTaskPath               string
+	AiderTimeoutSeconds         int
+	DefaultGitBranch            string
 }
 
 func Load() (Config, error) {
@@ -54,6 +74,7 @@ func Load() (Config, error) {
 		LogLevel:                    strings.ToLower(getString(k, "lab.orchestrator.log.level", "info")),
 		SafeMode:                    getBool(k, "lab.orchestrator.safe.mode", true),
 		WorkspaceRoot:               getString(k, "lab.workspace.root", "/srv/ai-lab/orchestrator/workspaces"),
+		WorkspaceRetentionHours:     getInt(k, "lab.workspace.retention.hours", 24),
 		PostgresHost:                getString(k, "lab.postgres.host", "127.0.0.1"),
 		PostgresPort:                getInt(k, "lab.postgres.port", 5432),
 		PostgresDB:                  getString(k, "lab.postgres.db", "orchestrator"),
@@ -75,6 +96,25 @@ func Load() (Config, error) {
 		OpenAIJudgeModel:            getString(k, "lab.openai.judge.model", "gpt-4o-mini"),
 		OpenAITimeoutSeconds:        getInt(k, "lab.openai.timeout.seconds", 45),
 		WebSearchBaseURL:            getString(k, "lab.web.search.base.url", "https://html.duckduckgo.com/html/"),
+		AllowedURLSchemes:           splitCSV(getString(k, "lab.capabilities.allowed.url.schemes", "http,https,file")),
+		AllowedLocalRoots:           splitCSV(getString(k, "lab.capabilities.allowed.local.roots", "/srv/ai-lab,/tmp")),
+		MaxDocumentBytes:            getInt(k, "lab.capabilities.max.document.bytes", 20000000),
+		MaxImageBytes:               getInt(k, "lab.capabilities.max.image.bytes", 10000000),
+		MaxArtifactTextChars:        getInt(k, "lab.capabilities.max.artifact.text.chars", 16000),
+		DocsSidecarURL:              getString(k, "lab.capabilities.docs.sidecar.url", ""),
+		ImagesSidecarURL:            getString(k, "lab.capabilities.images.sidecar.url", ""),
+		TelegramBotToken:            getString(k, "lab.telegram.bot.token", ""),
+		TelegramAllowedUsers:        splitCSVInt64(getString(k, "lab.telegram.allowed.users", "")),
+		LlamaPlannerBaseURL:         getString(k, "lab.llama.planner.base.url", "http://127.0.0.1:8082/v1"),
+		LlamaPlannerAPIKey:          getString(k, "lab.llama.planner.api.key", "local-planner"),
+		LlamaUtilityBaseURL:         getString(k, "lab.llama.utility.base.url", "http://127.0.0.1:8083/v1"),
+		LlamaUtilityAPIKey:          getString(k, "lab.llama.utility.api.key", "local-utility"),
+		LlamaCodeBaseURL:            getString(k, "lab.llama.code.base.url", "http://127.0.0.1:8080/v1"),
+		LlamaCodeAPIKey:             getString(k, "lab.llama.code.api.key", "local-code"),
+		LlamaTimeoutSeconds:         getInt(k, "lab.llama.timeout.seconds", 90),
+		AiderTaskPath:               getString(k, "lab.aider.task.path", "/usr/local/bin/aider-task"),
+		AiderTimeoutSeconds:         getInt(k, "lab.aider.timeout.seconds", 1800),
+		DefaultGitBranch:            getString(k, "lab.aider.default.branch", "main"),
 	}
 
 	if cfg.PostgresPassword == "" {
@@ -135,4 +175,31 @@ func getBool(k *koanf.Koanf, key string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func splitCSV(value string) []string {
+	items := []string{}
+	for _, item := range strings.Split(value, ",") {
+		clean := strings.TrimSpace(item)
+		if clean != "" {
+			items = append(items, clean)
+		}
+	}
+	return items
+}
+
+func splitCSVInt64(value string) []int64 {
+	items := []int64{}
+	for _, item := range strings.Split(value, ",") {
+		clean := strings.TrimSpace(item)
+		if clean == "" {
+			continue
+		}
+		parsed, err := strconv.ParseInt(clean, 10, 64)
+		if err != nil {
+			continue
+		}
+		items = append(items, parsed)
+	}
+	return items
 }

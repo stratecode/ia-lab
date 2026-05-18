@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
 )
 
 func TestParseDuckDuckGoResults(t *testing.T) {
@@ -110,5 +112,75 @@ func TestSearchEndpointSupportsPlaceholder(t *testing.T) {
 	endpoint := service.searchEndpoint("logical replication")
 	if !strings.Contains(endpoint, url.QueryEscape("logical replication")) {
 		t.Fatalf("unexpected endpoint: %s", endpoint)
+	}
+}
+
+func TestQueryDetectsDocumentAndUsesSidecar(t *testing.T) {
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/document/read" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","summary":"README.md\n\nDeployment notes for the orchestrator.","output":{"content_text":"Deployment notes for the orchestrator.","sections":["Intro"]},"source_refs":[{"title":"README.md","uri":"file:///tmp/README.md","kind":"document"}],"artifacts":[{"artifact_type":"document_text","title":"README.md","uri":"file:///tmp/README.md","media_type":"text/markdown","content_text":"Deployment notes for the orchestrator.","metadata":{"sections":["Intro"]}}]}`))
+	}))
+	defer sidecar.Close()
+
+	service := New(Options{
+		Capabilities: capabilities.New(capabilities.Options{
+			DocsBaseURL:       sidecar.URL,
+			MaxDocumentBytes:  1000000,
+			MaxArtifactChars:  16000,
+			AllowedURLSchemes: []string{"file"},
+			AllowedLocalRoots: []string{"/tmp"},
+			TimeoutSeconds:    5,
+		}),
+	})
+	result, err := service.Query(context.Background(), "resume ./README.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Intent != IntentDocumentQA {
+		t.Fatalf("unexpected intent: %s", result.Intent)
+	}
+	if len(result.Sources) != 1 || result.Sources[0].Kind != "document" {
+		t.Fatalf("unexpected sources: %#v", result.Sources)
+	}
+	if !strings.Contains(result.Answer, "Deployment notes") {
+		t.Fatalf("unexpected answer: %s", result.Answer)
+	}
+}
+
+func TestQueryDetectsImageAndUsesSidecar(t *testing.T) {
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/image/analyze" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","summary":"Image: PNG\nSize: 640x480\nMode: RGB\nOCR: error stack trace","output":{"ocr_text":"error stack trace","metadata":{"width":640,"height":480,"mode":"RGB","format":"PNG"}},"source_refs":[{"title":"screen.png","uri":"file:///tmp/screen.png","kind":"image"}],"artifacts":[{"artifact_type":"image_analysis","title":"screen.png","uri":"file:///tmp/screen.png","media_type":"image/png","content_text":"error stack trace","metadata":{"width":640,"height":480}}]}`))
+	}))
+	defer sidecar.Close()
+
+	service := New(Options{
+		Capabilities: capabilities.New(capabilities.Options{
+			ImagesBaseURL:     sidecar.URL,
+			MaxImageBytes:     1000000,
+			MaxArtifactChars:  16000,
+			AllowedURLSchemes: []string{"file"},
+			AllowedLocalRoots: []string{"/tmp"},
+			TimeoutSeconds:    5,
+		}),
+	})
+	result, err := service.Query(context.Background(), "analiza ./screen.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Intent != IntentImageQA {
+		t.Fatalf("unexpected intent: %s", result.Intent)
+	}
+	if len(result.Sources) != 1 || result.Sources[0].Kind != "image" {
+		t.Fatalf("unexpected sources: %#v", result.Sources)
+	}
+	if !strings.Contains(result.Answer, "OCR: error stack trace") {
+		t.Fatalf("unexpected answer: %s", result.Answer)
 	}
 }

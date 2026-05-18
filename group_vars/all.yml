@@ -102,6 +102,9 @@ llama_cpp_root_dir: /opt/llama.cpp
 llama_cpp_src_dir: /opt/llama.cpp/src
 llama_cpp_build_dir: /opt/llama.cpp/build
 llama_cpp_cache_dir: /srv/ai-lab/llama.cpp/cache
+llama_cpp_build_jobs: "{{ lookup('env', 'LAB_LLAMA_BUILD_JOBS') | default('4', true) | int }}"
+llama_cpp_build_async_seconds: "{{ lookup('env', 'LAB_LLAMA_BUILD_ASYNC_SECONDS') | default('14400', true) | int }}"
+llama_cpp_build_poll_seconds: "{{ lookup('env', 'LAB_LLAMA_BUILD_POLL_SECONDS') | default('30', true) | int }}"
 llama_cpp_instances:
   # ── Code instance (priority 1 — always-on) ────────────────────────────────
   - service_name: llama-cpp-code
@@ -436,7 +439,18 @@ orchestrator_openai_reference_model: "{{ lookup('env', 'LAB_OPENAI_REFERENCE_MOD
 orchestrator_openai_judge_model: "{{ lookup('env', 'LAB_OPENAI_JUDGE_MODEL') | default('gpt-5.4-mini', true) }}"
 orchestrator_openai_base_url: "{{ lookup('env', 'LAB_OPENAI_BASE_URL') | default('https://api.openai.com/v1', true) }}"
 orchestrator_openai_timeout_seconds: "{{ lookup('env', 'LAB_OPENAI_TIMEOUT_SECONDS') | default('45', true) | int }}"
-orchestrator_go_shadow_enabled: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_SHADOW_ENABLED') | default('false', true) | bool }}"
-orchestrator_go_shadow_host: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_SHADOW_HOST') | default('127.0.0.1', true) }}"
-orchestrator_go_shadow_port: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_SHADOW_PORT') | default('8110', true) | int }}"
-orchestrator_go_shadow_binary_path: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_SHADOW_BINARY_PATH') | default(inventory_dir ~ '/dist/orchestrator-go-linux-amd64', true) }}"
+orchestrator_go_binary_path: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_BINARY_PATH') | default(lookup('env', 'LAB_ORCHESTRATOR_GO_SHADOW_BINARY_PATH') | default(inventory_dir ~ '/dist/orchestrator-go-linux-amd64', true), true) }}"
+orchestrator_go_host: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_HOST') | default(orchestrator_host, true) }}"
+orchestrator_go_port: "{{ lookup('env', 'LAB_ORCHESTRATOR_GO_PORT') | default(orchestrator_port, true) | int }}"
+orchestrator_python_shadow_enabled: "{{ lookup('env', 'LAB_ORCHESTRATOR_PYTHON_SHADOW_ENABLED') | default('true', true) | bool }}"
+orchestrator_python_shadow_host: "{{ lookup('env', 'LAB_ORCHESTRATOR_PYTHON_SHADOW_HOST') | default('127.0.0.1', true) }}"
+orchestrator_python_shadow_port: "{{ lookup('env', 'LAB_ORCHESTRATOR_PYTHON_SHADOW_PORT') | default(lookup('env', 'LAB_ORCHESTRATOR_GO_SHADOW_PORT') | default('8110', true), true) | int }}"
+orchestrator_docs_sidecar_host: "{{ lookup('env', 'LAB_CAPABILITIES_DOCS_SIDECAR_HOST') | default('127.0.0.1', true) }}"
+orchestrator_docs_sidecar_port: "{{ lookup('env', 'LAB_CAPABILITIES_DOCS_SIDECAR_PORT') | default('8221', true) | int }}"
+orchestrator_images_sidecar_host: "{{ lookup('env', 'LAB_CAPABILITIES_IMAGES_SIDECAR_HOST') | default('127.0.0.1', true) }}"
+orchestrator_images_sidecar_port: "{{ lookup('env', 'LAB_CAPABILITIES_IMAGES_SIDECAR_PORT') | default('8222', true) | int }}"
+orchestrator_docs_sidecar_url: "{{ lookup('env', 'LAB_CAPABILITIES_DOCS_SIDECAR_URL') | default('http://' ~ orchestrator_docs_sidecar_host ~ ':' ~ orchestrator_docs_sidecar_port, true) }}"
+orchestrator_images_sidecar_url: "{{ lookup('env', 'LAB_CAPABILITIES_IMAGES_SIDECAR_URL') | default('http://' ~ orchestrator_images_sidecar_host ~ ':' ~ orchestrator_images_sidecar_port, true) }}"
+orchestrator_aider_task_path: "{{ lookup('env', 'LAB_AIDER_TASK_PATH') | default('/usr/local/bin/aider-task', true) }}"
+orchestrator_aider_timeout_seconds: "{{ lookup('env', 'LAB_AIDER_TIMEOUT_SECONDS') | default('1800', true) | int }}"
+orchestrator_aider_default_branch: "{{ lookup('env', 'LAB_AIDER_DEFAULT_BRANCH') | default('main', true) }}"

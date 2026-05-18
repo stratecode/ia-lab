@@ -1,0 +1,587 @@
+package telegram
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/rs/zerolog/log"
+
+	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
+	"github.com/stratecode/lab/internal/orchestratorgo/config"
+	"github.com/stratecode/lab/internal/orchestratorgo/domain"
+	"github.com/stratecode/lab/internal/orchestratorgo/httpapi"
+	"github.com/stratecode/lab/internal/orchestratorgo/research"
+	"github.com/stratecode/lab/internal/orchestratorgo/store"
+)
+
+type Bot struct {
+	cfg          config.Config
+	postgres     *store.PostgresStore
+	redis        *store.RedisStore
+	research     *research.Service
+	capabilities *capabilities.Client
+	safeMode     *httpapi.SafeModeState
+	client       *http.Client
+	cancel       context.CancelFunc
+	done         chan struct{}
+	offset       int64
+	mu           sync.Mutex
+}
+
+func New(cfg config.Config, postgres *store.PostgresStore, redis *store.RedisStore, researchService *research.Service, capabilityClient *capabilities.Client, safeMode *httpapi.SafeModeState) *Bot {
+	return &Bot{
+		cfg:          cfg,
+		postgres:     postgres,
+		redis:        redis,
+		research:     researchService,
+		capabilities: capabilityClient,
+		safeMode:     safeMode,
+		client:       &http.Client{Timeout: 35 * time.Second},
+		done:         make(chan struct{}),
+	}
+}
+
+func (b *Bot) Enabled() bool {
+	return strings.TrimSpace(b.cfg.TelegramBotToken) != "" && len(b.cfg.TelegramAllowedUsers) > 0
+}
+
+func (b *Bot) Start(parent context.Context) error {
+	if !b.Enabled() {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(parent)
+	b.cancel = cancel
+	go b.run(ctx)
+	return nil
+}
+
+func (b *Bot) Stop() {
+	if b.cancel != nil {
+		b.cancel()
+		<-b.done
+	}
+}
+
+func (b *Bot) run(ctx context.Context) {
+	defer close(b.done)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		updates, err := b.getUpdates(ctx)
+		if err != nil {
+			log.Warn().Err(err).Msg("telegram polling failed")
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		for _, update := range updates {
+			if update.UpdateID >= b.offset {
+				b.offset = update.UpdateID + 1
+			}
+			if update.Message == nil {
+				continue
+			}
+			if !b.isAllowed(update.Message.From.ID) {
+				continue
+			}
+			reply := b.handleCommand(ctx, update.Message)
+			if strings.TrimSpace(reply) == "" {
+				continue
+			}
+			if err := b.sendMessage(ctx, update.Message.Chat.ID, reply); err != nil {
+				log.Warn().Err(err).Int64("chat_id", update.Message.Chat.ID).Msg("telegram sendMessage failed")
+			}
+		}
+	}
+}
+
+func (b *Bot) isAllowed(userID int64) bool {
+	for _, allowed := range b.cfg.TelegramAllowedUsers {
+		if allowed == userID {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Bot) getUpdates(ctx context.Context) ([]update, error) {
+	endpoint := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?timeout=20&offset=%d", b.cfg.TelegramBotToken, b.offset)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("telegram getUpdates failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var payload struct {
+		OK     bool     `json:"ok"`
+		Result []update `json:"result"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	return payload.Result, nil
+}
+
+func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) error {
+	body := map[string]any{
+		"chat_id": chatID,
+		"text":    text,
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	endpoint := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", b.cfg.TelegramBotToken)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		return fmt.Errorf("telegram sendMessage failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+func (b *Bot) handleCommand(ctx context.Context, message *message) string {
+	text := strings.TrimSpace(message.Text)
+	if text == "" || !strings.HasPrefix(text, "/") {
+		return "Usa /status, /tasks, /task, /safe, /run, /plan, /research, /fetch, /doc, /image, /approvals, /approve, /reject, /capabilities o /sources."
+	}
+	fields := strings.Fields(text)
+	command := strings.TrimPrefix(fields[0], "/")
+	arg := ""
+	if len(fields) > 1 {
+		arg = strings.TrimSpace(strings.Join(fields[1:], " "))
+	}
+	switch command {
+	case "status":
+		return b.cmdStatus(ctx)
+	case "tasks":
+		return b.cmdTasks(ctx)
+	case "task":
+		return b.cmdTask(ctx, arg)
+	case "safe":
+		return b.cmdSafe()
+	case "run":
+		return b.cmdCreateTask(ctx, arg, domain.AgentTypePlanner, false)
+	case "plan":
+		return b.cmdCreateTask(ctx, arg, domain.AgentTypePlanner, true)
+	case "approvals":
+		return b.cmdApprovals(ctx)
+	case "approve":
+		return b.cmdResolveApproval(ctx, arg, true, message.From.Username)
+	case "reject":
+		return b.cmdResolveApproval(ctx, arg, false, message.From.Username)
+	case "cancel":
+		return b.cmdCancelTask(ctx, arg)
+	case "research", "web":
+		return b.cmdResearch(ctx, arg)
+	case "fetch":
+		return b.cmdFetch(ctx, arg)
+	case "doc":
+		return b.cmdDocument(ctx, arg)
+	case "image":
+		return b.cmdImage(ctx, arg)
+	case "sources":
+		return b.cmdSources(ctx, arg)
+	case "capabilities":
+		return "Capabilities\n- web.search\n- web.fetch\n- document.read\n- image.analyze\n- research.query"
+	default:
+		return "Comando no soportado todavía en el bot Go. De momento usa /status, /safe, /run, /research, /doc, /image o /capabilities."
+	}
+}
+
+func (b *Bot) cmdStatus(ctx context.Context) string {
+	tasks, _, err := b.postgres.ListTasks(ctx, store.TaskListFilter{Limit: 10})
+	if err != nil {
+		return "Error leyendo tareas: " + err.Error()
+	}
+	workers, err := b.redis.ListWorkers(ctx)
+	if err != nil {
+		return "Error leyendo workers: " + err.Error()
+	}
+	approvals, err := b.postgres.ListApprovals(ctx, store.ApprovalListFilter{Status: domain.ApprovalPending, Limit: 20})
+	if err != nil {
+		return "Error leyendo approvals: " + err.Error()
+	}
+	active := 0
+	for _, item := range tasks {
+		if item.State != domain.TaskStateCompleted && item.State != domain.TaskStateFailed && item.State != domain.TaskStateCancelled {
+			active++
+		}
+	}
+	return fmt.Sprintf("Status\n- Active tasks: %d\n- Workers: %d\n- Pending approvals: %d", active, len(workers), len(approvals))
+}
+
+func (b *Bot) cmdTasks(ctx context.Context) string {
+	items, _, err := b.postgres.ListTasks(ctx, store.TaskListFilter{Limit: 10})
+	if err != nil {
+		return "Error leyendo tareas: " + err.Error()
+	}
+	if len(items) == 0 {
+		return "No hay tareas."
+	}
+	lines := []string{"Tasks"}
+	for _, item := range items {
+		lines = append(lines, fmt.Sprintf("- %s | %s | %s", item.ID, item.State, item.Description))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (b *Bot) cmdTask(ctx context.Context, taskID string) string {
+	if strings.TrimSpace(taskID) == "" {
+		return "Uso: /task <task_id>"
+	}
+	task, err := b.postgres.GetTask(ctx, strings.TrimSpace(taskID))
+	if err != nil {
+		return "Error leyendo tarea: " + err.Error()
+	}
+	if task == nil {
+		return "Tarea no encontrada."
+	}
+	return fmt.Sprintf("Task %s\n- State: %s\n- Agent: %s\n- Priority: %s\n- Description: %s", task.ID, task.State, derefAgent(task.AssignedAgent), task.Priority, task.Description)
+}
+
+func (b *Bot) cmdSafe() string {
+	if b.safeMode == nil {
+		return "Safe mode no disponible."
+	}
+	previous := b.safeMode.Enabled()
+	b.safeMode.SetEnabled(!previous)
+	if previous {
+		return "Safe mode -> OFF"
+	}
+	return "Safe mode -> ON"
+}
+
+func (b *Bot) cmdCreateTask(ctx context.Context, description string, agent domain.AgentType, planOnly bool) string {
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return "La descripción es obligatoria."
+	}
+	totalDepth, err := b.redis.TotalQueueDepth(ctx)
+	if err != nil {
+		return "Error leyendo cola: " + err.Error()
+	}
+	if totalDepth >= int64(b.cfg.QueueMaxGlobal) {
+		return "La cola global está al límite."
+	}
+	agentDepth, err := b.redis.QueueDepth(ctx, agent)
+	if err != nil {
+		return "Error leyendo cola del agente: " + err.Error()
+	}
+	if agentDepth >= int64(b.cfg.QueueMaxPerAgent) {
+		return "La cola del agente está al límite."
+	}
+	workspace := strings.TrimSpace(b.cfg.WorkspaceRoot)
+	var workspacePtr *string
+	if workspace != "" {
+		workspacePtr = &workspace
+	}
+	metadata := map[string]any{"entrypoint": "telegram"}
+	if planOnly {
+		metadata["plan_only"] = true
+	}
+	task, err := b.postgres.CreateTask(ctx, store.CreateTaskParams{
+		Description:     description,
+		Metadata:        metadata,
+		Priority:        domain.PriorityNormal,
+		AssignedAgent:   agent,
+		ExecutionTarget: domain.ExecutionTargetRemote,
+		Entrypoint:      "telegram",
+		WorkspacePath:   workspacePtr,
+		QueueOnCreate:   true,
+	})
+	if err != nil {
+		return "Error creando tarea: " + err.Error()
+	}
+	if err := b.redis.EnqueueTask(ctx, task.ID, agent, domain.PriorityNormal); err != nil {
+		_ = b.postgres.CancelTask(ctx, task.ID, "telegram:create", "queue enqueue failed: "+err.Error())
+		return "Error encolando tarea: " + err.Error()
+	}
+	return fmt.Sprintf("Task creada\n- ID: %s\n- Agent: %s\n- State: queued", task.ID, agent)
+}
+
+func (b *Bot) cmdApprovals(ctx context.Context) string {
+	items, err := b.postgres.ListApprovals(ctx, store.ApprovalListFilter{Status: domain.ApprovalPending, Limit: 20})
+	if err != nil {
+		return "Error leyendo approvals: " + err.Error()
+	}
+	if len(items) == 0 {
+		return "No hay approvals pendientes."
+	}
+	lines := []string{"Pending approvals"}
+	for _, item := range items {
+		lines = append(lines, fmt.Sprintf("- %s | task=%s | %s | %s", item.ID, item.TaskID, item.ActionType, item.TargetResource))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (b *Bot) cmdResolveApproval(ctx context.Context, approvalID string, approve bool, operator string) string {
+	approvalID = strings.TrimSpace(approvalID)
+	if approvalID == "" {
+		if approve {
+			return "Uso: /approve <approval_id>"
+		}
+		return "Uso: /reject <approval_id>"
+	}
+	if strings.TrimSpace(operator) == "" {
+		operator = "telegram"
+	}
+	approval, task, err := b.postgres.ResolveApproval(ctx, approvalID, approve, operator)
+	if err != nil {
+		return "Error resolviendo approval: " + err.Error()
+	}
+	if approve && task != nil && task.AssignedAgent != nil {
+		if err := b.redis.EnqueueTask(ctx, task.ID, *task.AssignedAgent, task.Priority); err != nil {
+			return "Approval resuelta, pero falló el requeue: " + err.Error()
+		}
+	}
+	if task != nil {
+		b.reconcileRootTask(ctx, task.ID)
+	}
+	return fmt.Sprintf("Approval %s -> %s", approval.ID, approval.Status)
+}
+
+func (b *Bot) cmdCancelTask(ctx context.Context, taskID string) string {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return "Uso: /cancel <task_id>"
+	}
+	task, err := b.postgres.GetTask(ctx, taskID)
+	if err != nil {
+		return "Error leyendo tarea: " + err.Error()
+	}
+	if task == nil {
+		return "Tarea no encontrada."
+	}
+	if task.State != domain.TaskStateCreated && task.State != domain.TaskStateQueued && task.State != domain.TaskStateAssigned && task.State != domain.TaskStateInProgress && task.State != domain.TaskStateWaitingApproval {
+		return "La tarea no está en un estado cancelable."
+	}
+	if err := b.postgres.CancelTask(ctx, taskID, "telegram:cancel", "cancelled by telegram"); err != nil {
+		return "Error cancelando tarea: " + err.Error()
+	}
+	b.reconcileRootTask(ctx, taskID)
+	return fmt.Sprintf("Task %s cancelada.", taskID)
+}
+
+func (b *Bot) cmdResearch(ctx context.Context, query string) string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "Uso: /research <consulta>"
+	}
+	result, err := b.research.Query(ctx, query)
+	if err != nil {
+		return "Error en research: " + err.Error()
+	}
+	lines := []string{result.Answer}
+	if result.Confidence > 0 {
+		lines = append(lines, fmt.Sprintf("\nConfidence: %.2f", result.Confidence))
+	}
+	if len(result.Sources) > 0 {
+		lines = append(lines, "\nSources:")
+		for _, src := range result.Sources[:minInt(5, len(result.Sources))] {
+			lines = append(lines, fmt.Sprintf("- %s: %s", firstNonEmpty(src.Title, src.URI), src.URI))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (b *Bot) cmdFetch(ctx context.Context, rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "Uso: /fetch <url>"
+	}
+	source, content, err := b.research.WebFetch(ctx, rawURL)
+	if err != nil {
+		return "Error leyendo URL: " + err.Error()
+	}
+	return fmt.Sprintf("%s\n\n%s", source.Title, truncate(strings.TrimSpace(content), 1200))
+}
+
+func (b *Bot) cmdDocument(ctx context.Context, location string) string {
+	location = strings.TrimSpace(location)
+	if location == "" {
+		return "Uso: /doc <ruta_o_url>"
+	}
+	if b.capabilities == nil {
+		return "El sidecar de documentos no está configurado."
+	}
+	result, err := b.capabilities.ReadDocument(ctx, location)
+	if err != nil {
+		return "Error leyendo documento: " + err.Error()
+	}
+	return result.Summary
+}
+
+func (b *Bot) cmdImage(ctx context.Context, location string) string {
+	location = strings.TrimSpace(location)
+	if location == "" {
+		return "Uso: /image <ruta_o_url>"
+	}
+	if b.capabilities == nil {
+		return "El sidecar de imágenes no está configurado."
+	}
+	result, err := b.capabilities.AnalyzeImage(ctx, location)
+	if err != nil {
+		return "Error analizando imagen: " + err.Error()
+	}
+	return result.Summary
+}
+
+func (b *Bot) cmdSources(ctx context.Context, taskID string) string {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return "Uso: /sources <task_id>"
+	}
+	items, err := b.postgres.ListArtifactsByTask(ctx, taskID)
+	if err != nil {
+		return "Error leyendo fuentes: " + err.Error()
+	}
+	if len(items) == 0 {
+		return "La tarea no tiene artifacts."
+	}
+	lines := []string{"Sources"}
+	for _, item := range items {
+		lines = append(lines, fmt.Sprintf("- %s | %s | %s", item.ID, item.ArtifactType, firstNonEmpty(stringValue(item.Title), stringValue(item.URI))))
+	}
+	return strings.Join(lines, "\n")
+}
+
+type update struct {
+	UpdateID int64    `json:"update_id"`
+	Message  *message `json:"message"`
+}
+
+type message struct {
+	MessageID int64  `json:"message_id"`
+	Text      string `json:"text"`
+	Chat      struct {
+		ID int64 `json:"id"`
+	} `json:"chat"`
+	From struct {
+		ID       int64  `json:"id"`
+		Username string `json:"username"`
+	} `json:"from"`
+}
+
+func derefAgent(agent *domain.AgentType) string {
+	if agent == nil {
+		return ""
+	}
+	return string(*agent)
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func truncate(text string, max int) string {
+	text = strings.TrimSpace(text)
+	if len(text) <= max {
+		return text
+	}
+	return text[:max] + "..."
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func (b *Bot) reconcileRootTask(ctx context.Context, taskID string) {
+	task, err := b.postgres.GetTask(ctx, taskID)
+	if err != nil || task == nil {
+		return
+	}
+	rootID := task.ID
+	if task.RootTaskID != nil && strings.TrimSpace(*task.RootTaskID) != "" {
+		rootID = strings.TrimSpace(*task.RootTaskID)
+	}
+	if rootID == task.ID && task.ParentTaskID == nil {
+		return
+	}
+	tasks, err := b.postgres.ListByRoot(ctx, rootID)
+	if err != nil || len(tasks) == 0 {
+		return
+	}
+	var root *domain.TaskResponse
+	children := make([]domain.TaskResponse, 0, len(tasks))
+	for _, item := range tasks {
+		item := item
+		if item.ID == rootID {
+			root = &item
+			continue
+		}
+		children = append(children, item)
+	}
+	if root == nil || len(children) == 0 {
+		return
+	}
+	hasFailed := false
+	allCompleted := true
+	for _, child := range children {
+		switch child.State {
+		case domain.TaskStateFailed, domain.TaskStateCancelled:
+			hasFailed = true
+		case domain.TaskStateCompleted:
+		default:
+			allCompleted = false
+		}
+	}
+	if hasFailed {
+		if !domain.IsTerminalState(root.State) {
+			_, _ = b.postgres.FailTask(ctx, root.ID, "telegram:aggregate", "One or more subtasks failed", "One or more subtasks failed", root.Results)
+		}
+		return
+	}
+	if allCompleted && root.State != domain.TaskStateCompleted {
+		_, _ = b.postgres.CompleteTask(ctx, root.ID, "telegram:aggregate", "All subtasks completed", root.Results)
+	}
+}
+
+func parseChatID(input string) int64 {
+	value, _ := strconv.ParseInt(strings.TrimSpace(input), 10, 64)
+	return value
+}

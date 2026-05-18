@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
 )
 
 type Intent string
@@ -18,6 +20,8 @@ type Intent string
 const (
 	IntentSearchAnswer Intent = "search_answer"
 	IntentURLSummary   Intent = "url_summary"
+	IntentDocumentQA   Intent = "document_qa"
+	IntentImageQA      Intent = "image_qa"
 )
 
 type SearchResult struct {
@@ -33,10 +37,10 @@ type Source struct {
 }
 
 type Result struct {
-	Intent        Intent        `json:"intent"`
-	Answer        string        `json:"answer"`
-	Confidence    float64       `json:"confidence"`
-	Sources       []Source      `json:"sources"`
+	Intent        Intent         `json:"intent"`
+	Answer        string         `json:"answer"`
+	Confidence    float64        `json:"confidence"`
+	Sources       []Source       `json:"sources"`
 	SearchResults []SearchResult `json:"search_results,omitempty"`
 }
 
@@ -44,12 +48,14 @@ type Options struct {
 	Client        *http.Client
 	SearchBaseURL string
 	MaxFetchCount int
+	Capabilities  *capabilities.Client
 }
 
 type Service struct {
 	client        *http.Client
 	searchBaseURL string
 	maxFetchCount int
+	capabilities  *capabilities.Client
 }
 
 type fetchedSource struct {
@@ -74,6 +80,7 @@ func New(options Options) *Service {
 		client:        client,
 		searchBaseURL: searchBaseURL,
 		maxFetchCount: maxFetchCount,
+		capabilities:  options.Capabilities,
 	}
 }
 
@@ -81,6 +88,15 @@ func (s *Service) Query(ctx context.Context, query string) (Result, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return Result{}, fmt.Errorf("query is required")
+	}
+	if location := extractFirstLocation(query); location != "" {
+		lowered := strings.ToLower(query)
+		if looksLikeImage(location, lowered) {
+			return s.analyzeImage(ctx, location)
+		}
+		if looksLikeDocument(location, lowered) {
+			return s.summarizeDocument(ctx, location)
+		}
 	}
 	if rawURL := extractFirstURL(query); rawURL != "" {
 		return s.summarizeURL(ctx, rawURL)
@@ -147,6 +163,48 @@ func (s *Service) summarizeURL(ctx context.Context, rawURL string) (Result, erro
 		Answer:     answer,
 		Confidence: 0.76,
 		Sources:    []Source{source},
+	}, nil
+}
+
+func (s *Service) summarizeDocument(ctx context.Context, location string) (Result, error) {
+	if s.capabilities == nil {
+		return Result{}, fmt.Errorf("document sidecar is not configured")
+	}
+	result, err := s.capabilities.ReadDocument(ctx, location)
+	if err != nil {
+		return Result{}, err
+	}
+	sources := sourcesFromCapability(result.SourceRefs)
+	answer := strings.TrimSpace(result.Summary)
+	if answer == "" {
+		answer = "No se pudo extraer una síntesis útil del documento."
+	}
+	return Result{
+		Intent:     IntentDocumentQA,
+		Answer:     answer,
+		Confidence: 0.74,
+		Sources:    sources,
+	}, nil
+}
+
+func (s *Service) analyzeImage(ctx context.Context, location string) (Result, error) {
+	if s.capabilities == nil {
+		return Result{}, fmt.Errorf("image sidecar is not configured")
+	}
+	result, err := s.capabilities.AnalyzeImage(ctx, location)
+	if err != nil {
+		return Result{}, err
+	}
+	sources := sourcesFromCapability(result.SourceRefs)
+	answer := strings.TrimSpace(result.Summary)
+	if answer == "" {
+		answer = "No se pudo extraer una síntesis útil de la imagen."
+	}
+	return Result{
+		Intent:     IntentImageQA,
+		Answer:     answer,
+		Confidence: 0.71,
+		Sources:    sources,
 	}, nil
 }
 
@@ -224,6 +282,29 @@ func looksLikeURL(input string) bool {
 	return parsed.Scheme == "http" || parsed.Scheme == "https"
 }
 
+func looksLikeDocument(value, lowered string) bool {
+	candidate := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasSuffix(candidate, ".pdf") ||
+		strings.HasSuffix(candidate, ".docx") ||
+		strings.HasSuffix(candidate, ".md") ||
+		strings.HasSuffix(candidate, ".txt") ||
+		strings.Contains(lowered, "document") ||
+		strings.Contains(lowered, "documento") ||
+		strings.Contains(lowered, "pdf")
+}
+
+func looksLikeImage(value, lowered string) bool {
+	candidate := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasSuffix(candidate, ".png") ||
+		strings.HasSuffix(candidate, ".jpg") ||
+		strings.HasSuffix(candidate, ".jpeg") ||
+		strings.HasSuffix(candidate, ".gif") ||
+		strings.HasSuffix(candidate, ".webp") ||
+		strings.Contains(lowered, "image") ||
+		strings.Contains(lowered, "imagen") ||
+		strings.Contains(lowered, "ocr")
+}
+
 func extractFirstURL(input string) string {
 	fields := strings.Fields(input)
 	for _, field := range fields {
@@ -233,6 +314,35 @@ func extractFirstURL(input string) string {
 		}
 	}
 	return ""
+}
+
+func extractFirstLocation(input string) string {
+	if rawURL := extractFirstURL(input); rawURL != "" {
+		return rawURL
+	}
+	fields := strings.Fields(input)
+	for _, field := range fields {
+		candidate := strings.Trim(field, " \t\r\n\"'()[]{}<>,.")
+		if strings.HasPrefix(candidate, "/") || strings.HasPrefix(candidate, "./") || strings.HasPrefix(candidate, "~/") {
+			return candidate
+		}
+		if looksLikeDocument(candidate, strings.ToLower(input)) || looksLikeImage(candidate, strings.ToLower(input)) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func sourcesFromCapability(items []capabilities.SourceRef) []Source {
+	sources := make([]Source, 0, len(items))
+	for _, item := range items {
+		sources = append(sources, Source{
+			Title: item.Title,
+			URI:   item.URI,
+			Kind:  item.Kind,
+		})
+	}
+	return sources
 }
 
 var (

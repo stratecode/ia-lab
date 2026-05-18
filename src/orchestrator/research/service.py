@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import time
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -64,6 +66,7 @@ class ResearchService:
         mode_hint: ResearchIntent | None = None,
         evaluate_against_reference: bool = False,
     ) -> ResearchQueryResult:
+        started = time.perf_counter()
         normalized_query = query.strip()
         if not normalized_query:
             raise ResearchServiceError("query is required")
@@ -76,8 +79,10 @@ class ResearchService:
         task_uuid = UUID(task_id) if task_id else None
         invocations = []
         sources: list[SourceRef] = []
+        timings_ms: dict[str, int] = {}
 
         if intent == "search_answer":
+            search_started = time.perf_counter()
             search_record = await self._capability_service.invoke(
                 "web.search",
                 {"query": normalized_query},
@@ -86,30 +91,30 @@ class ResearchService:
                 entrypoint=entrypoint,
                 allowed_capabilities=selected_capabilities,
             )
+            timings_ms["search_ms"] = int((time.perf_counter() - search_started) * 1000)
             invocations.append(search_record)
             sources.extend(search_record.source_refs)
             results = list(search_record.output_payload.get("results") or [])
             fetch_count = self.select_fetch_count(normalized_query, results)
             if "web.fetch" in selected_capabilities:
-                for item in results[:fetch_count]:
-                    url = str(item.get("url") or "").strip()
-                    if not url:
-                        continue
-                    fetch_record = await self._capability_service.invoke(
-                        "web.fetch",
-                        {"url": url},
-                        task_id=task_id,
-                        agent_type=agent_type,
-                        entrypoint=entrypoint,
-                        allowed_capabilities=selected_capabilities,
-                    )
-                    invocations.append(fetch_record)
+                fetch_started = time.perf_counter()
+                fetch_records = await self._fetch_search_results(
+                    results[:fetch_count],
+                    task_id=task_id,
+                    agent_type=agent_type,
+                    entrypoint=entrypoint,
+                    allowed_capabilities=selected_capabilities,
+                )
+                timings_ms["fetch_ms"] = int((time.perf_counter() - fetch_started) * 1000)
+                invocations.extend(fetch_records)
+                for fetch_record in fetch_records:
                     if len(str(fetch_record.output_payload.get("content_text") or "")) >= self._capability_settings.min_source_content_chars:
                         sources.extend(fetch_record.source_refs)
         elif intent == "url_summary":
             url = self._extract_first_url(normalized_query)
             if not url:
                 raise ResearchServiceError("No URL found in the query")
+            fetch_started = time.perf_counter()
             record = await self._capability_service.invoke(
                 "web.fetch",
                 {"url": url},
@@ -118,12 +123,14 @@ class ResearchService:
                 entrypoint=entrypoint,
                 allowed_capabilities=selected_capabilities,
             )
+            timings_ms["fetch_ms"] = int((time.perf_counter() - fetch_started) * 1000)
             invocations.append(record)
             sources.extend(record.source_refs)
         elif intent == "document_qa":
             location = self._extract_location(normalized_query)
             if not location:
                 raise ResearchServiceError("No document path or URL found in the query")
+            document_started = time.perf_counter()
             record = await self._capability_service.invoke(
                 "document.read",
                 {"location": location},
@@ -132,12 +139,14 @@ class ResearchService:
                 entrypoint=entrypoint,
                 allowed_capabilities=selected_capabilities,
             )
+            timings_ms["fetch_ms"] = int((time.perf_counter() - document_started) * 1000)
             invocations.append(record)
             sources.extend(record.source_refs)
         elif intent == "image_qa":
             location = self._extract_location(normalized_query)
             if not location:
                 raise ResearchServiceError("No image path or URL found in the query")
+            image_started = time.perf_counter()
             record = await self._capability_service.invoke(
                 "image.analyze",
                 {"location": location},
@@ -146,17 +155,20 @@ class ResearchService:
                 entrypoint=entrypoint,
                 allowed_capabilities=selected_capabilities,
             )
+            timings_ms["fetch_ms"] = int((time.perf_counter() - image_started) * 1000)
             invocations.append(record)
             sources.extend(record.source_refs)
         else:  # pragma: no cover
             raise ResearchServiceError(f"Unsupported intent: {intent}")
 
         source_blocks = await self._build_source_blocks(invocations)
+        synthesis_started = time.perf_counter()
         answer, confidence, synthesis_metadata = await self._synthesize_answer(
             query=normalized_query,
             intent=intent,
             source_blocks=source_blocks,
         )
+        timings_ms["synthesis_ms"] = int((time.perf_counter() - synthesis_started) * 1000)
 
         artifact_ids = []
         invocation_ids = []
@@ -174,21 +186,59 @@ class ResearchService:
             confidence=confidence,
             source_artifact_ids=artifact_ids,
             tool_invocation_ids=invocation_ids,
-            metadata=synthesis_metadata,
+            metadata={**synthesis_metadata, "timings_ms": timings_ms},
         )
 
         evaluation = None
         if evaluate_against_reference:
+            evaluation_started = time.perf_counter()
             evaluation = await self.evaluate_query(run.id)
+            timings_ms["evaluation_ms"] = int((time.perf_counter() - evaluation_started) * 1000)
 
+        timings_ms["total_ms"] = int((time.perf_counter() - started) * 1000)
         return ResearchQueryResult(
             research_run=run,
             answer=answer,
             confidence=confidence,
             sources=sources[:10],
             tool_invocation_ids=invocation_ids,
+            timings_ms=timings_ms,
             evaluation=evaluation,
         )
+
+    async def _fetch_search_results(
+        self,
+        results: list[dict[str, Any]],
+        *,
+        task_id: str | None,
+        agent_type,
+        entrypoint: str,
+        allowed_capabilities: list[str],
+    ) -> list[Any]:
+        tasks = []
+        for item in results:
+            url = str(item.get("url") or "").strip()
+            if not url:
+                continue
+            tasks.append(
+                self._capability_service.invoke(
+                    "web.fetch",
+                    {"url": url},
+                    task_id=task_id,
+                    agent_type=agent_type,
+                    entrypoint=entrypoint,
+                    allowed_capabilities=allowed_capabilities,
+                )
+            )
+        if not tasks:
+            return []
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        successful = []
+        for item in results:
+            if isinstance(item, Exception):
+                continue
+            successful.append(item)
+        return successful
 
     def classify_intent(self, query: str) -> ResearchIntent:
         lowered = query.lower()

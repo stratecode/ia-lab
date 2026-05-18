@@ -7,11 +7,13 @@ import (
 
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
 	"github.com/stratecode/lab/internal/orchestratorgo/httpapi"
 	"github.com/stratecode/lab/internal/orchestratorgo/logging"
 	"github.com/stratecode/lab/internal/orchestratorgo/research"
 	"github.com/stratecode/lab/internal/orchestratorgo/store"
+	"github.com/stratecode/lab/internal/orchestratorgo/telegram"
 	"github.com/stratecode/lab/internal/orchestratorgo/worker"
 )
 
@@ -22,6 +24,8 @@ type Runtime struct {
 	Redis    *store.RedisStore
 	Worker   *worker.ShadowWorker
 	Research *research.Service
+	Bot      *telegram.Bot
+	SafeMode *httpapi.SafeModeState
 }
 
 func New() (*Runtime, error) {
@@ -44,15 +48,29 @@ func New() (*Runtime, error) {
 		return nil, err
 	}
 	redisStore := store.NewRedisStore(redisOptions)
-	shadowWorker := worker.New(cfg, postgres, redisStore)
+	capabilityClient := capabilities.New(capabilities.Options{
+		DocsBaseURL:       cfg.DocsSidecarURL,
+		ImagesBaseURL:     cfg.ImagesSidecarURL,
+		MaxDocumentBytes:  cfg.MaxDocumentBytes,
+		MaxImageBytes:     cfg.MaxImageBytes,
+		MaxArtifactChars:  cfg.MaxArtifactTextChars,
+		AllowedURLSchemes: cfg.AllowedURLSchemes,
+		AllowedLocalRoots: cfg.AllowedLocalRoots,
+		TimeoutSeconds:    20,
+	})
 	researchService := research.New(research.Options{
 		SearchBaseURL: cfg.WebSearchBaseURL,
+		Capabilities:  capabilityClient,
 	})
+	shadowWorker := worker.New(cfg, postgres, redisStore, researchService)
+	safeMode := httpapi.NewSafeModeState(cfg.SafeMode)
 	server := &httpapi.Server{
 		Config:        cfg,
 		Postgres:      postgres,
 		Redis:         redisStore,
 		Research:      researchService,
+		Capabilities:  capabilityClient,
+		SafeMode:      safeMode,
 		Now:           time.Now,
 		Version:       "0.1.0-go-shadow",
 		OpenAIToolsID: cfg.OpenAIToolsModelID,
@@ -71,6 +89,13 @@ func New() (*Runtime, error) {
 		postgres.Close()
 		return nil, err
 	}
+	bot := telegram.New(cfg, postgres, redisStore, researchService, capabilityClient, safeMode)
+	if err := bot.Start(backgroundCtx); err != nil {
+		shadowWorker.Stop()
+		_ = redisStore.Close()
+		postgres.Close()
+		return nil, err
+	}
 	return &Runtime{
 		Config:   cfg,
 		Router:   router,
@@ -78,10 +103,15 @@ func New() (*Runtime, error) {
 		Redis:    redisStore,
 		Worker:   shadowWorker,
 		Research: researchService,
+		Bot:      bot,
+		SafeMode: safeMode,
 	}, nil
 }
 
 func (r *Runtime) Close() {
+	if r.Bot != nil {
+		r.Bot.Stop()
+	}
 	if r.Worker != nil {
 		r.Worker.Stop()
 	}

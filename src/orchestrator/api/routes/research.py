@@ -55,6 +55,7 @@ async def research_query(
         confidence=result.confidence,
         sources=result.sources,
         tool_invocation_ids=result.tool_invocation_ids,
+        timings_ms=result.timings_ms,
         evaluation=_evaluation_run_response(result.evaluation) if result.evaluation else None,
     )
 

@@ -83,6 +83,9 @@ async def chat_completions(
         content += f"\n\nConfidence: {result.confidence:.2f}"
     if sources:
         content += f"\n\nSources:\n{sources}"
+    timing_lines = _format_timing_lines(result.timings_ms)
+    if timing_lines:
+        content += "\n\nTiming:\n" + "\n".join(timing_lines)
     return _chat_response(body.model, content)
 
 
@@ -116,3 +119,19 @@ def _chat_response(model: str, content: str) -> dict[str, Any]:
         ],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
+
+
+def _format_timing_lines(timings_ms: dict[str, int]) -> list[str]:
+    mapping = [
+        ("total_ms", "Total"),
+        ("search_ms", "Search"),
+        ("fetch_ms", "Fetch"),
+        ("synthesis_ms", "Thinking"),
+        ("evaluation_ms", "Evaluation"),
+    ]
+    lines: list[str] = []
+    for key, label in mapping:
+        value = timings_ms.get(key)
+        if value and value > 0:
+            lines.append(f"- {label}: {value / 1000:.2f}s")
+    return lines

@@ -1,6 +1,6 @@
 # Orchestrator Go Shadow
 
-This document defines the first production-oriented Go shadow core that runs in parallel with the Python orchestrator.
+This document defines the production-oriented Go runtime that now takes the primary `orchestrator.service` role, with the Python runtime retained as a shadow fallback.
 
 ## Current scope
 
@@ -22,6 +22,8 @@ The Go shadow service intentionally covers the compatibility base and the first 
 - `GET /capabilities`
 - `POST /tools/web/search`
 - `POST /tools/web/fetch`
+- `POST /tools/documents/read`
+- `POST /tools/images/analyze`
 - `GET /tools/invocations/{id}`
 - `POST /research/query`
 - `GET /research/runs/{id}`
@@ -34,6 +36,7 @@ The Go shadow service intentionally covers the compatibility base and the first 
 - `POST /v1/chat/completions`
 - background worker registration, heartbeat emission, queue claim, and `queued -> assigned -> in_progress` transitions
 - embedded minimal runner for `planner` and `coder`
+- embedded Telegram polling bot when `LAB_TELEGRAM_BOT_TOKEN` and `LAB_TELEGRAM_ALLOWED_USERS` are configured
 
 Current write support in the shadow is intentionally narrow:
 
@@ -45,15 +48,21 @@ Current write support in the shadow is intentionally narrow:
 - `POST /approvals/{id}/approve` resolves a pending approval, transitions the task back to `queued`, and re-enqueues it for worker pickup.
 - `POST /approvals/{id}/reject` resolves a pending approval and cancels the task.
 - an embedded shadow worker registers itself in Redis, emits heartbeats, claims queued planner/coder tasks, and moves them into `in_progress`.
-- `planner` tasks now complete with a minimal structured plan payload.
-- `coder` tasks now complete after performing a minimal real workspace action:
+- `planner` tasks can now call the configured planner LLM endpoint and persist the returned structured plan.
+- `coder` tasks can now execute real `aider-task` runs when `metadata.repo_name` or `metadata.repo_path` is provided.
+- the fallback coder path still supports:
   - default execution report file
   - `tool_request.tool=write_file`
   - `tool_request.tool=append_file`
 - `coder` tasks marked with `metadata.requires_approval=true` request approval once, pause in `waiting_approval`, and resume after approval.
 - `web.fetch` now fetches and strips HTML content in the Go shadow core.
+- `document.read` and `image.analyze` now run through HTTP sidecars so the Go core stops swallowing PDF/DOCX/OCR complexity whole.
 - `research.query` now supports URL-oriented research with direct summary output.
+- `research.query` now detects and serves:
+  - document paths or URLs via `document.read`
+  - image paths or URLs via `image.analyze`
 - `orchestrator-tools` now responds through `/v1/chat/completions` for URL-based prompts, returning answer, confidence, and sources.
+- `orchestrator-tools` now also routes document and image prompts through the Go research flow.
 - `research.query` and `orchestrator-tools` now persist `research_runs` records in PostgreSQL.
 - `search_answer` in the Go shadow now performs adaptive multi-source fetch and synthesized answers instead of stopping at raw snippets.
 - the Go research flow now persists `tool_invocations` and `artifacts` for URL-based research runs.
@@ -70,12 +79,9 @@ The remaining routes are exposed as explicit `501 Not Implemented` placeholders 
 
 What the worker does not do yet:
 
-- run research or `orchestrator-tools`
-- execute real Aider/LLM-backed planner-coder logic
 - create planner-generated child tasks or reconcile parent-child trees
-- support document/image capabilities and evaluation harness
-- support document/image capabilities and their sidecar contracts
 - implement full multi-source research parity with the Python orchestrator
+- replace the Python capability sidecars; they remain transitional on purpose
 
 ## Deployment shape
 
@@ -84,6 +90,9 @@ What the worker does not do yet:
 - same PostgreSQL and Redis as the Python orchestrator
 - same auth model via `api_keys`
 - same safe-mode, logging, and environment contract
+- optional sidecars for heavy capabilities:
+  - docs: `LAB_CAPABILITIES_DOCS_SIDECAR_URL`
+  - images: `LAB_CAPABILITIES_IMAGES_SIDECAR_URL`
 
 ## Build
 
@@ -95,13 +104,23 @@ This uses a Dockerized Go toolchain so the repo does not depend on a local Go in
 
 ## Shadow enablement
 
-The Ansible role supports an optional shadow unit:
+The Ansible role now deploys:
 
-- `orchestrator-go-shadow.service`
-- disabled by default
-- enabled only when:
-  - `LAB_ORCHESTRATOR_GO_SHADOW_ENABLED=true`
-  - a built binary is available at `LAB_ORCHESTRATOR_GO_SHADOW_BINARY_PATH`
+- `orchestrator.service` -> Go runtime on the primary orchestrator port
+- `orchestrator-python-shadow.service` -> Python fallback API on the shadow port
+- `orchestrator-cap-docs.service` -> document sidecar
+- `orchestrator-cap-images.service` -> image sidecar
+
+Useful variables:
+
+- `LAB_ORCHESTRATOR_GO_BINARY_PATH`
+- `LAB_ORCHESTRATOR_GO_HOST`
+- `LAB_ORCHESTRATOR_GO_PORT`
+- `LAB_ORCHESTRATOR_PYTHON_SHADOW_ENABLED`
+- `LAB_ORCHESTRATOR_PYTHON_SHADOW_HOST`
+- `LAB_ORCHESTRATOR_PYTHON_SHADOW_PORT`
+- `LAB_CAPABILITIES_DOCS_SIDECAR_URL`
+- `LAB_CAPABILITIES_IMAGES_SIDECAR_URL`
 
 ## Compatibility intent
 

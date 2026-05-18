@@ -410,6 +410,7 @@ class _TelegramResearchService:
             "confidence": result.confidence,
             "source_refs": [item.model_dump(mode="json") for item in result.sources],
             "tool_invocation_ids": result.tool_invocation_ids,
+            "timings_ms": result.timings_ms,
         }
 
     async def evaluate(self, query: str) -> dict[str, Any]:
@@ -424,6 +425,7 @@ class _TelegramResearchService:
             "confidence": result.confidence,
             "source_refs": [item.model_dump(mode="json") for item in result.sources],
             "tool_invocation_ids": result.tool_invocation_ids,
+            "timings_ms": result.timings_ms,
         }
         if result.evaluation is not None:
             payload["evaluation"] = result.evaluation.model_dump(mode="json")

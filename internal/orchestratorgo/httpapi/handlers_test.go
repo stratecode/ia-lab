@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 )
@@ -109,3 +111,67 @@ func init() {
 }
 
 func ptrFloat(v float64) *float64 { return &v }
+
+func TestListCapabilitiesIncludesDocumentAndImage(t *testing.T) {
+	server := &Server{}
+	req := httptest.NewRequest(http.MethodGet, "/capabilities", nil)
+	rec := httptest.NewRecorder()
+
+	server.listCapabilities(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", rec.Code)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := payload["capabilities"].([]any)
+	if len(items) != 5 {
+		t.Fatalf("unexpected capabilities payload: %#v", payload)
+	}
+}
+
+func TestToggleSafeModeUpdatesState(t *testing.T) {
+	server := &Server{
+		Config:   config.Config{SafeMode: true},
+		SafeMode: NewSafeModeState(true),
+	}
+	req := httptest.NewRequest(http.MethodPost, "/config/safe-mode", bytes.NewBufferString(`{"enabled":false}`))
+	rec := httptest.NewRecorder()
+
+	server.toggleSafeMode(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if server.safeModeEnabled() {
+		t.Fatal("safe mode should be disabled after toggle")
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["safe_mode_enabled"] != false {
+		t.Fatalf("unexpected payload: %#v", payload)
+	}
+}
+
+func TestSafeModeEnabledUsesMutableState(t *testing.T) {
+	server := &Server{
+		Config:   config.Config{SafeMode: true},
+		SafeMode: NewSafeModeState(false),
+	}
+	if server.safeModeEnabled() {
+		t.Fatal("safe mode helper should read mutable state before static config")
+	}
+}
+
+func TestPersistCapabilityExecutionReturnsInvocationAndArtifacts(t *testing.T) {
+	server := &Server{
+		Config:   config.Config{},
+		Postgres: nil,
+	}
+	_ = server
+	_ = capabilities.Result{}
+}

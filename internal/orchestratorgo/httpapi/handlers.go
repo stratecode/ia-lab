@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 	"github.com/stratecode/lab/internal/orchestratorgo/research"
@@ -28,6 +30,8 @@ type Server struct {
 	Postgres      *store.PostgresStore
 	Redis         *store.RedisStore
 	Research      *research.Service
+	Capabilities  *capabilities.Client
+	SafeMode      *SafeModeState
 	Now           func() time.Time
 	Version       string
 	OpenAIToolsID string
@@ -59,13 +63,13 @@ func (s *Server) Router(auth *Authenticator) http.Handler {
 		r.Post("/{approvalID}/reject", s.rejectApproval)
 	})
 	r.Get("/workers", s.listWorkers)
-	r.Post("/config/safe-mode", func(w http.ResponseWriter, r *http.Request) { writeNotImplemented(w, "POST /config/safe-mode") })
-	r.Post("/workspaces/cleanup", func(w http.ResponseWriter, r *http.Request) { writeNotImplemented(w, "POST /workspaces/cleanup") })
+	r.Post("/config/safe-mode", s.toggleSafeMode)
+	r.Post("/workspaces/cleanup", s.cleanupWorkspaces)
 	r.Get("/capabilities", s.listCapabilities)
 	r.Post("/tools/web/search", s.webSearch)
 	r.Post("/tools/web/fetch", s.webFetch)
-	r.Post("/tools/documents/read", func(w http.ResponseWriter, r *http.Request) { writeNotImplemented(w, "POST /tools/documents/read") })
-	r.Post("/tools/images/analyze", func(w http.ResponseWriter, r *http.Request) { writeNotImplemented(w, "POST /tools/images/analyze") })
+	r.Post("/tools/documents/read", s.documentRead)
+	r.Post("/tools/images/analyze", s.imageAnalyze)
 	r.Get("/tools/invocations/{invocationID}", s.getToolInvocation)
 	r.Post("/research/query", s.researchQuery)
 	r.Get("/research/runs/{researchRunID}", s.getResearchRun)
@@ -125,7 +129,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		Status:     overall,
 		Timestamp:  now.UTC(),
 		Version:    s.Version,
-		SafeMode:   s.Config.SafeMode,
+		SafeMode:   s.safeModeEnabled(),
 		Components: components,
 	})
 }
@@ -166,8 +170,8 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listCapabilities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"capabilities": []string{"web.search", "web.fetch", "research.query"},
-		"total":        3,
+		"capabilities": []string{"web.search", "web.fetch", "document.read", "image.analyze", "research.query"},
+		"total":        5,
 	})
 }
 
@@ -295,6 +299,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 		IdempotencyKey:      idempotencyPtr,
 		Entrypoint:          "api",
 		WorkspacePath:       workspacePath,
+		QueueOnCreate:       true,
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -386,6 +391,7 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 		writeDetail(w, http.StatusNotFound, "task not found")
 		return
 	}
+	s.reconcileRootTask(r.Context(), updatedTask.ID)
 	writeJSON(w, http.StatusOK, updatedTask)
 }
 
@@ -553,6 +559,9 @@ func (s *Server) resolveApproval(w http.ResponseWriter, r *http.Request, approve
 			return
 		}
 	}
+	if task != nil {
+		s.reconcileRootTask(r.Context(), task.ID)
+	}
 	writeJSON(w, http.StatusOK, approval)
 }
 
@@ -563,6 +572,83 @@ func (s *Server) listWorkers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, domain.WorkerListResponse{Workers: workers, Total: len(workers)})
+}
+
+type safeModeRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
+type safeModeResponse struct {
+	SafeModeEnabled bool   `json:"safe_mode_enabled"`
+	Message         string `json:"message"`
+}
+
+func (s *Server) toggleSafeMode(w http.ResponseWriter, r *http.Request) {
+	var body safeModeRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if body.Enabled == nil {
+		writeDetail(w, http.StatusBadRequest, "enabled is required")
+		return
+	}
+	previous := s.SafeMode.SetEnabled(*body.Enabled)
+	action := "enabled"
+	if !*body.Enabled {
+		action = "disabled"
+	}
+	writeJSON(w, http.StatusOK, safeModeResponse{
+		SafeModeEnabled: *body.Enabled,
+		Message:         fmt.Sprintf("Safe mode %s (was %s)", action, ternaryBool(previous, "enabled", "disabled")),
+	})
+}
+
+type workspaceCleanupResponse struct {
+	CleanedCount   int      `json:"cleaned_count"`
+	Errors         []string `json:"errors"`
+	RetentionHours int      `json:"retention_hours"`
+	Message        string   `json:"message"`
+}
+
+func (s *Server) cleanupWorkspaces(w http.ResponseWriter, r *http.Request) {
+	cutoff := s.currentTime().UTC().Add(-time.Duration(s.Config.WorkspaceRetentionHours) * time.Hour)
+	tasks, err := s.Postgres.ListWorkspaceCleanupCandidates(r.Context(), cutoff, 100)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	root := filepath.Clean(strings.TrimSpace(s.Config.WorkspaceRoot))
+	cleanedCount := 0
+	errorsList := []string{}
+
+	for _, task := range tasks {
+		if task.WorkspacePath == nil || strings.TrimSpace(*task.WorkspacePath) == "" {
+			continue
+		}
+		workspacePath := filepath.Clean(strings.TrimSpace(*task.WorkspacePath))
+		if root != "" && workspacePath != root && !strings.HasPrefix(workspacePath, root+string(os.PathSeparator)) {
+			errorsList = append(errorsList, fmt.Sprintf("%s: outside workspace root", workspacePath))
+			continue
+		}
+		if err := os.RemoveAll(workspacePath); err != nil {
+			errorsList = append(errorsList, fmt.Sprintf("%s: %v", workspacePath, err))
+			continue
+		}
+		if err := s.Postgres.ClearWorkspacePath(r.Context(), task.ID); err != nil {
+			errorsList = append(errorsList, fmt.Sprintf("%s: failed to clear DB reference: %v", workspacePath, err))
+			continue
+		}
+		cleanedCount++
+	}
+
+	writeJSON(w, http.StatusOK, workspaceCleanupResponse{
+		CleanedCount:   cleanedCount,
+		Errors:         errorsList,
+		RetentionHours: s.Config.WorkspaceRetentionHours,
+		Message:        fmt.Sprintf("Cleaned %d workspace(s) older than %dh", cleanedCount, s.Config.WorkspaceRetentionHours),
+	})
 }
 
 func (s *Server) webSearch(w http.ResponseWriter, r *http.Request) {
@@ -663,6 +749,68 @@ func (s *Server) webFetch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) documentRead(w http.ResponseWriter, r *http.Request) {
+	if s.Capabilities == nil {
+		writeDetail(w, http.StatusServiceUnavailable, "document sidecar is not configured")
+		return
+	}
+	var body struct {
+		Location string  `json:"location"`
+		TaskID   *string `json:"task_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	body.Location = strings.TrimSpace(body.Location)
+	if body.Location == "" {
+		writeDetail(w, http.StatusBadRequest, "location is required")
+		return
+	}
+	result, err := s.Capabilities.ReadDocument(r.Context(), body.Location)
+	if err != nil {
+		writeDetail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	response, err := s.persistCapabilityExecution(r.Context(), "api", body.TaskID, "document.read", map[string]any{"location": body.Location}, result)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) imageAnalyze(w http.ResponseWriter, r *http.Request) {
+	if s.Capabilities == nil {
+		writeDetail(w, http.StatusServiceUnavailable, "image sidecar is not configured")
+		return
+	}
+	var body struct {
+		Location string  `json:"location"`
+		TaskID   *string `json:"task_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	body.Location = strings.TrimSpace(body.Location)
+	if body.Location == "" {
+		writeDetail(w, http.StatusBadRequest, "location is required")
+		return
+	}
+	result, err := s.Capabilities.AnalyzeImage(r.Context(), body.Location)
+	if err != nil {
+		writeDetail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	response, err := s.persistCapabilityExecution(r.Context(), "api", body.TaskID, "image.analyze", map[string]any{"location": body.Location}, result)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
 func (s *Server) getToolInvocation(w http.ResponseWriter, r *http.Request) {
 	invocationID := chi.URLParam(r, "invocationID")
 	record, err := s.Postgres.GetToolInvocation(r.Context(), invocationID)
@@ -700,10 +848,10 @@ func (s *Server) getTaskSources(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) researchQuery(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Query               string   `json:"query"`
-		TaskID              *string  `json:"task_id"`
-		AllowedCapabilities []string `json:"allowed_capabilities"`
-		EvaluateAgainstReference bool `json:"evaluate_against_reference"`
+		Query                    string   `json:"query"`
+		TaskID                   *string  `json:"task_id"`
+		AllowedCapabilities      []string `json:"allowed_capabilities"`
+		EvaluateAgainstReference bool     `json:"evaluate_against_reference"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
@@ -738,7 +886,7 @@ func (s *Server) researchQuery(w http.ResponseWriter, r *http.Request) {
 			"source_count": len(result.Sources),
 			"search_hits":  len(result.SearchResults),
 		},
-		})
+	})
 	if err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -982,7 +1130,7 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			"source_count": len(result.Sources),
 			"search_hits":  len(result.SearchResults),
 		},
-		})
+	})
 	if err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -1020,6 +1168,13 @@ func parseIntDefault(raw string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func ternaryBool(value bool, whenTrue, whenFalse string) string {
+	if value {
+		return whenTrue
+	}
+	return whenFalse
 }
 
 func roundFloat(value float64) float64 {
@@ -1112,20 +1267,24 @@ func selectedCapabilitiesForIntent(intent research.Intent, requested []string) [
 		return []string{"web.fetch"}
 	case research.IntentSearchAnswer:
 		return []string{"web.search", "web.fetch"}
+	case research.IntentDocumentQA:
+		return []string{"document.read"}
+	case research.IntentImageQA:
+		return []string{"image.analyze"}
 	default:
 		return []string{}
 	}
 }
 
 type judgeVerdict struct {
-	AccuracyScore         float64        `json:"accuracy_score"`
-	CoverageScore         float64        `json:"coverage_score"`
-	SourceUseScore        float64        `json:"source_use_score"`
-	UsefulnessScore       float64        `json:"usefulness_score"`
-	HallucinationRiskScore float64       `json:"hallucination_risk_score"`
-	Winner                string         `json:"winner"`
-	Reasoning             string         `json:"reasoning"`
-	Raw                   map[string]any `json:"-"`
+	AccuracyScore          float64        `json:"accuracy_score"`
+	CoverageScore          float64        `json:"coverage_score"`
+	SourceUseScore         float64        `json:"source_use_score"`
+	UsefulnessScore        float64        `json:"usefulness_score"`
+	HallucinationRiskScore float64        `json:"hallucination_risk_score"`
+	Winner                 string         `json:"winner"`
+	Reasoning              string         `json:"reasoning"`
+	Raw                    map[string]any `json:"-"`
 }
 
 func (s *Server) sourcesForResearchRun(ctx context.Context, researchRun *domain.ResearchRunResponse) ([]domain.SourceRef, error) {
@@ -1338,15 +1497,15 @@ func (s *Server) persistResearchArtifacts(ctx context.Context, entrypoint string
 		sourceRefs = append(sourceRefs, domain.SourceRef{Title: src.Title, URI: src.URI, Kind: src.Kind})
 	}
 	invocationID, err := s.Postgres.CreateToolInvocation(ctx, store.CreateToolInvocationParams{
-		TaskID:         taskID,
-		Entrypoint:     entrypoint,
-		Capability:     "research.query",
-		InputPayload:   map[string]any{"query": query},
-		OutputPayload:  map[string]any{"answer": result.Answer, "confidence": result.Confidence, "intent": result.Intent},
-		Status:         "success",
-		DurationMS:     0,
-		SourceRefs:     sourceRefs,
-		ArtifactIDs:    []string{},
+		TaskID:        taskID,
+		Entrypoint:    entrypoint,
+		Capability:    "research.query",
+		InputPayload:  map[string]any{"query": query},
+		OutputPayload: map[string]any{"answer": result.Answer, "confidence": result.Confidence, "intent": result.Intent},
+		Status:        "success",
+		DurationMS:    0,
+		SourceRefs:    sourceRefs,
+		ArtifactIDs:   []string{},
 	})
 	if err != nil {
 		return nil, nil, err
@@ -1376,6 +1535,70 @@ func (s *Server) persistResearchArtifacts(ctx context.Context, entrypoint string
 	return artifactIDs, []string{invocationID}, nil
 }
 
+func (s *Server) persistCapabilityExecution(ctx context.Context, entrypoint string, taskID *string, capability string, inputPayload map[string]any, result *capabilities.Result) (map[string]any, error) {
+	sourceRefs := make([]domain.SourceRef, 0, len(result.SourceRefs))
+	for _, item := range result.SourceRefs {
+		sourceRefs = append(sourceRefs, domain.SourceRef{
+			Title: item.Title,
+			URI:   item.URI,
+			Kind:  item.Kind,
+		})
+	}
+	invocationID, err := s.Postgres.CreateToolInvocation(ctx, store.CreateToolInvocationParams{
+		TaskID:        taskID,
+		Entrypoint:    entrypoint,
+		Capability:    capability,
+		InputPayload:  inputPayload,
+		OutputPayload: map[string]any{"summary": result.Summary, "status": result.Status, "output": result.Output},
+		Status:        result.Status,
+		DurationMS:    0,
+		SourceRefs:    sourceRefs,
+		ArtifactIDs:   []string{},
+		ErrorMessage:  stringPtr(strings.TrimSpace(result.ErrorMessage)),
+	})
+	if err != nil {
+		return nil, err
+	}
+	artifactIDs := make([]string, 0, len(result.Artifacts))
+	for _, artifact := range result.Artifacts {
+		artifactID, err := s.Postgres.CreateArtifact(ctx, store.CreateArtifactParams{
+			TaskID:       taskID,
+			InvocationID: &invocationID,
+			ArtifactType: artifact.ArtifactType,
+			Title:        stringPtr(strings.TrimSpace(artifact.Title)),
+			URI:          stringPtr(strings.TrimSpace(artifact.URI)),
+			MediaType:    stringPtr(strings.TrimSpace(artifact.MediaType)),
+			ContentText:  stringPtr(truncateForAPI(strings.TrimSpace(artifact.ContentText), 4000)),
+			Metadata:     artifact.Metadata,
+		})
+		if err != nil {
+			return nil, err
+		}
+		artifactIDs = append(artifactIDs, artifactID)
+	}
+	if err := s.Postgres.UpdateToolInvocationArtifactIDs(ctx, invocationID, artifactIDs); err != nil {
+		return nil, err
+	}
+	artifacts, err := s.Postgres.ListArtifactsByInvocation(ctx, invocationID)
+	if err != nil {
+		return nil, err
+	}
+	record, err := s.Postgres.GetToolInvocation(ctx, invocationID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"status":             result.Status,
+		"summary":            result.Summary,
+		"output":             result.Output,
+		"source_refs":        sourceRefs,
+		"tool_invocation_id": invocationID,
+		"artifact_ids":       artifactIDs,
+		"invocation":         record,
+		"artifacts":          artifacts,
+	}, nil
+}
+
 func withLatency(c domain.ComponentHealth, latency *float64) domain.ComponentHealth {
 	c.LatencyMS = latency
 	return c
@@ -1386,6 +1609,64 @@ func (s *Server) currentTime() time.Time {
 		return s.Now()
 	}
 	return time.Now()
+}
+
+func (s *Server) safeModeEnabled() bool {
+	if s.SafeMode != nil {
+		return s.SafeMode.Enabled()
+	}
+	return s.Config.SafeMode
+}
+
+func (s *Server) reconcileRootTask(ctx context.Context, taskID string) {
+	task, err := s.Postgres.GetTask(ctx, taskID)
+	if err != nil || task == nil {
+		return
+	}
+	rootID := task.ID
+	if task.RootTaskID != nil && strings.TrimSpace(*task.RootTaskID) != "" {
+		rootID = strings.TrimSpace(*task.RootTaskID)
+	}
+	if rootID == task.ID && task.ParentTaskID == nil {
+		return
+	}
+	tasks, err := s.Postgres.ListByRoot(ctx, rootID)
+	if err != nil || len(tasks) == 0 {
+		return
+	}
+	var root *domain.TaskResponse
+	children := make([]domain.TaskResponse, 0, len(tasks))
+	for _, item := range tasks {
+		item := item
+		if item.ID == rootID {
+			root = &item
+			continue
+		}
+		children = append(children, item)
+	}
+	if root == nil || len(children) == 0 {
+		return
+	}
+	hasFailed := false
+	allCompleted := true
+	for _, child := range children {
+		switch child.State {
+		case domain.TaskStateFailed, domain.TaskStateCancelled:
+			hasFailed = true
+		case domain.TaskStateCompleted:
+		default:
+			allCompleted = false
+		}
+	}
+	if hasFailed {
+		if !domain.IsTerminalState(root.State) {
+			_, _ = s.Postgres.FailTask(ctx, root.ID, "api:aggregate", "One or more subtasks failed", "One or more subtasks failed", root.Results)
+		}
+		return
+	}
+	if allCompleted && root.State != domain.TaskStateCompleted {
+		_, _ = s.Postgres.CompleteTask(ctx, root.ID, "api:aggregate", "All subtasks completed", root.Results)
+	}
 }
 
 func isSupportedPriority(priority domain.Priority) bool {

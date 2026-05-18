@@ -87,6 +87,10 @@ type CreateTaskParams struct {
 	IdempotencyKey      *string
 	Entrypoint          string
 	WorkspacePath       *string
+	ParentTaskID        *string
+	RootTaskID          *string
+	TaskKind            domain.TaskKind
+	QueueOnCreate       bool
 }
 
 func (s *PostgresStore) CreateTask(ctx context.Context, params CreateTaskParams) (*domain.TaskResponse, error) {
@@ -110,6 +114,14 @@ func (s *PostgresStore) CreateTask(ctx context.Context, params CreateTaskParams)
 		path := filepath.Join(*params.WorkspacePath, taskID)
 		effectiveWorkspacePath = &path
 	}
+	taskKind := params.TaskKind
+	if taskKind == "" {
+		taskKind = domain.TaskKindRoot
+	}
+	rootTaskID := taskID
+	if params.RootTaskID != nil && strings.TrimSpace(*params.RootTaskID) != "" {
+		rootTaskID = strings.TrimSpace(*params.RootTaskID)
+	}
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, err
@@ -124,20 +136,36 @@ func (s *PostgresStore) CreateTask(ctx context.Context, params CreateTaskParams)
 			parent_task_id, root_task_id, task_kind
 		) VALUES (
 			$1, $2, $3, $4::jsonb, $5, $6, $7, $8, 0, 3, $9, $10, NULL, NULL,
-			$11, $11, NULL, NULL, NULL, NULL, $1, $12
+			$11, $11, NULL, NULL, NULL, $12, $13, $14
 		)
-	`, taskID, string(domain.TaskStateCreated), params.Description, string(metadataRaw), string(params.AssignedAgent), string(params.Priority), string(params.ExecutionTarget), effectiveWorkspacePath, params.IdempotencyKey, correlationID, now, string(domain.TaskKindRoot)); err != nil {
+	`, taskID, string(domain.TaskStateCreated), params.Description, string(metadataRaw), string(params.AssignedAgent), string(params.Priority), string(params.ExecutionTarget), effectiveWorkspacePath, params.IdempotencyKey, correlationID, now, params.ParentTaskID, rootTaskID, string(taskKind)); err != nil {
 		return nil, err
 	}
 
-	if err := transitionTaskStateTx(ctx, tx, taskID, domain.TaskStateCreated, domain.TaskStateQueued, params.Entrypoint+":create", "Queued for "+string(params.AssignedAgent)+" via "+string(params.ExecutionTarget), now); err != nil {
-		return nil, err
+	if params.QueueOnCreate {
+		if err := transitionTaskStateTx(ctx, tx, taskID, domain.TaskStateCreated, domain.TaskStateQueued, params.Entrypoint+":create", "Queued for "+string(params.AssignedAgent)+" via "+string(params.ExecutionTarget), now); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return s.GetTask(ctx, taskID)
+}
+
+func (s *PostgresStore) UpdateTaskResults(ctx context.Context, taskID string, results any) error {
+	raw, err := json.Marshal(results)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
+		UPDATE tasks
+		   SET results = $2::jsonb,
+		       updated_at = NOW()
+		 WHERE id = $1
+	`, taskID, string(raw))
+	return err
 }
 
 func (s *PostgresStore) CancelTask(ctx context.Context, taskID, actor, reason string) error {
@@ -263,6 +291,35 @@ func (s *PostgresStore) ListByRoot(ctx context.Context, rootTaskID string) ([]do
 	}
 	defer rows.Close()
 	return collectTasks(rows)
+}
+
+func (s *PostgresStore) ListWorkspaceCleanupCandidates(ctx context.Context, cutoff time.Time, limit int) ([]domain.TaskResponse, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, taskSelectSQL+`
+		WHERE state IN ('completed', 'failed', 'cancelled')
+		  AND workspace_path IS NOT NULL
+		  AND completed_at IS NOT NULL
+		  AND completed_at < $1
+		ORDER BY completed_at ASC, id ASC
+		LIMIT $2
+	`, cutoff, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectTasks(rows)
+}
+
+func (s *PostgresStore) ClearWorkspacePath(ctx context.Context, taskID string) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE tasks
+		   SET workspace_path = NULL,
+		       updated_at = NOW()
+		 WHERE id = $1
+	`, taskID)
+	return err
 }
 
 func (s *PostgresStore) GetApproval(ctx context.Context, approvalID string) (*domain.ApprovalResponse, error) {

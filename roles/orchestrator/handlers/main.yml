@@ -13,9 +13,21 @@
     state: restarted
     daemon_reload: true
 
-- name: Restart orchestrator go shadow service
+- name: Restart orchestrator python shadow service
   ansible.builtin.systemd:
-    name: orchestrator-go-shadow.service
+    name: orchestrator-python-shadow.service
+    state: restarted
+    daemon_reload: true
+
+- name: Restart orchestrator docs sidecar service
+  ansible.builtin.systemd:
+    name: orchestrator-cap-docs.service
+    state: restarted
+    daemon_reload: true
+
+- name: Restart orchestrator images sidecar service
+  ansible.builtin.systemd:
+    name: orchestrator-cap-images.service
     state: restarted
     daemon_reload: true
 

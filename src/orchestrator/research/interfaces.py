@@ -62,6 +62,7 @@ class ResearchQueryResult(BaseModel):
     confidence: float | None = None
     sources: list[SourceRef] = Field(default_factory=list)
     tool_invocation_ids: list[str] = Field(default_factory=list)
+    timings_ms: dict[str, int] = Field(default_factory=dict)
     evaluation: EvaluationRunRecord | None = None
 
 

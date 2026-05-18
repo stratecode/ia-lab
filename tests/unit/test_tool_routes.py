@@ -99,6 +99,7 @@ class _FakeResearchService:
             confidence=0.82,
             sources=[SourceRef(title="Example", uri="https://example.com", snippet="Snippet")],
             tool_invocation_ids=[str(uuid.uuid4())],
+            timings_ms={"total_ms": 820, "fetch_ms": 500, "synthesis_ms": 320},
         )
 
     async def get_research_run(self, research_run_id: uuid.UUID) -> ResearchRunRecord | None:
@@ -147,6 +148,8 @@ def test_openai_chat_endpoint_uses_fetch_for_url() -> None:
     assert "Fetched body with direct answer" in content
     assert "Confidence: 0.82" in content
     assert "https://example.com" in content
+    assert "Timing:" in content
+    assert "Fetch: 0.50s" in content
 
 
 def test_research_query_endpoint_returns_sources() -> None:
@@ -157,3 +160,4 @@ def test_research_query_endpoint_returns_sources() -> None:
     payload = response.json()
     assert payload["answer"] == "Fetched body with direct answer"
     assert payload["sources"][0]["uri"] == "https://example.com"
+    assert payload["timings_ms"]["total_ms"] == 820

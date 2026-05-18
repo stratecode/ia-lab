@@ -90,11 +90,11 @@
       - cmake
       - --build
       - "{{ llama_cpp_build_dir }}"
-      - -j{{ ansible_processor_vcpus | default(4) }}
+      - "-j{{ ansible_facts['processor_vcpus'] | default(llama_cpp_build_jobs, true) }}"
       - --config
       - Release
-  async: 1800
-  poll: 15
+  async: "{{ llama_cpp_build_async_seconds }}"
+  poll: "{{ llama_cpp_build_poll_seconds }}"
   register: llama_cpp_build_result
   notify: Restart llama.cpp services
   when: llama_cpp_enabled and (llama_cpp_git_clone.changed or not llama_cpp_binary.stat.exists)

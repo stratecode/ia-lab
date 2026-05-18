@@ -1067,6 +1067,11 @@ class TelegramBot:
             confidence = result.get("confidence")
             if confidence is not None:
                 lines.append(f"\nConfidence: {confidence:.2f}")
+            timings = result.get("timings_ms") or {}
+            timing_lines = self._format_timing_lines(timings)
+            if timing_lines:
+                lines.append("\nTiming:")
+                lines.extend(timing_lines)
             sources = result.get("source_refs") or []
             if sources:
                 lines.append("\nSources:")
@@ -1081,6 +1086,24 @@ class TelegramBot:
                 extra={"mode_hint": mode_hint, "error": str(exc)},
             )
             await update.message.reply_text(f"❌ Error: {exc}")
+
+    def _format_timing_lines(self, timings: dict[str, object]) -> list[str]:
+        if not isinstance(timings, dict):
+            return []
+        mapping = [
+            ("total_ms", "Total"),
+            ("search_ms", "Search"),
+            ("fetch_ms", "Fetch"),
+            ("synthesis_ms", "Thinking"),
+            ("evaluation_ms", "Evaluation"),
+        ]
+        lines: list[str] = []
+        for key, label in mapping:
+            value = timings.get(key)
+            if not isinstance(value, int) or value <= 0:
+                continue
+            lines.append(f"- {label}: {value / 1000:.2f}s")
+        return lines
 
 
 # ---------------------------------------------------------------------------
