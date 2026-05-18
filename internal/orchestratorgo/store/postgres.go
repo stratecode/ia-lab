@@ -480,6 +480,26 @@ type CreateArtifactParams struct {
 	Metadata     map[string]any
 }
 
+type CreateEvaluationRunParams struct {
+	ResearchRunID     string
+	ReferenceProvider string
+	ReferenceModel    *string
+	ReferenceAnswer   *string
+	JudgeModel        *string
+}
+
+type CreateEvaluationDatasetItemParams struct {
+	ResearchRunID      string
+	EvaluationRunID    *string
+	Query              string
+	OrchestratorAnswer string
+	ReferenceAnswer    string
+	Sources            []domain.SourceRef
+	Scores             map[string]any
+	Winner             *string
+	Metadata           map[string]any
+}
+
 func (s *PostgresStore) CreateResearchRun(ctx context.Context, params CreateResearchRunParams) (*domain.ResearchRunResponse, error) {
 	selectedRaw, err := json.Marshal(params.SelectedCapabilities)
 	if err != nil {
@@ -639,6 +659,239 @@ func (s *PostgresStore) CreateArtifact(ctx context.Context, params CreateArtifac
 	return artifactID, nil
 }
 
+func (s *PostgresStore) GetToolInvocation(ctx context.Context, invocationID string) (*domain.ToolInvocationResponse, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id::text, task_id::text, entrypoint, capability, status, duration_ms,
+		       output_payload, source_refs, artifact_ids, error_message, created_at
+		FROM tool_invocations
+		WHERE id = $1
+	`, invocationID)
+	var (
+		item domain.ToolInvocationResponse
+		taskID *string
+		outputRaw []byte
+		sourceRaw []byte
+		artifactRaw []byte
+	)
+	if err := row.Scan(
+		&item.ID,
+		&taskID,
+		&item.EntryPoint,
+		&item.Capability,
+		&item.Status,
+		&item.DurationMS,
+		&outputRaw,
+		&sourceRaw,
+		&artifactRaw,
+		&item.ErrorMessage,
+		&item.CreatedAt,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	item.TaskID = taskID
+	_ = json.Unmarshal(outputRaw, &item.Output)
+	_ = json.Unmarshal(sourceRaw, &item.SourceRefs)
+	_ = json.Unmarshal(artifactRaw, &item.ArtifactIDs)
+	if item.Output == nil {
+		item.Output = map[string]any{}
+	}
+	summary := strings.TrimSpace(asString(item.Output["summary"]))
+	if summary == "" {
+		summary = strings.TrimSpace(asString(item.Output["content_text"]))
+	}
+	if summary != "" {
+		item.Summary = &summary
+	}
+	return &item, nil
+}
+
+func (s *PostgresStore) ListArtifactsByInvocation(ctx context.Context, invocationID string) ([]domain.ArtifactResponse, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, artifact_type, title, uri, media_type, content_text, metadata, created_at
+		FROM artifacts
+		WHERE invocation_id = $1
+		ORDER BY created_at ASC
+	`, invocationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectArtifacts(rows)
+}
+
+func (s *PostgresStore) ListArtifactsByTask(ctx context.Context, taskID string) ([]domain.ArtifactResponse, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, artifact_type, title, uri, media_type, content_text, metadata, created_at
+		FROM artifacts
+		WHERE task_id = $1
+		ORDER BY created_at ASC
+	`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectArtifacts(rows)
+}
+
+func (s *PostgresStore) ListArtifactsByIDs(ctx context.Context, ids []string) ([]domain.ArtifactResponse, error) {
+	if len(ids) == 0 {
+		return []domain.ArtifactResponse{}, nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, artifact_type, title, uri, media_type, content_text, metadata, created_at
+		FROM artifacts
+		WHERE id::text = ANY($1)
+		ORDER BY created_at ASC
+	`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return collectArtifacts(rows)
+}
+
+func (s *PostgresStore) CreateEvaluationRun(ctx context.Context, params CreateEvaluationRunParams) (*domain.EvaluationRunResponse, error) {
+	evaluationID := uuid.NewString()
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO evaluation_runs (
+			id, research_run_id, reference_provider, reference_model, reference_answer, judge_model
+		) VALUES (
+			$1, $2, $3, $4, $5, $6
+		)
+	`, evaluationID, params.ResearchRunID, params.ReferenceProvider, params.ReferenceModel, params.ReferenceAnswer, params.JudgeModel); err != nil {
+		return nil, err
+	}
+	return s.GetEvaluationRun(ctx, evaluationID)
+}
+
+func (s *PostgresStore) GetEvaluationRun(ctx context.Context, evaluationRunID string) (*domain.EvaluationRunResponse, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id::text, research_run_id::text, reference_provider, reference_model, reference_answer,
+		       judge_model, judge_verdict, judge_scores, winner, created_at
+		FROM evaluation_runs
+		WHERE id = $1
+	`, evaluationRunID)
+	var (
+		item          domain.EvaluationRunResponse
+		verdictRaw    []byte
+		judgeScoresRaw []byte
+	)
+	if err := row.Scan(
+		&item.ID,
+		&item.ResearchRunID,
+		&item.ReferenceProvider,
+		&item.ReferenceModel,
+		&item.ReferenceAnswer,
+		&item.JudgeModel,
+		&verdictRaw,
+		&judgeScoresRaw,
+		&item.Winner,
+		&item.CreatedAt,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	_ = json.Unmarshal(verdictRaw, &item.JudgeVerdict)
+	_ = json.Unmarshal(judgeScoresRaw, &item.JudgeScores)
+	if item.JudgeVerdict == nil {
+		item.JudgeVerdict = map[string]any{}
+	}
+	if item.JudgeScores == nil {
+		item.JudgeScores = map[string]any{}
+	}
+	return &item, nil
+}
+
+func (s *PostgresStore) UpdateEvaluationRunJudgement(ctx context.Context, evaluationRunID string, judgeModel *string, verdict map[string]any, scores map[string]any, winner *string) (*domain.EvaluationRunResponse, error) {
+	verdictRaw, err := json.Marshal(nonNilMap(verdict))
+	if err != nil {
+		return nil, err
+	}
+	scoresRaw, err := json.Marshal(nonNilMap(scores))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE evaluation_runs
+		   SET judge_model = $2,
+		       judge_verdict = $3::jsonb,
+		       judge_scores = $4::jsonb,
+		       winner = $5
+		 WHERE id = $1
+	`, evaluationRunID, judgeModel, string(verdictRaw), string(scoresRaw), winner); err != nil {
+		return nil, err
+	}
+	return s.GetEvaluationRun(ctx, evaluationRunID)
+}
+
+func (s *PostgresStore) CreateEvaluationDatasetItem(ctx context.Context, params CreateEvaluationDatasetItemParams) (*domain.EvaluationDatasetItemResponse, error) {
+	datasetID := uuid.NewString()
+	sourceRaw, err := json.Marshal(params.Sources)
+	if err != nil {
+		return nil, err
+	}
+	scoreRaw, err := json.Marshal(nonNilMap(params.Scores))
+	if err != nil {
+		return nil, err
+	}
+	metaRaw, err := json.Marshal(nonNilMap(params.Metadata))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.pool.Exec(ctx, `
+		INSERT INTO evaluation_dataset_items (
+			id, research_run_id, evaluation_run_id, query, orchestrator_answer, reference_answer,
+			sources, scores, winner, metadata
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10::jsonb
+		)
+	`, datasetID, params.ResearchRunID, params.EvaluationRunID, params.Query, params.OrchestratorAnswer, params.ReferenceAnswer, string(sourceRaw), string(scoreRaw), params.Winner, string(metaRaw)); err != nil {
+		return nil, err
+	}
+	return s.GetEvaluationDatasetItem(ctx, datasetID)
+}
+
+func (s *PostgresStore) GetEvaluationDatasetItem(ctx context.Context, datasetID string) (*domain.EvaluationDatasetItemResponse, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id::text, research_run_id::text, evaluation_run_id::text, query, orchestrator_answer,
+		       reference_answer, sources, scores, winner, metadata, created_at
+		FROM evaluation_dataset_items
+		WHERE id = $1
+	`, datasetID)
+	return scanEvaluationDatasetItem(row)
+}
+
+func (s *PostgresStore) ListEvaluationDatasetItems(ctx context.Context, limit int) ([]domain.EvaluationDatasetItemResponse, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, research_run_id::text, evaluation_run_id::text, query, orchestrator_answer,
+		       reference_answer, sources, scores, winner, metadata, created_at
+		FROM evaluation_dataset_items
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]domain.EvaluationDatasetItemResponse, 0)
+	for rows.Next() {
+		item, err := scanEvaluationDatasetItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *item)
+	}
+	return items, rows.Err()
+}
+
 func (s *PostgresStore) ListApprovals(ctx context.Context, filter ApprovalListFilter) ([]domain.ApprovalResponse, error) {
 	limit := filter.Limit
 	if limit <= 0 {
@@ -772,6 +1025,87 @@ func nonNilMap(input map[string]any) map[string]any {
 	return input
 }
 
+type artifactScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanArtifact(row artifactScanner) (*domain.ArtifactResponse, error) {
+	var (
+		item domain.ArtifactResponse
+		metadataRaw []byte
+	)
+	if err := row.Scan(
+		&item.ID,
+		&item.ArtifactType,
+		&item.Title,
+		&item.URI,
+		&item.MediaType,
+		&item.ContentText,
+		&metadataRaw,
+		&item.CreatedAt,
+	); err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(metadataRaw, &item.Metadata)
+	if item.Metadata == nil {
+		item.Metadata = map[string]any{}
+	}
+	return &item, nil
+}
+
+type evaluationDatasetScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanEvaluationDatasetItem(row evaluationDatasetScanner) (*domain.EvaluationDatasetItemResponse, error) {
+	var (
+		item         domain.EvaluationDatasetItemResponse
+		sourceRaw    []byte
+		scoreRaw     []byte
+		metadataRaw  []byte
+	)
+	if err := row.Scan(
+		&item.ID,
+		&item.ResearchRunID,
+		&item.EvaluationRunID,
+		&item.Query,
+		&item.OrchestratorAnswer,
+		&item.ReferenceAnswer,
+		&sourceRaw,
+		&scoreRaw,
+		&item.Winner,
+		&metadataRaw,
+		&item.CreatedAt,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	_ = json.Unmarshal(sourceRaw, &item.Sources)
+	_ = json.Unmarshal(scoreRaw, &item.Scores)
+	_ = json.Unmarshal(metadataRaw, &item.Metadata)
+	if item.Scores == nil {
+		item.Scores = map[string]any{}
+	}
+	if item.Metadata == nil {
+		item.Metadata = map[string]any{}
+	}
+	return &item, nil
+}
+
+func collectArtifacts(rows pgx.Rows) ([]domain.ArtifactResponse, error) {
+	items := make([]domain.ArtifactResponse, 0)
+	for rows.Next() {
+		item, err := scanArtifact(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *item)
+	}
+	return items, rows.Err()
+}
+
 func scanTask(row taskScanner) (*domain.TaskResponse, error) {
 	var (
 		item            domain.TaskResponse
@@ -893,6 +1227,15 @@ func cloneMap(input map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+func asString(input any) string {
+	switch v := input.(type) {
+	case string:
+		return v
+	default:
+		return ""
+	}
 }
 
 type approvalScanner interface {

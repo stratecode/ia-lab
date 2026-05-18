@@ -31,6 +31,11 @@ type Config struct {
 	BruteForceWindowSeconds     int
 	BruteForceBlockDurationSecs int
 	OpenAIToolsModelID          string
+	OpenAIBaseURL               string
+	OpenAIReferenceAPIKey       string
+	OpenAIReferenceModel        string
+	OpenAIJudgeModel            string
+	OpenAITimeoutSeconds        int
 }
 
 func Load() (Config, error) {
@@ -63,6 +68,11 @@ func Load() (Config, error) {
 		BruteForceWindowSeconds:     getInt(k, "lab.brute.force.window", 60),
 		BruteForceBlockDurationSecs: getInt(k, "lab.brute.force.block.duration", 300),
 		OpenAIToolsModelID:          "orchestrator-tools",
+		OpenAIBaseURL:               getString(k, "lab.openai.base.url", "https://api.openai.com/v1"),
+		OpenAIReferenceAPIKey:       getString(k, "lab.openai.reference.api.key", ""),
+		OpenAIReferenceModel:        getString(k, "lab.openai.reference.model", "gpt-4o-mini"),
+		OpenAIJudgeModel:            getString(k, "lab.openai.judge.model", "gpt-4o-mini"),
+		OpenAITimeoutSeconds:        getInt(k, "lab.openai.timeout.seconds", 45),
 	}
 
 	if cfg.PostgresPassword == "" {

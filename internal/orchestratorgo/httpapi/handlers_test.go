@@ -51,6 +51,22 @@ func TestHealthResponseMatchesGoldenShape(t *testing.T) {
 	assertJSONGolden(t, "testdata/health_golden.json", body)
 }
 
+func TestParseJudgeVerdictAcceptsMarkdownJSON(t *testing.T) {
+	verdict, err := parseJudgeVerdict("```json\n{\"accuracy_score\":0.9,\"coverage_score\":0.8,\"source_use_score\":0.7,\"usefulness_score\":0.85,\"hallucination_risk_score\":0.1,\"winner\":\"orchestrator\",\"reasoning\":\"sound\"}\n```")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verdict.Winner != "orchestrator" {
+		t.Fatalf("unexpected winner: %s", verdict.Winner)
+	}
+	if verdict.AccuracyScore != 0.9 {
+		t.Fatalf("unexpected accuracy score: %v", verdict.AccuracyScore)
+	}
+	if verdict.Reasoning != "sound" {
+		t.Fatalf("unexpected reasoning: %s", verdict.Reasoning)
+	}
+}
+
 func assertJSONGolden(t *testing.T, relativePath string, actual []byte) {
 	t.Helper()
 	goldenPath := filepath.Join(filepath.Dir(relativePathFromCaller(t)), relativePath)

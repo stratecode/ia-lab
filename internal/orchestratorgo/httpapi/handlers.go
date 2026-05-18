@@ -1,10 +1,12 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -64,11 +66,14 @@ func (s *Server) Router(auth *Authenticator) http.Handler {
 	r.Post("/tools/web/fetch", s.webFetch)
 	r.Post("/tools/documents/read", func(w http.ResponseWriter, r *http.Request) { writeNotImplemented(w, "POST /tools/documents/read") })
 	r.Post("/tools/images/analyze", func(w http.ResponseWriter, r *http.Request) { writeNotImplemented(w, "POST /tools/images/analyze") })
+	r.Get("/tools/invocations/{invocationID}", s.getToolInvocation)
 	r.Post("/research/query", s.researchQuery)
 	r.Get("/research/runs/{researchRunID}", s.getResearchRun)
-	r.Post("/evaluations/reference", func(w http.ResponseWriter, r *http.Request) { writeNotImplemented(w, "POST /evaluations/reference") })
-	r.Post("/evaluations/judge", func(w http.ResponseWriter, r *http.Request) { writeNotImplemented(w, "POST /evaluations/judge") })
-	r.Get("/datasets/evaluation-items", func(w http.ResponseWriter, r *http.Request) { writeNotImplemented(w, "GET /datasets/evaluation-items") })
+	r.Get("/tasks/{taskID}/sources", s.getTaskSources)
+	r.Post("/evaluations/reference", s.createReferenceEvaluation)
+	r.Post("/evaluations/judge", s.judgeEvaluation)
+	r.Get("/evaluations/{evaluationRunID}", s.getEvaluationRun)
+	r.Get("/datasets/evaluation-items", s.listEvaluationDatasetItems)
 	r.Route("/v1", func(r chi.Router) {
 		r.Get("/models", s.listModels)
 		r.Post("/chat/completions", s.chatCompletions)
@@ -658,11 +663,47 @@ func (s *Server) webFetch(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) getToolInvocation(w http.ResponseWriter, r *http.Request) {
+	invocationID := chi.URLParam(r, "invocationID")
+	record, err := s.Postgres.GetToolInvocation(r.Context(), invocationID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if record == nil {
+		writeDetail(w, http.StatusNotFound, "invocation not found")
+		return
+	}
+	artifacts, err := s.Postgres.ListArtifactsByInvocation(r.Context(), invocationID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"invocation": record,
+		"artifacts":  artifacts,
+	})
+}
+
+func (s *Server) getTaskSources(w http.ResponseWriter, r *http.Request) {
+	taskID := chi.URLParam(r, "taskID")
+	items, err := s.Postgres.ListArtifactsByTask(r.Context(), taskID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+		"total": len(items),
+	})
+}
+
 func (s *Server) researchQuery(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Query               string   `json:"query"`
 		TaskID              *string  `json:"task_id"`
 		AllowedCapabilities []string `json:"allowed_capabilities"`
+		EvaluateAgainstReference bool `json:"evaluate_against_reference"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
@@ -702,7 +743,7 @@ func (s *Server) researchQuery(w http.ResponseWriter, r *http.Request) {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"research_run":        researchRun,
 		"answer":              result.Answer,
 		"confidence":          result.Confidence,
@@ -710,7 +751,16 @@ func (s *Server) researchQuery(w http.ResponseWriter, r *http.Request) {
 		"intent":              result.Intent,
 		"search_hits":         len(result.SearchResults),
 		"tool_invocation_ids": invocationIDs,
-	})
+	}
+	if body.EvaluateAgainstReference {
+		evaluation, err := s.runInlineEvaluation(r.Context(), researchRun)
+		if err != nil {
+			writeDetail(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		response["evaluation"] = evaluation
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) getResearchRun(w http.ResponseWriter, r *http.Request) {
@@ -724,6 +774,168 @@ func (s *Server) getResearchRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) createReferenceEvaluation(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ResearchRunID string `json:"research_run_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	body.ResearchRunID = strings.TrimSpace(body.ResearchRunID)
+	if body.ResearchRunID == "" {
+		writeDetail(w, http.StatusBadRequest, "research_run_id is required")
+		return
+	}
+	if strings.TrimSpace(s.Config.OpenAIReferenceAPIKey) == "" {
+		writeDetail(w, http.StatusBadRequest, "OpenAI reference API key is not configured")
+		return
+	}
+	researchRun, err := s.Postgres.GetResearchRun(r.Context(), body.ResearchRunID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if researchRun == nil {
+		writeDetail(w, http.StatusNotFound, "research run not found")
+		return
+	}
+	referenceAnswer, err := s.callOpenAIChat(
+		r.Context(),
+		s.Config.OpenAIReferenceModel,
+		"Eres un asistente de investigación riguroso. Responde a la pregunta del usuario con claridad. Si faltan datos, dilo.",
+		researchRun.Query,
+	)
+	if err != nil {
+		writeDetail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	record, err := s.Postgres.CreateEvaluationRun(r.Context(), store.CreateEvaluationRunParams{
+		ResearchRunID:     researchRun.ID,
+		ReferenceProvider: "openai",
+		ReferenceModel:    stringPtr(s.Config.OpenAIReferenceModel),
+		ReferenceAnswer:   &referenceAnswer,
+		JudgeModel:        stringPtr(s.Config.OpenAIJudgeModel),
+	})
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) judgeEvaluation(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		EvaluationRunID string `json:"evaluation_run_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	body.EvaluationRunID = strings.TrimSpace(body.EvaluationRunID)
+	if body.EvaluationRunID == "" {
+		writeDetail(w, http.StatusBadRequest, "evaluation_run_id is required")
+		return
+	}
+	if strings.TrimSpace(s.Config.OpenAIReferenceAPIKey) == "" {
+		writeDetail(w, http.StatusBadRequest, "OpenAI reference API key is not configured")
+		return
+	}
+	evaluationRun, err := s.Postgres.GetEvaluationRun(r.Context(), body.EvaluationRunID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if evaluationRun == nil {
+		writeDetail(w, http.StatusNotFound, "evaluation run not found")
+		return
+	}
+	researchRun, err := s.Postgres.GetResearchRun(r.Context(), evaluationRun.ResearchRunID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if researchRun == nil {
+		writeDetail(w, http.StatusNotFound, "research run not found")
+		return
+	}
+	if evaluationRun.ReferenceAnswer == nil || strings.TrimSpace(*evaluationRun.ReferenceAnswer) == "" {
+		writeDetail(w, http.StatusBadRequest, "evaluation run has no reference answer")
+		return
+	}
+	sources, err := s.sourcesForResearchRun(r.Context(), researchRun)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	verdict, err := s.callOpenAIJudge(r.Context(), researchRun.Query, researchRun.FinalAnswer, *evaluationRun.ReferenceAnswer, sources)
+	if err != nil {
+		writeDetail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	scores := map[string]any{
+		"accuracy_score":           verdict.AccuracyScore,
+		"coverage_score":           verdict.CoverageScore,
+		"source_use_score":         verdict.SourceUseScore,
+		"usefulness_score":         verdict.UsefulnessScore,
+		"hallucination_risk_score": verdict.HallucinationRiskScore,
+	}
+	updatedRun, err := s.Postgres.UpdateEvaluationRunJudgement(
+		r.Context(),
+		evaluationRun.ID,
+		stringPtr(s.Config.OpenAIJudgeModel),
+		verdict.Raw,
+		scores,
+		stringPtr(verdict.Winner),
+	)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_, err = s.Postgres.CreateEvaluationDatasetItem(r.Context(), store.CreateEvaluationDatasetItemParams{
+		ResearchRunID:      researchRun.ID,
+		EvaluationRunID:    &updatedRun.ID,
+		Query:              researchRun.Query,
+		OrchestratorAnswer: researchRun.FinalAnswer,
+		ReferenceAnswer:    *evaluationRun.ReferenceAnswer,
+		Sources:            sources,
+		Scores:             scores,
+		Winner:             stringPtr(verdict.Winner),
+		Metadata:           map[string]any{"judge_reasoning": verdict.Reasoning},
+	})
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, updatedRun)
+}
+
+func (s *Server) getEvaluationRun(w http.ResponseWriter, r *http.Request) {
+	item, err := s.Postgres.GetEvaluationRun(r.Context(), chi.URLParam(r, "evaluationRunID"))
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if item == nil {
+		writeDetail(w, http.StatusNotFound, "evaluation run not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (s *Server) listEvaluationDatasetItems(w http.ResponseWriter, r *http.Request) {
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 100)
+	items, err := s.Postgres.ListEvaluationDatasetItems(r.Context(), limit)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items": items,
+		"total": len(items),
+	})
 }
 
 func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
@@ -905,6 +1117,209 @@ func selectedCapabilitiesForIntent(intent research.Intent, requested []string) [
 	}
 }
 
+type judgeVerdict struct {
+	AccuracyScore         float64        `json:"accuracy_score"`
+	CoverageScore         float64        `json:"coverage_score"`
+	SourceUseScore        float64        `json:"source_use_score"`
+	UsefulnessScore       float64        `json:"usefulness_score"`
+	HallucinationRiskScore float64       `json:"hallucination_risk_score"`
+	Winner                string         `json:"winner"`
+	Reasoning             string         `json:"reasoning"`
+	Raw                   map[string]any `json:"-"`
+}
+
+func (s *Server) sourcesForResearchRun(ctx context.Context, researchRun *domain.ResearchRunResponse) ([]domain.SourceRef, error) {
+	artifacts, err := s.Postgres.ListArtifactsByIDs(ctx, researchRun.SourceArtifactIDs)
+	if err != nil {
+		return nil, err
+	}
+	sources := make([]domain.SourceRef, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		sources = append(sources, domain.SourceRef{
+			Title: firstNonEmptyString(stringValue(artifact.Title), stringValue(artifact.URI), artifact.ID),
+			URI:   stringValue(artifact.URI),
+			Kind:  artifact.ArtifactType,
+		})
+	}
+	return sources, nil
+}
+
+func (s *Server) runInlineEvaluation(ctx context.Context, researchRun *domain.ResearchRunResponse) (*domain.EvaluationRunResponse, error) {
+	if strings.TrimSpace(s.Config.OpenAIReferenceAPIKey) == "" {
+		return nil, fmt.Errorf("OpenAI reference API key is not configured")
+	}
+	referenceAnswer, err := s.callOpenAIChat(
+		ctx,
+		s.Config.OpenAIReferenceModel,
+		"Eres un asistente de investigación riguroso. Responde a la pregunta del usuario con claridad. Si faltan datos, dilo.",
+		researchRun.Query,
+	)
+	if err != nil {
+		return nil, err
+	}
+	evaluationRun, err := s.Postgres.CreateEvaluationRun(ctx, store.CreateEvaluationRunParams{
+		ResearchRunID:     researchRun.ID,
+		ReferenceProvider: "openai",
+		ReferenceModel:    stringPtr(s.Config.OpenAIReferenceModel),
+		ReferenceAnswer:   &referenceAnswer,
+		JudgeModel:        stringPtr(s.Config.OpenAIJudgeModel),
+	})
+	if err != nil {
+		return nil, err
+	}
+	sources, err := s.sourcesForResearchRun(ctx, researchRun)
+	if err != nil {
+		return nil, err
+	}
+	verdict, err := s.callOpenAIJudge(ctx, researchRun.Query, researchRun.FinalAnswer, referenceAnswer, sources)
+	if err != nil {
+		return nil, err
+	}
+	scores := map[string]any{
+		"accuracy_score":           verdict.AccuracyScore,
+		"coverage_score":           verdict.CoverageScore,
+		"source_use_score":         verdict.SourceUseScore,
+		"usefulness_score":         verdict.UsefulnessScore,
+		"hallucination_risk_score": verdict.HallucinationRiskScore,
+	}
+	evaluationRun, err = s.Postgres.UpdateEvaluationRunJudgement(
+		ctx,
+		evaluationRun.ID,
+		stringPtr(s.Config.OpenAIJudgeModel),
+		verdict.Raw,
+		scores,
+		stringPtr(verdict.Winner),
+	)
+	if err != nil {
+		return nil, err
+	}
+	_, err = s.Postgres.CreateEvaluationDatasetItem(ctx, store.CreateEvaluationDatasetItemParams{
+		ResearchRunID:      researchRun.ID,
+		EvaluationRunID:    &evaluationRun.ID,
+		Query:              researchRun.Query,
+		OrchestratorAnswer: researchRun.FinalAnswer,
+		ReferenceAnswer:    referenceAnswer,
+		Sources:            sources,
+		Scores:             scores,
+		Winner:             stringPtr(verdict.Winner),
+		Metadata:           map[string]any{"judge_reasoning": verdict.Reasoning},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return evaluationRun, nil
+}
+
+func (s *Server) callOpenAIChat(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {
+	body := map[string]any{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "system", "content": systemPrompt},
+			{"role": "user", "content": userPrompt},
+		},
+	}
+	responseBody, err := s.callOpenAIAPI(ctx, body)
+	if err != nil {
+		return "", err
+	}
+	var payload struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(responseBody, &payload); err != nil {
+		return "", err
+	}
+	if len(payload.Choices) == 0 {
+		return "", fmt.Errorf("openai response returned no choices")
+	}
+	return strings.TrimSpace(payload.Choices[0].Message.Content), nil
+}
+
+func (s *Server) callOpenAIJudge(ctx context.Context, query, orchestratorAnswer, referenceAnswer string, sources []domain.SourceRef) (*judgeVerdict, error) {
+	var sourceLines []string
+	for _, src := range sources {
+		sourceLines = append(sourceLines, fmt.Sprintf("- %s | %s | %s", firstNonEmptyString(src.Title, src.URI), src.URI, src.Kind))
+	}
+	userPrompt := fmt.Sprintf(
+		"Pregunta original:\n%s\n\nRespuesta del orquestador:\n%s\n\nRespuesta de referencia:\n%s\n\nFuentes del orquestador:\n%s",
+		query,
+		orchestratorAnswer,
+		referenceAnswer,
+		strings.Join(sourceLines, "\n"),
+	)
+	content, err := s.callOpenAIChat(
+		ctx,
+		s.Config.OpenAIJudgeModel,
+		`Eres un juez riguroso. Devuelve SOLO JSON válido con esta forma exacta:
+{"accuracy_score":0.0,"coverage_score":0.0,"source_use_score":0.0,"usefulness_score":0.0,"hallucination_risk_score":0.0,"winner":"orchestrator|reference|tie","reasoning":"..."}`,
+		userPrompt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	verdict, err := parseJudgeVerdict(content)
+	if err != nil {
+		return nil, err
+	}
+	return verdict, nil
+}
+
+func (s *Server) callOpenAIAPI(ctx context.Context, body map[string]any) ([]byte, error) {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: time.Duration(s.Config.OpenAITimeoutSeconds) * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.Config.OpenAIBaseURL, "/")+"/chat/completions", bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+s.Config.OpenAIReferenceAPIKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("openai api failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))
+	}
+	return responseBody, nil
+}
+
+func parseJudgeVerdict(content string) (*judgeVerdict, error) {
+	content = strings.TrimSpace(content)
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(content), &raw); err != nil {
+		return nil, err
+	}
+	verdict := &judgeVerdict{
+		AccuracyScore:          floatValue(raw["accuracy_score"]),
+		CoverageScore:          floatValue(raw["coverage_score"]),
+		SourceUseScore:         floatValue(raw["source_use_score"]),
+		UsefulnessScore:        floatValue(raw["usefulness_score"]),
+		HallucinationRiskScore: floatValue(raw["hallucination_risk_score"]),
+		Winner:                 strings.TrimSpace(asString(raw["winner"])),
+		Reasoning:              strings.TrimSpace(asString(raw["reasoning"])),
+		Raw:                    raw,
+	}
+	if verdict.Winner == "" {
+		verdict.Winner = "tie"
+	}
+	return verdict, nil
+}
+
 func ptrFloat64(value float64) *float64 {
 	return &value
 }
@@ -1037,5 +1452,30 @@ func asString(input any) string {
 		return v
 	default:
 		return ""
+	}
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func floatValue(input any) float64 {
+	switch v := input.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case json.Number:
+		out, _ := v.Float64()
+		return out
+	default:
+		return 0
 	}
 }

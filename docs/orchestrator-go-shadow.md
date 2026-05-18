@@ -22,8 +22,14 @@ The Go shadow service intentionally covers the compatibility base and the first 
 - `GET /capabilities`
 - `POST /tools/web/search`
 - `POST /tools/web/fetch`
+- `GET /tools/invocations/{id}`
 - `POST /research/query`
 - `GET /research/runs/{id}`
+- `GET /tasks/{id}/sources`
+- `POST /evaluations/reference`
+- `POST /evaluations/judge`
+- `GET /evaluations/{id}`
+- `GET /datasets/evaluation-items`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 - background worker registration, heartbeat emission, queue claim, and `queued -> assigned -> in_progress` transitions
@@ -50,6 +56,14 @@ Current write support in the shadow is intentionally narrow:
 - `orchestrator-tools` now responds through `/v1/chat/completions` for URL-based prompts, returning answer, confidence, and sources.
 - `research.query` and `orchestrator-tools` now persist `research_runs` records in PostgreSQL.
 - the Go research flow now persists `tool_invocations` and `artifacts` for URL-based research runs.
+- `GET /tools/invocations/{id}` now returns the persisted invocation plus its artifacts.
+- `GET /tasks/{id}/sources` now returns persisted source artifacts linked to the task.
+- the Go shadow now persists and serves:
+  - `evaluation_runs`
+  - `evaluation_dataset_items`
+- `POST /evaluations/reference` now creates a reference answer via the configured OpenAI-compatible endpoint.
+- `POST /evaluations/judge` now scores orchestrator vs reference and stores the resulting dataset item.
+- `POST /research/query` now supports `evaluate_against_reference=true` for inline evaluation during research.
 
 The remaining routes are exposed as explicit `501 Not Implemented` placeholders to preserve route intent without pretending full parity.
 
@@ -58,8 +72,9 @@ What the worker does not do yet:
 - run research or `orchestrator-tools`
 - execute real Aider/LLM-backed planner-coder logic
 - create planner-generated child tasks or reconcile parent-child trees
-- persist evaluation runs and datasets
 - support document/image capabilities and evaluation harness
+- support document/image capabilities and their sidecar contracts
+- implement full multi-source research parity with the Python orchestrator
 
 ## Deployment shape
 

@@ -161,10 +161,63 @@ type ResearchRunResponse struct {
 	CreatedAt            time.Time      `json:"created_at"`
 }
 
+type EvaluationRunResponse struct {
+	ID                string         `json:"id"`
+	ResearchRunID     string         `json:"research_run_id"`
+	ReferenceProvider string         `json:"reference_provider"`
+	ReferenceModel    *string        `json:"reference_model"`
+	ReferenceAnswer   *string        `json:"reference_answer"`
+	JudgeModel        *string        `json:"judge_model"`
+	JudgeVerdict      map[string]any `json:"judge_verdict"`
+	JudgeScores       map[string]any `json:"judge_scores"`
+	Winner            *string        `json:"winner"`
+	CreatedAt         time.Time      `json:"created_at"`
+}
+
+type EvaluationDatasetItemResponse struct {
+	ID                 string         `json:"id"`
+	ResearchRunID      string         `json:"research_run_id"`
+	EvaluationRunID    *string        `json:"evaluation_run_id"`
+	Query              string         `json:"query"`
+	OrchestratorAnswer string         `json:"orchestrator_answer"`
+	ReferenceAnswer    string         `json:"reference_answer"`
+	Sources            []SourceRef    `json:"sources"`
+	Scores             map[string]any `json:"scores"`
+	Winner             *string        `json:"winner"`
+	Metadata           map[string]any `json:"metadata"`
+	CreatedAt          time.Time      `json:"created_at"`
+}
+
 type SourceRef struct {
 	Title string `json:"title"`
 	URI   string `json:"uri"`
 	Kind  string `json:"kind"`
+}
+
+type ToolInvocationResponse struct {
+	ID           string         `json:"id"`
+	TaskID       *string        `json:"task_id"`
+	EntryPoint   string         `json:"entrypoint"`
+	Capability   string         `json:"capability"`
+	Status       string         `json:"status"`
+	DurationMS   int            `json:"duration_ms"`
+	Summary      *string        `json:"summary"`
+	Output       map[string]any `json:"output"`
+	SourceRefs   []SourceRef    `json:"source_refs"`
+	ArtifactIDs  []string       `json:"artifact_ids"`
+	ErrorMessage *string        `json:"error_message"`
+	CreatedAt    time.Time      `json:"created_at"`
+}
+
+type ArtifactResponse struct {
+	ID          string         `json:"id"`
+	ArtifactType string        `json:"artifact_type"`
+	Title       *string        `json:"title"`
+	URI         *string        `json:"uri"`
+	MediaType   *string        `json:"media_type"`
+	ContentText *string        `json:"content_text"`
+	Metadata    map[string]any `json:"metadata"`
+	CreatedAt   time.Time      `json:"created_at"`
 }
 
 type WorkerInfo struct {
