@@ -1,7 +1,9 @@
 package research
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"html"
 	"io"
@@ -49,6 +51,9 @@ type Options struct {
 	SearchBaseURL string
 	MaxFetchCount int
 	Capabilities  *capabilities.Client
+	UtilityBaseURL string
+	UtilityAPIKey  string
+	UtilityTimeoutSeconds int
 }
 
 type Service struct {
@@ -56,6 +61,9 @@ type Service struct {
 	searchBaseURL string
 	maxFetchCount int
 	capabilities  *capabilities.Client
+	utilityBaseURL string
+	utilityAPIKey string
+	utilityTimeoutSeconds int
 }
 
 type fetchedSource struct {
@@ -81,6 +89,9 @@ func New(options Options) *Service {
 		searchBaseURL: searchBaseURL,
 		maxFetchCount: maxFetchCount,
 		capabilities:  options.Capabilities,
+		utilityBaseURL: strings.TrimRight(strings.TrimSpace(options.UtilityBaseURL), "/"),
+		utilityAPIKey: strings.TrimSpace(options.UtilityAPIKey),
+		utilityTimeoutSeconds: options.UtilityTimeoutSeconds,
 	}
 }
 
@@ -102,6 +113,43 @@ func (s *Service) Query(ctx context.Context, query string) (Result, error) {
 		return s.summarizeURL(ctx, rawURL)
 	}
 	return s.searchAndSynthesize(ctx, query)
+}
+
+func ShouldUseResearch(query string) bool {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return false
+	}
+	lowered := strings.ToLower(query)
+	if extractFirstURL(query) != "" || extractFirstLocation(query) != "" {
+		return true
+	}
+	researchSignals := []string{
+		"latest", "recent", "today", "yesterday", "tomorrow", "current", "currently",
+		"news", "release", "releases", "version", "versions", "roadmap", "price", "pricing",
+		"actual", "actuales", "actualizada", "actualizado", "actualmente", "hoy", "ayer", "mañana",
+		"reciente", "recientes", "último", "última", "últimos", "últimas",
+		"noticias", "lanzamiento", "lanzamientos", "versión", "versiones", "precio", "precios",
+		"fuentes", "fuente", "source", "sources", "cita", "citas", "verify", "verification", "verifica", "verificar",
+	}
+	for _, signal := range researchSignals {
+		if strings.Contains(lowered, signal) {
+			return true
+		}
+	}
+	comparisonSignals := []string{
+		"compare", "comparison", "vs", "versus", "difference", "diferencia", "diferencias",
+		"comparar", "comparativa", "distingue", "frente a",
+	}
+	for _, signal := range comparisonSignals {
+		if strings.Contains(lowered, signal) {
+			return true
+		}
+	}
+	if seemsAmbiguousAcronymQuery(query) {
+		return true
+	}
+	return false
 }
 
 func (s *Service) WebSearch(ctx context.Context, query string) ([]SearchResult, error) {
@@ -243,6 +291,9 @@ func (s *Service) searchAndSynthesize(ctx context.Context, query string) (Result
 	}
 
 	answer := synthesizeSearchAnswer(query, fetched, results)
+	if refined, err := s.synthesizeWithUtility(ctx, query, fetched, results); err == nil && strings.TrimSpace(refined) != "" {
+		answer = refined
+	}
 	sources := make([]Source, 0, len(fetched))
 	if len(fetched) > 0 {
 		for _, item := range fetched {
@@ -451,6 +502,91 @@ func synthesizeSearchAnswer(query string, fetched []fetchedSource, results []Sea
 	return strings.TrimSpace(answer)
 }
 
+func (s *Service) synthesizeWithUtility(ctx context.Context, query string, fetched []fetchedSource, results []SearchResult) (string, error) {
+	if s.utilityBaseURL == "" {
+		return "", fmt.Errorf("utility base URL is not configured")
+	}
+	evidence := make([]string, 0, len(fetched)+len(results))
+	for idx, item := range fetched {
+		evidence = append(evidence, fmt.Sprintf(
+			"Fuente %d\nTítulo: %s\nURL: %s\nContenido: %s",
+			idx+1,
+			item.Title,
+			item.URI,
+			truncateSentence(item.Content, 900),
+		))
+	}
+	if len(evidence) == 0 {
+		for idx, item := range results[:min(5, len(results))] {
+			evidence = append(evidence, fmt.Sprintf(
+				"Resultado %d\nTítulo: %s\nURL: %s\nSnippet: %s",
+				idx+1,
+				item.Title,
+				item.URL,
+				truncateSentence(item.Snippet, 300),
+			))
+		}
+	}
+	body := map[string]any{
+		"model": "utility",
+		"messages": []map[string]string{
+			{
+				"role": "system",
+				"content": "Eres un sintetizador técnico riguroso. Responde solo con la información respaldada por la evidencia dada. No inventes detalles. Si la evidencia es limitada, dilo. Escribe una respuesta breve, directa y útil, en español.",
+			},
+			{
+				"role": "user",
+				"content": fmt.Sprintf("Consulta:\n%s\n\nEvidencia:\n%s", query, strings.Join(evidence, "\n\n")),
+			},
+		},
+		"temperature": 0.1,
+		"max_tokens":  900,
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+	timeout := time.Duration(s.utilityTimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 45 * time.Second
+	}
+	client := &http.Client{Timeout: timeout}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.utilityBaseURL+"/chat/completions", bytes.NewReader(raw))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if s.utilityAPIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+s.utilityAPIKey)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("utility synthesis failed with status %d", resp.StatusCode)
+	}
+	var completion struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(payload, &completion); err != nil {
+		return "", err
+	}
+	if len(completion.Choices) == 0 {
+		return "", fmt.Errorf("utility synthesis returned no choices")
+	}
+	return strings.TrimSpace(completion.Choices[0].Message.Content), nil
+}
+
 func chooseSearchFetchCount(query string, results []SearchResult, maxFetchCount int) int {
 	if maxFetchCount <= 0 {
 		maxFetchCount = 5
@@ -596,6 +732,30 @@ func cleanText(input string) string {
 	value := html.UnescapeString(reTags.ReplaceAllString(input, " "))
 	value = reSpaces.ReplaceAllString(value, " ")
 	return strings.TrimSpace(value)
+}
+
+var reAllCapsToken = regexp.MustCompile(`\b[A-Z]{2,5}\b`)
+
+func seemsAmbiguousAcronymQuery(query string) bool {
+	matches := reAllCapsToken.FindAllString(query, -1)
+	if len(matches) == 0 {
+		return false
+	}
+	knownSafe := map[string]struct{}{
+		"SQL":  {},
+		"HTTP": {},
+		"HTML": {},
+		"JSON": {},
+		"REST": {},
+		"CRUD": {},
+	}
+	for _, match := range matches {
+		if _, ok := knownSafe[match]; ok {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 func firstMatch(re *regexp.Regexp, input string) string {

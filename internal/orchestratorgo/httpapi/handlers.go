@@ -1107,6 +1107,13 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, chatResponse(body.Model, "No se detectó una consulta utilizable."))
 		return
 	}
+	if !research.ShouldUseResearch(prompt) {
+		answer, err := s.callUtilityChat(r.Context(), prompt)
+		if err == nil && strings.TrimSpace(answer) != "" {
+			writeJSON(w, http.StatusOK, chatResponse(body.Model, strings.TrimSpace(answer)))
+			return
+		}
+	}
 	result, err := s.Research.Query(r.Context(), prompt)
 	if err != nil {
 		writeDetail(w, http.StatusBadGateway, err.Error())
@@ -1367,6 +1374,67 @@ func (s *Server) runInlineEvaluation(ctx context.Context, researchRun *domain.Re
 		return nil, err
 	}
 	return evaluationRun, nil
+}
+
+func (s *Server) callUtilityChat(ctx context.Context, prompt string) (string, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(s.Config.LlamaUtilityBaseURL), "/")
+	if baseURL == "" {
+		return "", fmt.Errorf("utility base URL is not configured")
+	}
+	body := map[string]any{
+		"model": "utility",
+		"messages": []map[string]string{
+			{
+				"role": "system",
+				"content": "Responde de forma directa y útil usando conocimiento general estable. No uses ni menciones búsqueda web salvo que el usuario pida explícitamente verificación o fuentes. Si el dato puede haber cambiado recientemente, dilo en una frase breve. No inventes términos ni detalles técnicos; usa terminología estándar y, si no estás seguro de un matiz, admítelo con claridad.",
+			},
+			{
+				"role":    "user",
+				"content": prompt,
+			},
+		},
+		"temperature": 0.2,
+		"max_tokens":  900,
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: time.Duration(s.Config.LlamaTimeoutSeconds) * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(raw))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey := strings.TrimSpace(s.Config.LlamaUtilityAPIKey); apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("utility request failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(payload)))
+	}
+	var completion struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(payload, &completion); err != nil {
+		return "", err
+	}
+	if len(completion.Choices) == 0 {
+		return "", fmt.Errorf("utility returned no choices")
+	}
+	return strings.TrimSpace(completion.Choices[0].Message.Content), nil
 }
 
 func (s *Server) callOpenAIChat(ctx context.Context, model, systemPrompt, userPrompt string) (string, error) {

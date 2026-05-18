@@ -184,3 +184,67 @@ func TestQueryDetectsImageAndUsesSidecar(t *testing.T) {
 		t.Fatalf("unexpected answer: %s", result.Answer)
 	}
 }
+
+func TestShouldUseResearchBalancedHeuristic(t *testing.T) {
+	cases := []struct {
+		query string
+		want  bool
+	}{
+		{query: "Explica qué es PostgreSQL logical replication", want: false},
+		{query: "¿Qué diferencia hay entre replicación lógica y física en PostgreSQL?", want: true},
+		{query: "¿Cuáles son las últimas novedades de PostgreSQL logical replication?", want: true},
+		{query: "¿Qué es MCP y para qué sirve en sistemas agénticos?", want: true},
+		{query: "Resume https://www.postgresql.org/docs/current/logical-replication.html", want: true},
+		{query: "Analiza ./screen.png", want: true},
+		{query: "Dame fuentes sobre MCP", want: true},
+	}
+	for _, tc := range cases {
+		got := ShouldUseResearch(tc.query)
+		if got != tc.want {
+			t.Fatalf("ShouldUseResearch(%q)=%v want %v", tc.query, got, tc.want)
+		}
+	}
+}
+
+func TestSearchAndSynthesizeUsesUtilityWhenConfigured(t *testing.T) {
+	var searchURL string
+	searchMux := http.NewServeMux()
+	searchMux.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `<html><body>
+			<a class="result__a" href="%s/page1">Feature one</a>
+			<div class="result__snippet">Feature one snippet.</div>
+			<a class="result__a" href="%s/page2">Feature two</a>
+			<div class="result__snippet">Feature two snippet.</div>
+		</body></html>`, searchURL, searchURL)
+	})
+	searchMux.HandleFunc("/page1", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><head><title>Page1</title></head><body><p>Feature one improves diagnostics and visibility into replication lag.</p></body></html>`)
+	})
+	searchMux.HandleFunc("/page2", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><head><title>Page2</title></head><body><p>Feature two extends generated column replication support.</p></body></html>`)
+	})
+	searchServer := httptest.NewServer(searchMux)
+	defer searchServer.Close()
+	searchURL = searchServer.URL
+
+	utilityServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Síntesis afinada por utility."}}]}`))
+	}))
+	defer utilityServer.Close()
+
+	service := New(Options{
+		Client:                searchServer.Client(),
+		SearchBaseURL:         searchServer.URL + "/search?q=",
+		MaxFetchCount:         5,
+		UtilityBaseURL:        utilityServer.URL,
+		UtilityAPIKey:         "test",
+		UtilityTimeoutSeconds: 5,
+	})
+	result, err := service.Query(context.Background(), "últimas mejoras en logical replication")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Answer != "Síntesis afinada por utility." {
+		t.Fatalf("unexpected synthesized answer: %s", result.Answer)
+	}
+}
