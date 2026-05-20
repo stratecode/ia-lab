@@ -478,7 +478,7 @@ func (b *Bot) cmdInitiative(ctx context.Context, initiativeID string) string {
 	if err != nil {
 		return "Error leyendo tareas de iniciativa: " + err.Error()
 	}
-	return fmt.Sprintf("Initiative %s\n- Status: %s\n- Phase: %s\n- Workspace: %s\n- Goal: %s\n- Tasks: %d", item.ID, item.Status, item.CurrentPhase, item.WorkspaceRoot, item.Goal, len(links))
+	return formatInitiativeSummary(item, links)
 }
 
 func (b *Bot) sendInitiativeDetail(ctx context.Context, chatID int64, initiativeID string) error {
@@ -493,7 +493,7 @@ func (b *Bot) sendInitiativeDetail(ctx context.Context, chatID int64, initiative
 	if err != nil {
 		return b.sendMessage(ctx, chatID, "Error leyendo tareas de iniciativa: "+err.Error())
 	}
-	text := fmt.Sprintf("Initiative %s\n- Status: %s\n- Phase: %s\n- Workspace: %s\n- Goal: %s\n- Tasks: %d", item.ID, item.Status, item.CurrentPhase, item.WorkspaceRoot, item.Goal, len(links))
+	text := formatInitiativeSummary(item, links)
 	rows := [][]map[string]string{}
 	if isPhaseReviewStatus(item.Status) {
 		rows = append(rows, []map[string]string{
@@ -560,6 +560,9 @@ func (b *Bot) cmdResolveInitiativePhase(ctx context.Context, arg string, approve
 	}
 	if !domain.IsRecognizedInitiativePhase(phase) {
 		return "Fase inválida."
+	}
+	if item.CurrentPhase != phase && !(phase == domain.InitiativePhasePlan && item.Status == domain.InitiativeStatusPlanReview) {
+		return fmt.Sprintf("La iniciativa está en %s / %s, no en la fase pedida.", item.Status, item.CurrentPhase)
 	}
 	activeMarkdownID, activeJSONID := activeArtifactIDsForPhase(item, phase)
 	decision := domain.InitiativeReviewRejected
@@ -653,6 +656,9 @@ func (b *Bot) cmdLaunchInitiativeTasks(ctx context.Context, initiativeID string)
 	if item == nil {
 		return "Iniciativa no encontrada."
 	}
+	if item.Status != domain.InitiativeStatusExecutionReady && item.Status != domain.InitiativeStatusExecuting && item.Status != domain.InitiativeStatusBlocked {
+		return fmt.Sprintf("La iniciativa no está lista para lanzar tareas. Estado actual: %s", item.Status)
+	}
 	links, err := b.postgres.ListInitiativeTasks(ctx, initiativeID)
 	if err != nil {
 		return "Error leyendo tareas de iniciativa: " + err.Error()
@@ -676,9 +682,7 @@ func (b *Bot) cmdLaunchInitiativeTasks(ctx context.Context, initiativeID string)
 		}
 		launched++
 	}
-	status := domain.InitiativeStatusExecuting
-	nextPhase := domain.InitiativePhaseExecution
-	if _, err := b.postgres.UpdateInitiative(ctx, initiativeID, store.UpdateInitiativeParams{Status: &status, CurrentPhase: &nextPhase}); err != nil {
+	if _, err := b.postgres.ReconcileInitiativeExecution(ctx, initiativeID); err != nil {
 		return "Error actualizando iniciativa: " + err.Error()
 	}
 	return fmt.Sprintf("Initiative launch queued\n- Initiative: %s\n- Tasks launched: %d", initiativeID, launched)
@@ -959,6 +963,23 @@ func activeArtifactIDsForPhase(item *domain.InitiativeResponse, phase domain.Ini
 	default:
 		return nil, nil
 	}
+}
+
+func formatInitiativeSummary(item *domain.InitiativeResponse, links []domain.InitiativeTaskLinkResponse) string {
+	backlog := "no"
+	if len(links) > 0 {
+		backlog = "sí"
+	}
+	return fmt.Sprintf(
+		"Initiative %s\n- Status: %s\n- Phase: %s\n- Workspace: %s\n- Goal: %s\n- Backlog: %s\n- Tasks: %d",
+		item.ID,
+		item.Status,
+		item.CurrentPhase,
+		item.WorkspaceRoot,
+		item.Goal,
+		backlog,
+		len(links),
+	)
 }
 
 func isPhaseReviewStatus(status domain.InitiativeStatus) bool {

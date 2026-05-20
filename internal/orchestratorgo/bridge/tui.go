@@ -26,23 +26,23 @@ var (
 type tuiMode string
 
 const (
-	tuiModeNormal  tuiMode = "normal"
-	tuiModeFilter  tuiMode = "filter"
-	tuiModeChat    tuiMode = "chat"
-	tuiModeProject tuiMode = "project"
+	tuiModeNormal     tuiMode = "normal"
+	tuiModeFilter     tuiMode = "filter"
+	tuiModeChat       tuiMode = "chat"
+	tuiModeProject    tuiMode = "project"
 	tuiModeInitiative tuiMode = "initiative"
 )
 
 var tuiViews = []string{"Overview", "Initiatives", "Requirements", "Design", "Plan", "Execution", "Tasks", "Approvals", "Bridge", "Projects", "Chat"}
 
 type tuiLoadedMsg struct {
-	health    *domain.HealthResponse
-	bridges   *domain.LocalBridgeListResponse
-	tasks     *domain.TaskListResponse
+	health      *domain.HealthResponse
+	bridges     *domain.LocalBridgeListResponse
+	tasks       *domain.TaskListResponse
 	initiatives *domain.InitiativeListResponse
-	approvals *domain.ApprovalListResponse
-	models    []string
-	err       error
+	approvals   *domain.ApprovalListResponse
+	models      []string
+	err         error
 }
 
 type tuiTaskDetailMsg struct {
@@ -73,11 +73,11 @@ type tuiChatMsg struct {
 }
 
 type tuiCreateTaskMsg struct {
-	task      *domain.TaskResponse
-	recent    *RecentProject
-	presets   map[string]string
-	mode      tuiMode
-	err       error
+	task    *domain.TaskResponse
+	recent  *RecentProject
+	presets map[string]string
+	mode    tuiMode
+	err     error
 }
 
 type tuiCreateInitiativeMsg struct {
@@ -92,9 +92,9 @@ type tuiDaemonStartedMsg struct {
 }
 
 type chatExchange struct {
-	Prompt      string
-	Response    string
-	Model       string
+	Prompt       string
+	Response     string
+	Model        string
 	UsedResearch bool
 }
 
@@ -285,16 +285,16 @@ func (f *projectForm) toRequest(workspaceRoot string) (domain.TaskCreateRequest,
 	testFocus := strings.TrimSpace(f.TestFocus.Value())
 	description := fmt.Sprintf("Plan and build mini test project %s (%s, %s)", projectName, projectType, stack)
 	projectRequest := map[string]any{
-		"project_name":     projectName,
-		"parent_directory": parentDir,
-		"project_type":     projectType,
-		"runtime_or_stack": stack,
-		"goal":             goal,
-		"test_focus":       testFocus,
-		"initialize_git":   f.InitGit,
+		"project_name":      projectName,
+		"parent_directory":  parentDir,
+		"project_type":      projectType,
+		"runtime_or_stack":  stack,
+		"goal":              goal,
+		"test_focus":        testFocus,
+		"initialize_git":    f.InitGit,
 		"requires_approval": f.NeedsApproval,
-		"test_command":     strings.Join(defaultBridgeTestCommand(projectType, stack), " "),
-		"expected_files":   expectedProjectFiles(projectType),
+		"test_command":      strings.Join(defaultBridgeTestCommand(projectType, stack), " "),
+		"expected_files":    expectedProjectFiles(projectType),
 	}
 	metadata := map[string]any{
 		"workspace_root":    normalizedWorkspaceRoot(workspaceRoot),
@@ -391,42 +391,42 @@ func (f *initiativeForm) toRequest() (domain.InitiativeCreateRequest, RecentInit
 }
 
 type TUIModel struct {
-	opts         CLIOptions
-	client       *Client
-	stateStore   *TUIStateStore
-	state        TUIState
-	width        int
-	height       int
-	viewIdx      int
-	mode         tuiMode
-	status       string
-	errText      string
-	health       *domain.HealthResponse
-	bridges      []domain.LocalBridgeResponse
-	initiatives  []domain.InitiativeResponse
-	initiativeDetail *domain.InitiativeResponse
-	initiativeReviews []domain.InitiativePhaseReviewResponse
-	initiativeArtifacts []domain.ArtifactResponse
-	initiativeTasks *domain.InitiativeTaskListResponse
-	tasks        []domain.TaskResponse
-	taskDetail   *domain.TaskResponse
-	taskTree     *domain.TaskTreeResponse
-	taskSources  []domain.ArtifactResponse
-	approvals    []domain.ApprovalResponse
-	models       []string
-	selectedInitiative int
+	opts                  CLIOptions
+	client                *Client
+	stateStore            *TUIStateStore
+	state                 TUIState
+	width                 int
+	height                int
+	viewIdx               int
+	mode                  tuiMode
+	status                string
+	errText               string
+	health                *domain.HealthResponse
+	bridges               []domain.LocalBridgeResponse
+	initiatives           []domain.InitiativeResponse
+	initiativeDetail      *domain.InitiativeResponse
+	initiativeReviews     []domain.InitiativePhaseReviewResponse
+	initiativeArtifacts   []domain.ArtifactResponse
+	initiativeTasks       *domain.InitiativeTaskListResponse
+	tasks                 []domain.TaskResponse
+	taskDetail            *domain.TaskResponse
+	taskTree              *domain.TaskTreeResponse
+	taskSources           []domain.ArtifactResponse
+	approvals             []domain.ApprovalResponse
+	models                []string
+	selectedInitiative    int
 	selectedExecutionTask int
-	selectedTask int
-	selectedApproval int
-	filterInput  textinput.Model
-	filterText   string
-	filterFocus  string
-	chatInput    textinput.Model
-	chatHistory  []chatExchange
-	initiativeForm initiativeForm
-	projectForm  projectForm
-	daemonCancel  context.CancelFunc
-	daemonRunning bool
+	selectedTask          int
+	selectedApproval      int
+	filterInput           textinput.Model
+	filterText            string
+	filterFocus           string
+	chatInput             textinput.Model
+	chatHistory           []chatExchange
+	initiativeForm        initiativeForm
+	projectForm           projectForm
+	daemonCancel          context.CancelFunc
+	daemonRunning         bool
 }
 
 func RunTUI(ctx context.Context, opts CLIOptions) error {
@@ -449,18 +449,18 @@ func RunTUI(ctx context.Context, opts CLIOptions) error {
 	chat.Width = 72
 
 	model := &TUIModel{
-		opts:       opts,
-		client:     NewClient(opts.BaseURL, opts.APIKey, 20*time.Second),
-		stateStore: store,
-		state:      state,
-		mode:       tuiModeNormal,
-		status:     "Ready",
-		viewIdx:    maxInt(0, indexOfString(tuiViews, state.LastView)),
-		filterInput: filter,
-		chatInput:   chat,
-		chatHistory: []chatExchange{},
+		opts:           opts,
+		client:         NewClient(opts.BaseURL, opts.APIKey, 20*time.Second),
+		stateStore:     store,
+		state:          state,
+		mode:           tuiModeNormal,
+		status:         "Ready",
+		viewIdx:        maxInt(0, indexOfString(tuiViews, state.LastView)),
+		filterInput:    filter,
+		chatInput:      chat,
+		chatHistory:    []chatExchange{},
 		initiativeForm: newInitiativeForm(opts, state),
-		projectForm: newProjectForm(opts, state),
+		projectForm:    newProjectForm(opts, state),
 	}
 
 	p := tea.NewProgram(model, tea.WithAltScreen())
@@ -524,7 +524,11 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.initiativeReviews = msg.reviews
 		m.initiativeArtifacts = msg.artifacts
 		m.initiativeTasks = msg.tasks
-		m.selectedExecutionTask = 0
+		if m.initiativeTasks == nil || len(m.initiativeTasks.Items) == 0 {
+			m.selectedExecutionTask = 0
+		} else if m.selectedExecutionTask >= len(m.initiativeTasks.Items) {
+			m.selectedExecutionTask = len(m.initiativeTasks.Items) - 1
+		}
 		m.status = "Loaded initiative detail"
 		return m, nil
 	case tuiTaskDetailMsg:
@@ -545,7 +549,17 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.errText = ""
 		m.status = msg.text
-		return m, m.refreshAllCmd()
+		cmds := []tea.Cmd{m.refreshAllCmd()}
+		if item := m.selectedInitiativeItem(); item != nil && isInitiativeView(m.currentView()) {
+			cmds = append(cmds, m.loadInitiativeDetailCmd(item.ID))
+		}
+		if task := m.selectedTaskItem(); task != nil && m.currentView() == "Tasks" {
+			cmds = append(cmds, m.loadTaskDetailCmd(task.ID))
+		}
+		if task := m.selectedInitiativeTask(); task != nil && m.currentView() == "Execution" {
+			cmds = append(cmds, m.loadTaskDetailCmd(task.TaskID))
+		}
+		return m, tea.Batch(cmds...)
 	case tuiChatMsg:
 		if msg.err != nil {
 			m.errText = msg.err.Error()
@@ -553,9 +567,9 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.chatHistory = append([]chatExchange{{
-			Prompt:      msg.prompt,
-			Response:    msg.content,
-			Model:       msg.model,
+			Prompt:       msg.prompt,
+			Response:     msg.content,
+			Model:        msg.model,
 			UsedResearch: strings.Contains(msg.content, "Sources:") || strings.Contains(msg.content, "Research Run:"),
 		}}, m.chatHistory...)
 		if len(m.chatHistory) > 8 {
@@ -639,7 +653,7 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *TUIModel) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c", "q":
+	case "ctrl+c":
 		m.persistState()
 		if m.daemonCancel != nil {
 			m.daemonCancel()
@@ -653,9 +667,9 @@ func (m *TUIModel) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewIdx = (m.viewIdx - 1 + len(tuiViews)) % len(tuiViews)
 		m.status = fmt.Sprintf("View: %s", m.currentView())
 		return m, nil
-	case "r":
+	case "ctrl+r":
 		return m, m.refreshAllCmd()
-	case "/":
+	case "ctrl+f":
 		m.mode = tuiModeFilter
 		m.filterInput.SetValue(m.filterText)
 		m.filterInput.Focus()
@@ -665,18 +679,18 @@ func (m *TUIModel) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.filterFocus = "tasks"
 		}
 		return m, nil
-	case "c":
+	case "ctrl+g":
 		m.viewIdx = indexOfString(tuiViews, "Chat")
 		m.mode = tuiModeChat
 		m.chatInput.Focus()
 		return m, nil
-	case "p":
+	case "ctrl+p":
 		m.viewIdx = indexOfString(tuiViews, "Projects")
 		m.mode = tuiModeProject
 		m.projectForm = newProjectForm(m.opts, m.state)
 		m.projectForm.setFocus(0)
 		return m, nil
-	case "i":
+	case "ctrl+i":
 		m.viewIdx = indexOfString(tuiViews, "Initiatives")
 		m.mode = tuiModeInitiative
 		m.initiativeForm = newInitiativeForm(m.opts, m.state)
@@ -694,7 +708,7 @@ func (m *TUIModel) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "Bridge":
 		return m.handleBridgeKeys(msg)
 	case "Projects":
-		if msg.String() == "n" {
+		if msg.String() == "ctrl+n" || msg.String() == "ctrl+p" {
 			m.mode = tuiModeProject
 			m.projectForm = newProjectForm(m.opts, m.state)
 			m.projectForm.setFocus(0)
@@ -703,7 +717,7 @@ func (m *TUIModel) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "Chat":
 		m.mode = tuiModeChat
 		m.chatInput.Focus()
-		return m, nil
+		return m.handleChatMode(msg)
 	default:
 		return m, nil
 	}
@@ -726,24 +740,24 @@ func (m *TUIModel) handleTasksKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.loadTaskDetailCmd(task.ID)
-	case "x":
+	case "ctrl+x":
 		task := m.selectedTaskItem()
 		if task == nil {
 			return m, nil
 		}
 		return m, m.cancelTaskCmd(task.ID)
-	case "h":
+	case "ctrl+h":
 		task := m.selectedTaskItem()
 		if task == nil {
 			return m, nil
 		}
 		return m, m.archiveTaskCmd(task.ID)
-	case "v":
+	case "ctrl+v":
 		m.state.ShowCompleted = !m.state.ShowCompleted
 		_ = m.stateStore.Save(m.state)
 		m.status = fmt.Sprintf("Show completed: %t", m.state.ShowCompleted)
 		return m, nil
-	case "A":
+	case "ctrl+a":
 		m.state.ShowArchived = !m.state.ShowArchived
 		_ = m.stateStore.Save(m.state)
 		m.status = fmt.Sprintf("Show archived: %t", m.state.ShowArchived)
@@ -763,13 +777,13 @@ func (m *TUIModel) handleApprovalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selectedApproval < len(items)-1 {
 			m.selectedApproval++
 		}
-	case "a":
+	case "ctrl+a":
 		approval := m.selectedApprovalItem()
 		if approval == nil {
 			return m, nil
 		}
 		return m, m.resolveApprovalCmd(approval.ID, true)
-	case "x":
+	case "ctrl+x":
 		approval := m.selectedApprovalItem()
 		if approval == nil {
 			return m, nil
@@ -787,11 +801,11 @@ func (m *TUIModel) handleApprovalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *TUIModel) handleBridgeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "g":
+	case "ctrl+b":
 		return m, m.registerBridgeCmd()
-	case "h":
+	case "ctrl+h":
 		return m, m.heartbeatBridgeCmd()
-	case "s":
+	case "ctrl+s":
 		return m, m.smokeBridgeCmd()
 	case "enter":
 		if m.daemonRunning {
@@ -809,6 +823,26 @@ func (m *TUIModel) handleBridgeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *TUIModel) handleInitiativeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.currentView() == "Execution" && m.initiativeTasks != nil {
+		switch msg.String() {
+		case "up":
+			if m.selectedExecutionTask > 0 {
+				m.selectedExecutionTask--
+			}
+			return m, nil
+		case "down":
+			if m.selectedExecutionTask < len(m.initiativeTasks.Items)-1 {
+				m.selectedExecutionTask++
+			}
+			return m, nil
+		case "enter", "l":
+			task := m.selectedInitiativeTask()
+			if task == nil {
+				return m, nil
+			}
+			return m, m.loadTaskDetailCmd(task.TaskID)
+		}
+	}
 	items := m.initiatives
 	switch msg.String() {
 	case "up":
@@ -825,7 +859,7 @@ func (m *TUIModel) handleInitiativeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.loadInitiativeDetailCmd(item.ID)
-	case "g":
+	case "ctrl+e":
 		item := m.selectedInitiativeItem()
 		if item == nil {
 			return m, nil
@@ -833,20 +867,32 @@ func (m *TUIModel) handleInitiativeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if item.CurrentPhase == domain.InitiativePhasePlan && item.Status == domain.InitiativeStatusPlanDraft {
 			return m, m.generateInitiativeTasksCmd(item.ID)
 		}
+		if !initiativePhaseCanGenerate(item) {
+			m.status = fmt.Sprintf("Phase %s is not ready to generate", item.CurrentPhase)
+			return m, nil
+		}
 		return m, m.advanceInitiativeCmd(item.ID)
-	case "a":
+	case "ctrl+a":
 		item := m.selectedInitiativeItem()
 		if item == nil {
+			return m, nil
+		}
+		if !initiativePhaseCanApprove(item) {
+			m.status = fmt.Sprintf("Phase %s is not waiting for approval", item.CurrentPhase)
 			return m, nil
 		}
 		return m, m.approveInitiativePhaseCmd(item.ID, item.CurrentPhase)
-	case "x":
+	case "ctrl+x":
 		item := m.selectedInitiativeItem()
 		if item == nil {
 			return m, nil
 		}
+		if !initiativePhaseCanReject(item) {
+			m.status = fmt.Sprintf("Phase %s is not waiting for rejection handling", item.CurrentPhase)
+			return m, nil
+		}
 		return m, m.rejectInitiativePhaseCmd(item.ID, item.CurrentPhase)
-	case "m":
+	case "ctrl+m":
 		if m.currentView() != "Execution" || m.initiativeTasks == nil {
 			return m, nil
 		}
@@ -856,7 +902,7 @@ func (m *TUIModel) handleInitiativeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		nextMode := cycleLaunchMode(task.ExecutionMode)
 		return m, m.updateInitiativeTaskModeCmd(task.InitiativeID, task.TaskID, nextMode)
-	case "s":
+	case "ctrl+l":
 		if m.currentView() != "Execution" || m.initiativeTasks == nil {
 			return m, nil
 		}
@@ -865,23 +911,11 @@ func (m *TUIModel) handleInitiativeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.launchInitiativeTasksCmd(task.InitiativeID, []string{task.TaskID}, nil)
-	case "n":
+	case "ctrl+n":
 		m.mode = tuiModeInitiative
 		m.initiativeForm = newInitiativeForm(m.opts, m.state)
 		m.initiativeForm.setFocus(0)
 		return m, nil
-	}
-	if m.currentView() == "Execution" && m.initiativeTasks != nil {
-		switch msg.String() {
-		case "right":
-			if m.selectedExecutionTask < len(m.initiativeTasks.Items)-1 {
-				m.selectedExecutionTask++
-			}
-		case "left":
-			if m.selectedExecutionTask > 0 {
-				m.selectedExecutionTask--
-			}
-		}
 	}
 	return m, nil
 }
@@ -898,7 +932,7 @@ func (m *TUIModel) handleChatMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.chatCmd(prompt)
-	case "t":
+	case "ctrl+t":
 		prompt := strings.TrimSpace(m.chatInput.Value())
 		if prompt == "" && len(m.chatHistory) > 0 {
 			prompt = m.chatHistory[0].Prompt
@@ -1042,7 +1076,7 @@ func (m *TUIModel) renderOverview() string {
 		fmt.Sprintf("Queued: %d | In progress: %d | Failed: %d | Completed visible: %d", taskCounts[domain.TaskStateQueued], taskCounts[domain.TaskStateInProgress], taskCounts[domain.TaskStateFailed], taskCounts[domain.TaskStateCompleted]),
 		fmt.Sprintf("Chat model: %s", firstNonEmptyString(firstModel(m.models), "orchestrator-tools")),
 		"",
-		"Use Tab to move between views, / to filter, c for chat, p for project wizard.",
+		"Use Tab to move between views, Ctrl+F to filter, Ctrl+G for chat, Ctrl+P for project wizard.",
 	}
 	return tuiPanelStyle.Width(maxInt(60, m.width-2)).Render(strings.Join(lines, "\n"))
 }
@@ -1058,7 +1092,7 @@ func (m *TUIModel) renderInitiatives() string {
 		)
 		return tuiPanelStyle.Width(maxInt(60, m.width-2)).Render(strings.Join(lines, "\n"))
 	}
-	lines = append(lines, "`n` new   `enter` load detail   `g` generate current phase   `a` approve phase   `x` reject phase")
+	lines = append(lines, "`Ctrl+N` new   `Enter` load detail   `Ctrl+E` generate current phase   `Ctrl+A` approve phase   `Ctrl+X` reject phase")
 	for idx, item := range m.initiatives {
 		line := fmt.Sprintf("%s  %-18s  %-18s  %s", shortID(item.ID), item.Status, item.CurrentPhase, truncateInline(item.Title, 36))
 		if idx == m.selectedInitiative {
@@ -1068,7 +1102,7 @@ func (m *TUIModel) renderInitiatives() string {
 		}
 	}
 	if len(m.initiatives) == 0 {
-		lines = append(lines, tuiMutedStyle.Render("No initiatives yet. Press `n` or `i` to create one."))
+		lines = append(lines, tuiMutedStyle.Render("No initiatives yet. Press `Ctrl+N` or `Ctrl+I` to create one."))
 	}
 	item := m.selectedInitiativeItem()
 	detail := []string{tuiTitleStyle.Render("Initiative detail")}
@@ -1078,13 +1112,14 @@ func (m *TUIModel) renderInitiatives() string {
 			fmt.Sprintf("Status: %s", item.Status),
 			fmt.Sprintf("Current phase: %s", item.CurrentPhase),
 			fmt.Sprintf("Workspace: %s", item.WorkspaceRoot),
+			fmt.Sprintf("Tasks linked: %d", initiativeTaskCountForItem(m.initiativeDetail, m.initiativeTasks, item.ID)),
 			"",
 			item.Goal,
 		)
 		if m.initiativeDetail != nil && m.initiativeDetail.ID == item.ID && len(m.initiativeReviews) > 0 {
 			detail = append(detail, "", "Recent reviews:")
 			for _, review := range m.initiativeReviews[:minInt(4, len(m.initiativeReviews))] {
-				detail = append(detail, fmt.Sprintf("- %s | %s", review.Phase, review.Decision))
+				detail = append(detail, fmt.Sprintf("- %s | %s%s", review.Phase, review.Decision, formatReviewFeedback(review.Feedback)))
 			}
 		}
 	}
@@ -1106,13 +1141,18 @@ func (m *TUIModel) renderInitiativePhase(phase domain.InitiativePhase) string {
 		fmt.Sprintf("Status: %s", item.Status),
 		fmt.Sprintf("Current phase: %s", item.CurrentPhase),
 		"",
-		"`g` generate/regenerate   `a` approve   `x` reject   `l` reload detail",
+		"`Ctrl+E` generate/regenerate   `Ctrl+A` approve   `Ctrl+X` reject   `Enter`/`l` reload detail",
 		"",
 	)
 	artifact := m.artifactForPhase(phase)
 	if artifact == nil {
 		lines = append(lines, tuiMutedStyle.Render("No artifact generated yet for this phase."))
 	} else {
+		lines = append(lines, tuiMutedStyle.Render(fmt.Sprintf("Artifact: %s | updated %s", firstNonEmptyString(derefString(artifact.Title), artifact.ArtifactType), artifact.CreatedAt.Format(time.RFC3339))))
+		if review := m.latestReviewForPhase(phase); review != nil {
+			lines = append(lines, tuiMutedStyle.Render(fmt.Sprintf("Last review: %s%s", review.Decision, formatReviewFeedback(review.Feedback))))
+		}
+		lines = append(lines, "")
 		lines = append(lines, firstNonEmptyString(stringValue(artifact.ContentText), tuiMutedStyle.Render("Artifact has no inline text.")))
 	}
 	return tuiPanelStyle.Width(maxInt(60, m.width-2)).Render(strings.Join(lines, "\n"))
@@ -1120,41 +1160,67 @@ func (m *TUIModel) renderInitiativePhase(phase domain.InitiativePhase) string {
 
 func (m *TUIModel) renderExecution() string {
 	item := m.selectedInitiativeItem()
-	lines := []string{tuiTitleStyle.Render("Execution")}
 	if item == nil {
-		lines = append(lines, tuiMutedStyle.Render("Select an initiative first from the Initiatives view."))
+		lines := []string{tuiTitleStyle.Render("Execution"), tuiMutedStyle.Render("Select an initiative first from the Initiatives view.")}
 		return tuiPanelStyle.Width(maxInt(60, m.width-2)).Render(strings.Join(lines, "\n"))
 	}
-	lines = append(lines,
+	listLines := []string{
+		tuiTitleStyle.Render("Execution"),
 		fmt.Sprintf("Initiative: %s", item.Title),
 		fmt.Sprintf("Status: %s", item.Status),
-		"`m` cycle mode   `s` launch selected task   `left/right` move selected task   `enter` reload initiative detail",
+		"`Ctrl+M` cycle mode   `Ctrl+L` launch selected task   `Enter` load task detail",
 		"",
-	)
+	}
 	if m.initiativeTasks == nil || len(m.initiativeTasks.Items) == 0 {
-		lines = append(lines, tuiMutedStyle.Render("No initiative tasks generated yet. Generate the plan first."))
-		return tuiPanelStyle.Width(maxInt(60, m.width-2)).Render(strings.Join(lines, "\n"))
+		listLines = append(listLines, tuiMutedStyle.Render("No initiative tasks generated yet. Generate the plan first."))
+		return tuiPanelStyle.Width(maxInt(60, m.width-2)).Render(strings.Join(listLines, "\n"))
 	}
 	for idx, link := range m.initiativeTasks.Items {
-		line := fmt.Sprintf("%s  %-12s  %-11s  %-10s  %s", shortID(link.TaskID), link.Task.State, link.ExecutionMode, derefAgent(link.Task.AssignedAgent), truncateInline(link.Task.Description, 34))
+		group := firstNonEmptyString(stringValue(link.LaunchGroup), stringValue(link.Epic), "-")
+		line := fmt.Sprintf("%s  %-12s  %-11s  %-10s  %-12s  %s", shortID(link.TaskID), link.Task.State, link.ExecutionMode, derefAgent(link.Task.AssignedAgent), truncateInline(group, 12), truncateInline(link.Task.Description, 24))
 		if idx == m.selectedExecutionTask {
-			lines = append(lines, tuiSelectedStyle.Render(line))
+			listLines = append(listLines, tuiSelectedStyle.Render(line))
 		} else {
-			lines = append(lines, line)
+			listLines = append(listLines, line)
 		}
 	}
+	left := tuiPanelStyle.Width(maxInt(46, m.width/2-2)).Render(strings.Join(listLines, "\n"))
+
+	detail := []string{tuiTitleStyle.Render("Selected task")}
 	selected := m.selectedInitiativeTask()
 	if selected != nil {
-		lines = append(lines, "", fmt.Sprintf("Selected: %s", selected.Task.Description))
-		lines = append(lines, fmt.Sprintf("DoD: %s", firstNonEmptyString(asString(selected.Task.Metadata["definition_of_done"]), "<none>")))
+		detail = append(detail,
+			fmt.Sprintf("ID: %s", selected.TaskID),
+			fmt.Sprintf("State: %s", selected.Task.State),
+			fmt.Sprintf("Mode: %s", selected.ExecutionMode),
+			fmt.Sprintf("Agent: %s", derefAgent(selected.Task.AssignedAgent)),
+			fmt.Sprintf("Group: %s", firstNonEmptyString(stringValue(selected.LaunchGroup), stringValue(selected.Epic), "<none>")),
+			fmt.Sprintf("Workspace: %s", firstNonEmptyString(executionWorkspacePath(selected.Task), item.WorkspaceRoot)),
+			"",
+			selected.Task.Description,
+			"",
+			fmt.Sprintf("DoD: %s", firstNonEmptyString(asString(selected.Task.Metadata["definition_of_done"]), "<none>")),
+		)
+		if m.taskDetail != nil && m.taskDetail.ID == selected.TaskID {
+			detail = append(detail, "", renderTaskResults(m.taskDetail.Results))
+			if len(m.taskSources) > 0 {
+				detail = append(detail, "", "Artifacts:")
+				for _, artifact := range m.taskSources[:minInt(5, len(m.taskSources))] {
+					detail = append(detail, fmt.Sprintf("- %s [%s]", firstNonEmptyString(derefString(artifact.Title), derefString(artifact.URI), artifact.ID), artifact.ArtifactType))
+				}
+			}
+		}
+	} else {
+		detail = append(detail, tuiMutedStyle.Render("No task selected."))
 	}
-	return tuiPanelStyle.Width(maxInt(60, m.width-2)).Render(strings.Join(lines, "\n"))
+	right := tuiPanelStyle.Width(maxInt(46, m.width/2-2)).Render(strings.Join(detail, "\n"))
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 }
 
 func (m *TUIModel) renderTasks() string {
 	items := m.filteredTasks()
 	listLines := []string{tuiTitleStyle.Render("Tasks")}
-	listLines = append(listLines, tuiMutedStyle.Render(fmt.Sprintf("v completed=%t   A archived=%t   h archive selected completed", m.state.ShowCompleted, m.state.ShowArchived)))
+	listLines = append(listLines, tuiMutedStyle.Render(fmt.Sprintf("Ctrl+V completed=%t   Ctrl+A archived=%t   Ctrl+H archive selected completed", m.state.ShowCompleted, m.state.ShowArchived)))
 	for idx, task := range items {
 		line := fmt.Sprintf("%s  %-18s  %-9s  %s", shortID(task.ID), task.State, task.ExecutionTarget, truncateInline(task.Description, 44))
 		if idx == m.selectedTask {
@@ -1237,7 +1303,7 @@ func (m *TUIModel) renderApprovals() string {
 			fmt.Sprintf("Status: %s", item.Status),
 			fmt.Sprintf("Timeout: %s", item.TimeoutAt.Format(time.RFC3339)),
 			"",
-			"`a` approve  `x` reject  `enter` inspect task",
+			"`Ctrl+A` approve  `Ctrl+X` reject  `Enter` inspect task",
 		)
 	}
 	right := tuiPanelStyle.Width(maxInt(42, m.width/2-2)).Render(strings.Join(detail, "\n"))
@@ -1252,7 +1318,7 @@ func (m *TUIModel) renderBridge() string {
 		fmt.Sprintf("Daemon managed by TUI: %t", m.daemonRunning),
 		"",
 		"Keys:",
-		"g register   h heartbeat   s smoke   enter start/stop daemon",
+		"Ctrl+B register   Ctrl+H heartbeat   Ctrl+S smoke   Enter start/stop daemon",
 		"",
 	}
 	if len(m.bridges) == 0 {
@@ -1284,7 +1350,7 @@ func (m *TUIModel) renderProjects() string {
 			renderProjectField("Requires approval", boolLabel(m.projectForm.NeedsApproval), m.projectForm.Focus == 7),
 		)
 	} else {
-		lines = append(lines, "Press `n` or `p` to open the project wizard.")
+		lines = append(lines, "Press `Ctrl+N` or `Ctrl+P` to open the project wizard.")
 		lines = append(lines, "The wizard launches a planner root task that fans out to researcher, coder, and reviewer.")
 		if len(m.state.RecentProjects) == 0 {
 			lines = append(lines, tuiMutedStyle.Render("No recent projects created from the TUI yet."))
@@ -1301,7 +1367,7 @@ func (m *TUIModel) renderProjects() string {
 func (m *TUIModel) renderChat() string {
 	lines := []string{
 		tuiTitleStyle.Render("Chat"),
-		"Type a prompt and press enter. Press `t` to convert the prompt into a task, `esc` to leave chat mode.",
+		"Type a prompt and press Enter. Press `Ctrl+T` to convert the prompt into a task, `Esc` to leave chat mode.",
 		"",
 		"> " + m.chatInput.View(),
 	}
@@ -1322,7 +1388,7 @@ func (m *TUIModel) renderChat() string {
 }
 
 func (m *TUIModel) renderStatus() string {
-	parts := []string{tuiMutedStyle.Render("q quit"), tuiMutedStyle.Render("tab switch"), tuiMutedStyle.Render("r refresh")}
+	parts := []string{tuiMutedStyle.Render("Ctrl+C quit"), tuiMutedStyle.Render("Tab switch"), tuiMutedStyle.Render("Ctrl+R refresh")}
 	if m.errText != "" {
 		parts = append(parts, tuiErrorStyle.Render(m.errText))
 	} else {
@@ -1391,6 +1457,16 @@ func (m *TUIModel) artifactForPhase(phase domain.InitiativePhase) *domain.Artifa
 	for _, item := range m.initiativeArtifacts {
 		if strings.Contains(item.ArtifactType, string(phase)) && strings.HasSuffix(item.ArtifactType, ".md") {
 			current := item
+			return &current
+		}
+	}
+	return nil
+}
+
+func (m *TUIModel) latestReviewForPhase(phase domain.InitiativePhase) *domain.InitiativePhaseReviewResponse {
+	for _, review := range m.initiativeReviews {
+		if review.Phase == phase {
+			current := review
 			return &current
 		}
 	}
@@ -1795,6 +1871,87 @@ func cycleLaunchMode(current string) string {
 		return domain.TaskLaunchModeAgentRemote
 	default:
 		return domain.TaskLaunchModeManual
+	}
+}
+
+func initiativePhaseCanGenerate(item *domain.InitiativeResponse) bool {
+	if item == nil {
+		return false
+	}
+	switch item.CurrentPhase {
+	case domain.InitiativePhaseRequirements:
+		return item.Status == domain.InitiativeStatusIdeaSubmitted || item.Status == domain.InitiativeStatusRequirementsDraft
+	case domain.InitiativePhaseDesign:
+		return item.Status == domain.InitiativeStatusDesignDraft
+	case domain.InitiativePhasePlan:
+		return item.Status == domain.InitiativeStatusPlanDraft
+	default:
+		return false
+	}
+}
+
+func initiativePhaseCanApprove(item *domain.InitiativeResponse) bool {
+	if item == nil {
+		return false
+	}
+	switch item.CurrentPhase {
+	case domain.InitiativePhaseRequirements:
+		return item.Status == domain.InitiativeStatusRequirementsReview
+	case domain.InitiativePhaseDesign:
+		return item.Status == domain.InitiativeStatusDesignReview
+	case domain.InitiativePhasePlan:
+		return item.Status == domain.InitiativeStatusPlanReview
+	default:
+		return false
+	}
+}
+
+func initiativePhaseCanReject(item *domain.InitiativeResponse) bool {
+	return initiativePhaseCanApprove(item)
+}
+
+func initiativeTaskCountForItem(detail *domain.InitiativeResponse, tasks *domain.InitiativeTaskListResponse, initiativeID string) int {
+	if detail == nil || strings.TrimSpace(detail.ID) != strings.TrimSpace(initiativeID) {
+		return 0
+	}
+	if tasks == nil {
+		return 0
+	}
+	total := 0
+	for _, item := range tasks.Items {
+		if strings.TrimSpace(item.InitiativeID) == strings.TrimSpace(initiativeID) {
+			total++
+		}
+	}
+	return total
+}
+
+func formatReviewFeedback(value *string) string {
+	feedback := strings.TrimSpace(derefString(value))
+	if feedback == "" {
+		return ""
+	}
+	return " | " + truncateInline(feedback, 72)
+}
+
+func executionWorkspacePath(task domain.TaskResponse) string {
+	if task.WorkspacePath != nil && strings.TrimSpace(*task.WorkspacePath) != "" {
+		return strings.TrimSpace(*task.WorkspacePath)
+	}
+	if task.Metadata != nil {
+		if workspace := strings.TrimSpace(asString(task.Metadata["workspace_root"])); workspace != "" {
+			return workspace
+		}
+	}
+	return ""
+}
+
+func isInitiativeView(view string) bool {
+	switch strings.TrimSpace(view) {
+	case "Initiatives", "Requirements", "Design", "Plan", "Execution":
+		return true
+	default:
+		return false
 	}
 }
 

@@ -2,7 +2,10 @@ package telegram
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+
+	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 )
 
 func TestParseCommand(t *testing.T) {
@@ -50,5 +53,23 @@ func TestUpdateUnmarshalCallbackQuery(t *testing.T) {
 	}
 	if up.CallbackQuery.Message == nil || up.CallbackQuery.Message.Chat.ID != 42 {
 		t.Fatalf("callback message not parsed correctly: %#v", up.CallbackQuery.Message)
+	}
+}
+
+func TestFormatInitiativeSummaryMentionsBacklog(t *testing.T) {
+	item := &domain.InitiativeResponse{
+		ID:            "initiative-1",
+		Status:        domain.InitiativeStatusPlanReview,
+		CurrentPhase:  domain.InitiativePhasePlan,
+		WorkspaceRoot: "/tmp/workspace",
+		Goal:          "Ship something useful",
+	}
+	withoutBacklog := formatInitiativeSummary(item, nil)
+	if !strings.Contains(withoutBacklog, "Backlog: no") {
+		t.Fatalf("expected backlog=no summary, got %q", withoutBacklog)
+	}
+	withBacklog := formatInitiativeSummary(item, []domain.InitiativeTaskLinkResponse{{TaskID: "task-1"}})
+	if !strings.Contains(withBacklog, "Backlog: sí") {
+		t.Fatalf("expected backlog=yes summary, got %q", withBacklog)
 	}
 }
