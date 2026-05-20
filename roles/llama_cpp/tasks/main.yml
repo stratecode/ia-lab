@@ -275,7 +275,7 @@
       Environment=HF_HOME={{ llama_cpp_cache_dir }}
       Environment=XDG_CACHE_HOME={{ llama_cpp_cache_dir }}
       MemoryAccounting=yes
-      MemoryMax={{ (item.model_size_mb | int + ((item.ctx_size | int * item.parallel | int * 2) / 1024) | int + 512) }}M
+      MemoryMax={{ (item.memory_max_mb | default(item.model_size_mb | int + ((item.ctx_size | int * item.parallel | int * 2) / 1024) | int + 512, true)) }}M
       MemorySwapMax={{ llama_cpp_memory_swap_max | default('256M') }}
       StandardOutput=append:/var/log/llama-cpp/{{ item.service_name }}.log
       StandardError=append:/var/log/llama-cpp/{{ item.service_name }}.log
@@ -303,6 +303,7 @@
     label: "{{ item.service_name }}"
   notify:
     - Reload systemd for llama.cpp
+    - Restart llama.cpp services
   when: llama_cpp_enabled
 
 - name: Stop legacy llama.cpp service when present
