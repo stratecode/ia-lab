@@ -187,7 +187,7 @@ func (e *WorkspaceExecutor) writeFile(request map[string]any) (domain.LocalBridg
 		return domain.LocalBridgeResultRequest{}, err
 	}
 	summary := fmt.Sprintf("Wrote %s", rel)
-	return e.withGitArtifacts(domain.LocalBridgeResultRequest{Status: "success", Summary: &summary})
+	return e.withGitArtifacts(domain.LocalBridgeResultRequest{Status: "success", Summary: &summary, ChangedFiles: []string{rel}})
 }
 
 func (e *WorkspaceExecutor) researchProject(request map[string]any) (domain.LocalBridgeResultRequest, error) {
@@ -390,6 +390,10 @@ func (e *WorkspaceExecutor) runSubprocess(ctx context.Context, argv []string, su
 }
 
 func (e *WorkspaceExecutor) withGitArtifacts(result domain.LocalBridgeResultRequest) (domain.LocalBridgeResultRequest, error) {
+	gitRoot, ok := e.gitTopLevel()
+	if !ok || gitRoot != e.workspaceRoot {
+		return result, nil
+	}
 	statusCmd := exec.Command("git", "status", "--short", "--untracked-files=all")
 	statusCmd.Dir = e.workspaceRoot
 	statusOut, _ := statusCmd.Output()
@@ -413,6 +417,20 @@ func (e *WorkspaceExecutor) withGitArtifacts(result domain.LocalBridgeResultRequ
 	result.ChangedFiles = changedFiles
 	result.Diff = &diff
 	return result, nil
+}
+
+func (e *WorkspaceExecutor) gitTopLevel() (string, bool) {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = e.workspaceRoot
+	output, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	root := filepath.Clean(strings.TrimSpace(string(output)))
+	if root == "" {
+		return "", false
+	}
+	return root, true
 }
 
 func (e *WorkspaceExecutor) resolve(raw any) (string, string, error) {

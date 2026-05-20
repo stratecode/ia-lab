@@ -120,7 +120,7 @@ type initiativeForm struct {
 func newProjectForm(opts CLIOptions, state TUIState) projectForm {
 	parent := textinput.New()
 	parent.Placeholder = "/absolute/path/to/projects"
-	parent.SetValue(firstNonEmptyString(state.WizardPresets["parent_directory"], normalizedWorkspaceRoot(opts.WorkspaceRoot)))
+	parent.SetValue(preferredWorkspaceDefault(opts.WorkspaceRoot, state.WizardPresets["parent_directory"]))
 	parent.CharLimit = 500
 	parent.Width = 48
 
@@ -160,21 +160,28 @@ func projectTypeOptions() []string {
 }
 
 func newInitiativeForm(opts CLIOptions, state TUIState) initiativeForm {
+	workspaceDefault := preferredWorkspaceDefault(opts.WorkspaceRoot, state.WizardPresets["initiative_workspace_root"])
+	reusePresetText := shouldReuseWorkspacePreset(opts.WorkspaceRoot, state.WizardPresets["initiative_workspace_root"])
+
 	title := textinput.New()
 	title.Placeholder = "Deliver a local AI workflow initiative"
-	title.SetValue(firstNonEmptyString(state.WizardPresets["initiative_title"], ""))
+	if reusePresetText {
+		title.SetValue(firstNonEmptyString(state.WizardPresets["initiative_title"], ""))
+	}
 	title.CharLimit = 160
 	title.Width = 56
 
 	workspace := textinput.New()
 	workspace.Placeholder = "/absolute/path/to/workspace"
-	workspace.SetValue(firstNonEmptyString(state.WizardPresets["initiative_workspace_root"], normalizedWorkspaceRoot(opts.WorkspaceRoot)))
+	workspace.SetValue(workspaceDefault)
 	workspace.CharLimit = 500
 	workspace.Width = 56
 
 	goal := textinput.New()
 	goal.Placeholder = "Describe the idea to expand into requirements, design and backlog"
-	goal.SetValue(firstNonEmptyString(state.WizardPresets["initiative_goal"], ""))
+	if reusePresetText {
+		goal.SetValue(firstNonEmptyString(state.WizardPresets["initiative_goal"], ""))
+	}
 	goal.CharLimit = 600
 	goal.Width = 72
 
@@ -185,6 +192,33 @@ func newInitiativeForm(opts CLIOptions, state TUIState) initiativeForm {
 		Goal:          goal,
 		Focus:         0,
 	}
+}
+
+func preferredWorkspaceDefault(currentWorkspace, preset string) string {
+	current := normalizedWorkspaceRoot(currentWorkspace)
+	preset = strings.TrimSpace(preset)
+	if current == "" {
+		return preset
+	}
+	if preset == "" {
+		return current
+	}
+	if preset == current || strings.HasPrefix(preset, current+"/") {
+		return preset
+	}
+	return current
+}
+
+func shouldReuseWorkspacePreset(currentWorkspace, preset string) bool {
+	current := normalizedWorkspaceRoot(currentWorkspace)
+	preset = strings.TrimSpace(preset)
+	if preset == "" {
+		return false
+	}
+	if current == "" {
+		return true
+	}
+	return preset == current || strings.HasPrefix(preset, current+"/")
 }
 
 func stackOptions() []string {
@@ -667,9 +701,9 @@ func (m *TUIModel) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewIdx = (m.viewIdx - 1 + len(tuiViews)) % len(tuiViews)
 		m.status = fmt.Sprintf("View: %s", m.currentView())
 		return m, nil
-	case "ctrl+r":
+	case "alt+r":
 		return m, m.refreshAllCmd()
-	case "ctrl+f":
+	case "alt+f":
 		m.mode = tuiModeFilter
 		m.filterInput.SetValue(m.filterText)
 		m.filterInput.Focus()
@@ -679,18 +713,18 @@ func (m *TUIModel) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.filterFocus = "tasks"
 		}
 		return m, nil
-	case "ctrl+g":
+	case "alt+g":
 		m.viewIdx = indexOfString(tuiViews, "Chat")
 		m.mode = tuiModeChat
 		m.chatInput.Focus()
 		return m, nil
-	case "ctrl+p":
+	case "alt+p":
 		m.viewIdx = indexOfString(tuiViews, "Projects")
 		m.mode = tuiModeProject
 		m.projectForm = newProjectForm(m.opts, m.state)
 		m.projectForm.setFocus(0)
 		return m, nil
-	case "ctrl+i":
+	case "alt+n":
 		m.viewIdx = indexOfString(tuiViews, "Initiatives")
 		m.mode = tuiModeInitiative
 		m.initiativeForm = newInitiativeForm(m.opts, m.state)
@@ -708,7 +742,7 @@ func (m *TUIModel) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "Bridge":
 		return m.handleBridgeKeys(msg)
 	case "Projects":
-		if msg.String() == "ctrl+n" || msg.String() == "ctrl+p" {
+		if msg.String() == "alt+n" || msg.String() == "alt+p" {
 			m.mode = tuiModeProject
 			m.projectForm = newProjectForm(m.opts, m.state)
 			m.projectForm.setFocus(0)
@@ -734,30 +768,30 @@ func (m *TUIModel) handleTasksKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selectedTask < len(items)-1 {
 			m.selectedTask++
 		}
-	case "enter", "l", "d":
+	case "enter":
 		task := m.selectedTaskItem()
 		if task == nil {
 			return m, nil
 		}
 		return m, m.loadTaskDetailCmd(task.ID)
-	case "ctrl+x":
+	case "alt+x":
 		task := m.selectedTaskItem()
 		if task == nil {
 			return m, nil
 		}
 		return m, m.cancelTaskCmd(task.ID)
-	case "ctrl+h":
+	case "alt+h":
 		task := m.selectedTaskItem()
 		if task == nil {
 			return m, nil
 		}
 		return m, m.archiveTaskCmd(task.ID)
-	case "ctrl+v":
+	case "alt+v":
 		m.state.ShowCompleted = !m.state.ShowCompleted
 		_ = m.stateStore.Save(m.state)
 		m.status = fmt.Sprintf("Show completed: %t", m.state.ShowCompleted)
 		return m, nil
-	case "ctrl+a":
+	case "alt+a":
 		m.state.ShowArchived = !m.state.ShowArchived
 		_ = m.stateStore.Save(m.state)
 		m.status = fmt.Sprintf("Show archived: %t", m.state.ShowArchived)
@@ -777,13 +811,13 @@ func (m *TUIModel) handleApprovalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selectedApproval < len(items)-1 {
 			m.selectedApproval++
 		}
-	case "ctrl+a":
+	case "alt+a":
 		approval := m.selectedApprovalItem()
 		if approval == nil {
 			return m, nil
 		}
 		return m, m.resolveApprovalCmd(approval.ID, true)
-	case "ctrl+x":
+	case "alt+x":
 		approval := m.selectedApprovalItem()
 		if approval == nil {
 			return m, nil
@@ -801,11 +835,11 @@ func (m *TUIModel) handleApprovalKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (m *TUIModel) handleBridgeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+b":
+	case "alt+b":
 		return m, m.registerBridgeCmd()
-	case "ctrl+h":
+	case "alt+h":
 		return m, m.heartbeatBridgeCmd()
-	case "ctrl+s":
+	case "alt+s":
 		return m, m.smokeBridgeCmd()
 	case "enter":
 		if m.daemonRunning {
@@ -835,7 +869,7 @@ func (m *TUIModel) handleInitiativeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.selectedExecutionTask++
 			}
 			return m, nil
-		case "enter", "l":
+		case "enter":
 			task := m.selectedInitiativeTask()
 			if task == nil {
 				return m, nil
@@ -853,13 +887,13 @@ func (m *TUIModel) handleInitiativeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.selectedInitiative < len(items)-1 {
 			m.selectedInitiative++
 		}
-	case "enter", "l":
+	case "enter":
 		item := m.selectedInitiativeItem()
 		if item == nil {
 			return m, nil
 		}
 		return m, m.loadInitiativeDetailCmd(item.ID)
-	case "ctrl+e":
+	case "alt+e":
 		item := m.selectedInitiativeItem()
 		if item == nil {
 			return m, nil
@@ -872,7 +906,7 @@ func (m *TUIModel) handleInitiativeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.advanceInitiativeCmd(item.ID)
-	case "ctrl+a":
+	case "alt+a":
 		item := m.selectedInitiativeItem()
 		if item == nil {
 			return m, nil
@@ -882,7 +916,7 @@ func (m *TUIModel) handleInitiativeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.approveInitiativePhaseCmd(item.ID, item.CurrentPhase)
-	case "ctrl+x":
+	case "alt+x":
 		item := m.selectedInitiativeItem()
 		if item == nil {
 			return m, nil
@@ -892,7 +926,7 @@ func (m *TUIModel) handleInitiativeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.rejectInitiativePhaseCmd(item.ID, item.CurrentPhase)
-	case "ctrl+m":
+	case "alt+m":
 		if m.currentView() != "Execution" || m.initiativeTasks == nil {
 			return m, nil
 		}
@@ -902,7 +936,7 @@ func (m *TUIModel) handleInitiativeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		nextMode := cycleLaunchMode(task.ExecutionMode)
 		return m, m.updateInitiativeTaskModeCmd(task.InitiativeID, task.TaskID, nextMode)
-	case "ctrl+l":
+	case "alt+l":
 		if m.currentView() != "Execution" || m.initiativeTasks == nil {
 			return m, nil
 		}
@@ -911,7 +945,7 @@ func (m *TUIModel) handleInitiativeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.launchInitiativeTasksCmd(task.InitiativeID, []string{task.TaskID}, nil)
-	case "ctrl+n":
+	case "alt+n":
 		m.mode = tuiModeInitiative
 		m.initiativeForm = newInitiativeForm(m.opts, m.state)
 		m.initiativeForm.setFocus(0)
@@ -932,7 +966,7 @@ func (m *TUIModel) handleChatMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.chatCmd(prompt)
-	case "ctrl+t":
+	case "alt+t":
 		prompt := strings.TrimSpace(m.chatInput.Value())
 		if prompt == "" && len(m.chatHistory) > 0 {
 			prompt = m.chatHistory[0].Prompt
@@ -1076,7 +1110,7 @@ func (m *TUIModel) renderOverview() string {
 		fmt.Sprintf("Queued: %d | In progress: %d | Failed: %d | Completed visible: %d", taskCounts[domain.TaskStateQueued], taskCounts[domain.TaskStateInProgress], taskCounts[domain.TaskStateFailed], taskCounts[domain.TaskStateCompleted]),
 		fmt.Sprintf("Chat model: %s", firstNonEmptyString(firstModel(m.models), "orchestrator-tools")),
 		"",
-		"Use Tab to move between views, Ctrl+F to filter, Ctrl+G for chat, Ctrl+P for project wizard.",
+		"Use Tab to move between views, Alt+F to filter, Alt+G for chat, Alt+P for project wizard.",
 	}
 	return tuiPanelStyle.Width(maxInt(60, m.width-2)).Render(strings.Join(lines, "\n"))
 }
@@ -1092,7 +1126,7 @@ func (m *TUIModel) renderInitiatives() string {
 		)
 		return tuiPanelStyle.Width(maxInt(60, m.width-2)).Render(strings.Join(lines, "\n"))
 	}
-	lines = append(lines, "`Ctrl+N` new   `Enter` load detail   `Ctrl+E` generate current phase   `Ctrl+A` approve phase   `Ctrl+X` reject phase")
+	lines = append(lines, "`Alt+N` new   `Enter` load detail   `Alt+E` generate current phase   `Alt+A` approve phase   `Alt+X` reject phase")
 	for idx, item := range m.initiatives {
 		line := fmt.Sprintf("%s  %-18s  %-18s  %s", shortID(item.ID), item.Status, item.CurrentPhase, truncateInline(item.Title, 36))
 		if idx == m.selectedInitiative {
@@ -1102,7 +1136,7 @@ func (m *TUIModel) renderInitiatives() string {
 		}
 	}
 	if len(m.initiatives) == 0 {
-		lines = append(lines, tuiMutedStyle.Render("No initiatives yet. Press `Ctrl+N` or `Ctrl+I` to create one."))
+		lines = append(lines, tuiMutedStyle.Render("No initiatives yet. Press `Alt+N` to create one."))
 	}
 	item := m.selectedInitiativeItem()
 	detail := []string{tuiTitleStyle.Render("Initiative detail")}
@@ -1141,7 +1175,7 @@ func (m *TUIModel) renderInitiativePhase(phase domain.InitiativePhase) string {
 		fmt.Sprintf("Status: %s", item.Status),
 		fmt.Sprintf("Current phase: %s", item.CurrentPhase),
 		"",
-		"`Ctrl+E` generate/regenerate   `Ctrl+A` approve   `Ctrl+X` reject   `Enter`/`l` reload detail",
+		"`Alt+E` generate/regenerate   `Alt+A` approve   `Alt+X` reject   `Enter` reload detail",
 		"",
 	)
 	artifact := m.artifactForPhase(phase)
@@ -1168,7 +1202,7 @@ func (m *TUIModel) renderExecution() string {
 		tuiTitleStyle.Render("Execution"),
 		fmt.Sprintf("Initiative: %s", item.Title),
 		fmt.Sprintf("Status: %s", item.Status),
-		"`Ctrl+M` cycle mode   `Ctrl+L` launch selected task   `Enter` load task detail",
+		"`Alt+M` cycle mode   `Alt+L` launch selected task   `Enter` load task detail",
 		"",
 	}
 	if m.initiativeTasks == nil || len(m.initiativeTasks.Items) == 0 {
@@ -1220,7 +1254,7 @@ func (m *TUIModel) renderExecution() string {
 func (m *TUIModel) renderTasks() string {
 	items := m.filteredTasks()
 	listLines := []string{tuiTitleStyle.Render("Tasks")}
-	listLines = append(listLines, tuiMutedStyle.Render(fmt.Sprintf("Ctrl+V completed=%t   Ctrl+A archived=%t   Ctrl+H archive selected completed", m.state.ShowCompleted, m.state.ShowArchived)))
+	listLines = append(listLines, tuiMutedStyle.Render(fmt.Sprintf("Alt+V completed=%t   Alt+A archived=%t   Alt+H archive selected completed", m.state.ShowCompleted, m.state.ShowArchived)))
 	for idx, task := range items {
 		line := fmt.Sprintf("%s  %-18s  %-9s  %s", shortID(task.ID), task.State, task.ExecutionTarget, truncateInline(task.Description, 44))
 		if idx == m.selectedTask {
@@ -1303,7 +1337,7 @@ func (m *TUIModel) renderApprovals() string {
 			fmt.Sprintf("Status: %s", item.Status),
 			fmt.Sprintf("Timeout: %s", item.TimeoutAt.Format(time.RFC3339)),
 			"",
-			"`Ctrl+A` approve  `Ctrl+X` reject  `Enter` inspect task",
+			"`Alt+A` approve  `Alt+X` reject  `Enter` inspect task",
 		)
 	}
 	right := tuiPanelStyle.Width(maxInt(42, m.width/2-2)).Render(strings.Join(detail, "\n"))
@@ -1318,7 +1352,7 @@ func (m *TUIModel) renderBridge() string {
 		fmt.Sprintf("Daemon managed by TUI: %t", m.daemonRunning),
 		"",
 		"Keys:",
-		"Ctrl+B register   Ctrl+H heartbeat   Ctrl+S smoke   Enter start/stop daemon",
+		"Alt+B register   Alt+H heartbeat   Alt+S smoke   Enter start/stop daemon",
 		"",
 	}
 	if len(m.bridges) == 0 {
@@ -1350,7 +1384,7 @@ func (m *TUIModel) renderProjects() string {
 			renderProjectField("Requires approval", boolLabel(m.projectForm.NeedsApproval), m.projectForm.Focus == 7),
 		)
 	} else {
-		lines = append(lines, "Press `Ctrl+N` or `Ctrl+P` to open the project wizard.")
+		lines = append(lines, "Press `Alt+N` or `Alt+P` to open the project wizard.")
 		lines = append(lines, "The wizard launches a planner root task that fans out to researcher, coder, and reviewer.")
 		if len(m.state.RecentProjects) == 0 {
 			lines = append(lines, tuiMutedStyle.Render("No recent projects created from the TUI yet."))
@@ -1367,7 +1401,7 @@ func (m *TUIModel) renderProjects() string {
 func (m *TUIModel) renderChat() string {
 	lines := []string{
 		tuiTitleStyle.Render("Chat"),
-		"Type a prompt and press Enter. Press `Ctrl+T` to convert the prompt into a task, `Esc` to leave chat mode.",
+		"Type a prompt and press Enter. Press `Alt+T` to convert the prompt into a task, `Esc` to leave chat mode.",
 		"",
 		"> " + m.chatInput.View(),
 	}
@@ -1388,7 +1422,7 @@ func (m *TUIModel) renderChat() string {
 }
 
 func (m *TUIModel) renderStatus() string {
-	parts := []string{tuiMutedStyle.Render("Ctrl+C quit"), tuiMutedStyle.Render("Tab switch"), tuiMutedStyle.Render("Ctrl+R refresh")}
+	parts := []string{tuiMutedStyle.Render("Ctrl+C quit"), tuiMutedStyle.Render("Tab switch"), tuiMutedStyle.Render("Alt+R refresh")}
 	if m.errText != "" {
 		parts = append(parts, tuiErrorStyle.Render(m.errText))
 	} else {

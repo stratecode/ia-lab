@@ -78,11 +78,11 @@ func (e *WorkspaceExecutor) scaffoldProject(request map[string]any) (domain.Loca
 				"test_command": strings.Join(testCommand, " "),
 			},
 			{
-				"type":         "project_contract",
-				"title":        "Expected scaffold contract",
-				"path":         filepath.ToSlash(filepath.Join(parentRel, projectName, "lab.json")),
-				"media_type":   "application/json",
-				"content_text": truncateString(files["lab.json"], 2000),
+				"type":           "project_contract",
+				"title":          "Expected scaffold contract",
+				"path":           filepath.ToSlash(filepath.Join(parentRel, projectName, "lab.json")),
+				"media_type":     "application/json",
+				"content_text":   truncateString(files["lab.json"], 2000),
 				"expected_files": expectedFiles,
 			},
 		},
@@ -141,31 +141,254 @@ def test_app_has_health_route():
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>%s</title>
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <main>
-      <h1>%s</h1>
-      <p>%s</p>
-      <button id="ping">Run local test</button>
-      <pre id="output">ready</pre>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">Lab frontend smoke</p>
+        <h1>%s</h1>
+        <p class="hero-copy">%s</p>
+        <div class="hero-actions">
+          <button id="ping" type="button">Run local test</button>
+          <span id="status-badge" class="badge badge-idle">ready</span>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="card">
+          <h2>Execution target</h2>
+          <p>Local bridge with deterministic static assets.</p>
+        </article>
+        <article class="card">
+          <h2>Primary check</h2>
+          <p>%s</p>
+        </article>
+        <article class="card">
+          <h2>Operator note</h2>
+          <p>Keep the UI intentionally small, but not embarrassingly generic.</p>
+        </article>
+      </section>
+
+      <section class="console-card">
+        <div class="console-header">
+          <span>activity.log</span>
+          <span>frontend smoke</span>
+        </div>
+        <pre id="output">ready</pre>
+      </section>
     </main>
     <script src="app.js"></script>
   </body>
 </html>
-`, projectName, projectName, goal)
-		files["app.js"] = `document.getElementById("ping").addEventListener("click", () => {
-  document.getElementById("output").textContent = "bridge-tui-ok";
+`, projectName, projectName, goal, testFocus)
+		files["app.js"] = `const output = document.getElementById("output");
+const badge = document.getElementById("status-badge");
+const button = document.getElementById("ping");
+
+const lines = [
+  "bridge: connected",
+  "planner: completed",
+  "coder: completed",
+  "reviewer: completed",
+];
+
+button.addEventListener("click", () => {
+  output.textContent = lines.join("\n");
+  badge.textContent = "bridge-tui-ok";
+  badge.className = "badge badge-success";
 });
 `
-		files["style.css"] = `body { font-family: sans-serif; margin: 2rem; } main { max-width: 42rem; }`
+		files["style.css"] = `:root {
+  color-scheme: light;
+  --bg: #f3efe5;
+  --panel: rgba(255, 252, 246, 0.86);
+  --ink: #172033;
+  --muted: #5c6474;
+  --accent: #1e847f;
+  --accent-strong: #0f5c60;
+  --border: rgba(23, 32, 51, 0.1);
+  --shadow: 0 24px 60px rgba(20, 27, 45, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, rgba(30, 132, 127, 0.18), transparent 32%),
+    linear-gradient(180deg, #fbf8f1 0%, var(--bg) 100%);
+}
+
+.shell {
+  width: min(960px, calc(100% - 32px));
+  margin: 40px auto;
+}
+
+.hero,
+.card,
+.console-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+}
+
+.hero {
+  padding: 32px;
+  border-radius: 28px;
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 0.72rem;
+  color: var(--accent-strong);
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: clamp(2.2rem, 4vw, 3.8rem);
+  line-height: 0.96;
+  max-width: 12ch;
+}
+
+.hero-copy {
+  margin-top: 18px;
+  max-width: 56ch;
+  font-size: 1.05rem;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
+.hero-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 24px;
+  flex-wrap: wrap;
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: white;
+  padding: 14px 20px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 10px 14px;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.badge-idle {
+  background: rgba(23, 32, 51, 0.08);
+  color: var(--muted);
+}
+
+.badge-success {
+  background: rgba(30, 132, 127, 0.15);
+  color: var(--accent-strong);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+
+.card {
+  border-radius: 22px;
+  padding: 20px;
+}
+
+.card h2 {
+  font-size: 1rem;
+  margin-bottom: 10px;
+}
+
+.card p {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.console-card {
+  border-radius: 24px;
+  margin-top: 20px;
+  overflow: hidden;
+}
+
+.console-header {
+  display: flex;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+pre {
+  margin: 0;
+  padding: 20px 18px 24px;
+  min-height: 120px;
+  white-space: pre-wrap;
+  color: #d9f7f2;
+  background: #13202b;
+  font-family: "SFMono-Regular", "Menlo", monospace;
+  line-height: 1.55;
+}
+
+@media (max-width: 720px) {
+  .shell {
+    width: min(100% - 20px, 100%);
+    margin: 20px auto;
+  }
+
+  .hero,
+  .card {
+    border-radius: 22px;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}
+`
 		files["tests/test_static.py"] = `from pathlib import Path
 
 
 def test_index_contains_button():
     html = Path("index.html").read_text()
     assert "Run local test" in html
+
+
+def test_static_shell_mentions_activity_log():
+    html = Path("index.html").read_text()
+    assert "activity.log" in html
 `
 	case "worker_background":
 		files["worker.py"] = fmt.Sprintf(`def run_job(payload: dict | None = None) -> str:

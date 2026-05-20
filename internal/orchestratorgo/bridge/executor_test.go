@@ -86,6 +86,39 @@ func TestWorkspaceExecutorWriteFileCollectsArtifacts(t *testing.T) {
 	}
 }
 
+func TestWorkspaceExecutorIgnoresParentRepoArtifactsWhenWorkspaceIsNested(t *testing.T) {
+	root := initGitWorkspace(t)
+	workspace := filepath.Join(root, "nested-workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "outside.txt"), []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executor, err := NewWorkspaceExecutor(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"tool_request": map[string]any{
+				"tool":    "write_file",
+				"path":    "notes/output.txt",
+				"content": "nested workspace\n",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.ChangedFiles) != 1 || result.ChangedFiles[0] != "notes/output.txt" {
+		t.Fatalf("expected only nested workspace change, got %#v", result.ChangedFiles)
+	}
+	if result.Diff != nil {
+		t.Fatalf("expected no git diff leakage from parent repo, got %q", *result.Diff)
+	}
+}
+
 func TestWorkspaceExecutorSkipsRepeatApprovalAfterGrant(t *testing.T) {
 	root := initGitWorkspace(t)
 	executor, err := NewWorkspaceExecutor(root)
@@ -205,10 +238,10 @@ func TestWorkspaceExecutorResearchAndReviewProject(t *testing.T) {
 	reviewResult, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
 		Metadata: map[string]any{
 			"tool_request": map[string]any{
-				"tool":          "review_project",
-				"project_root":  "projects/demo-review",
+				"tool":           "review_project",
+				"project_root":   "projects/demo-review",
 				"expected_files": []any{"README.md", "main.py", "tests/test_main.py", "lab.json"},
-				"test_command":  []any{"python3", "-c", "print('ok')"},
+				"test_command":   []any{"python3", "-c", "print('ok')"},
 			},
 		},
 	})
