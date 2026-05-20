@@ -31,12 +31,16 @@ type RuntimeWorker struct {
 	mu          sync.RWMutex
 }
 
-func New(cfg config.Config, postgres *store.PostgresStore, redis *store.RedisStore, researchService *research.Service) *RuntimeWorker {
+func New(cfg config.Config, postgres *store.PostgresStore, redis *store.RedisStore, researchService *research.Service, contextBuilder ...runner.ContextBuilder) *RuntimeWorker {
+	var builder runner.ContextBuilder
+	if len(contextBuilder) > 0 {
+		builder = contextBuilder[0]
+	}
 	return &RuntimeWorker{
 		cfg:       cfg,
 		postgres:  postgres,
 		redis:     redis,
-		runner:    runner.New(cfg, researchService),
+		runner:    runner.New(cfg, researchService, builder),
 		workerID:  store.GenerateWorkerID(),
 		startedAt: time.Now(),
 		done:      make(chan struct{}),

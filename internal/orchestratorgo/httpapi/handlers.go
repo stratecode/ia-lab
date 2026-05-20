@@ -20,23 +20,27 @@ import (
 
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
+	"github.com/stratecode/lab/internal/orchestratorgo/contextbuilder"
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 	"github.com/stratecode/lab/internal/orchestratorgo/initiative"
 	"github.com/stratecode/lab/internal/orchestratorgo/research"
+	"github.com/stratecode/lab/internal/orchestratorgo/semantic"
 	"github.com/stratecode/lab/internal/orchestratorgo/store"
 )
 
 type Server struct {
-	Config        config.Config
-	Postgres      *store.PostgresStore
-	Redis         *store.RedisStore
-	Research      *research.Service
-	Initiatives   *initiative.Service
-	Capabilities  *capabilities.Client
-	SafeMode      *SafeModeState
-	Now           func() time.Time
-	Version       string
-	OpenAIToolsID string
+	Config         config.Config
+	Postgres       *store.PostgresStore
+	Redis          *store.RedisStore
+	Research       *research.Service
+	Initiatives    *initiative.Service
+	Capabilities   *capabilities.Client
+	Semantic       *semantic.Service
+	ContextBuilder *contextbuilder.Service
+	SafeMode       *SafeModeState
+	Now            func() time.Time
+	Version        string
+	OpenAIToolsID  string
 }
 
 func (s *Server) Router(auth *Authenticator) http.Handler {
@@ -77,6 +81,14 @@ func (s *Server) Router(auth *Authenticator) http.Handler {
 	r.Post("/config/safe-mode", s.toggleSafeMode)
 	r.Post("/workspaces/cleanup", s.cleanupWorkspaces)
 	r.Get("/capabilities", s.listCapabilities)
+	r.Route("/semantic", func(r chi.Router) {
+		r.Post("/index", s.indexSemanticSource)
+		r.Post("/search", s.searchSemanticChunks)
+		r.Get("/chunks/{chunkID}", s.getSemanticChunk)
+	})
+	r.Route("/context", func(r chi.Router) {
+		r.Post("/build", s.buildContextPackage)
+	})
 	r.Route("/initiatives", func(r chi.Router) {
 		r.Get("/", s.listInitiatives)
 		r.Post("/", s.createInitiative)

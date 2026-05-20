@@ -110,7 +110,7 @@
         content: |
           services:
             postgres:
-              image: postgres:16
+              image: pgvector/pgvector:pg16
               container_name: orchestrator-postgres
               restart: unless-stopped
               ports:
@@ -169,6 +169,8 @@
           - ON_ERROR_STOP=1
           - -c
           - |
+            CREATE EXTENSION IF NOT EXISTS vector;
+
             ALTER TABLE tasks
               ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ NULL;
             ALTER TABLE tasks
@@ -223,6 +225,33 @@
               UNIQUE (initiative_id, task_id)
             );
             CREATE INDEX IF NOT EXISTS ix_initiative_task_links_initiative_launch_order ON initiative_task_links (initiative_id, launch_order);
+
+            CREATE TABLE IF NOT EXISTS semantic_chunks (
+              id UUID PRIMARY KEY,
+              source_type TEXT NOT NULL,
+              source_id UUID NOT NULL,
+              initiative_id UUID NULL,
+              task_id UUID NULL,
+              artifact_id UUID NULL,
+              workspace_root TEXT NULL,
+              chunk_index INTEGER NOT NULL,
+              content_text TEXT NOT NULL,
+              content_hash TEXT NOT NULL,
+              metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+              embedding vector(1024) NOT NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              UNIQUE (source_type, source_id, chunk_index, content_hash)
+            );
+            CREATE INDEX IF NOT EXISTS ix_semantic_chunks_source ON semantic_chunks (source_type, source_id);
+            CREATE INDEX IF NOT EXISTS ix_semantic_chunks_initiative_id ON semantic_chunks (initiative_id);
+            CREATE INDEX IF NOT EXISTS ix_semantic_chunks_task_id ON semantic_chunks (task_id);
+            CREATE INDEX IF NOT EXISTS ix_semantic_chunks_artifact_id ON semantic_chunks (artifact_id);
+            CREATE INDEX IF NOT EXISTS ix_semantic_chunks_workspace_root ON semantic_chunks (workspace_root);
+            CREATE INDEX IF NOT EXISTS ix_semantic_chunks_metadata ON semantic_chunks USING GIN (metadata);
+            CREATE INDEX IF NOT EXISTS ix_semantic_chunks_embedding_cosine
+              ON semantic_chunks USING ivfflat (embedding vector_cosine_ops)
+              WITH (lists = 100);
       register: orchestrator_schema_patch
       changed_when: false
 
@@ -265,6 +294,16 @@
           LAB_LLAMA_PLANNER_API_KEY={{ llama_cpp_instances | selectattr('alias', 'equalto', 'planner') | map(attribute='api_key') | first }}
           LAB_LLAMA_UTILITY_BASE_URL=http://127.0.0.1:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'utility') | map(attribute='port') | first) }}/v1
           LAB_LLAMA_UTILITY_API_KEY={{ llama_cpp_instances | selectattr('alias', 'equalto', 'utility') | map(attribute='api_key') | first }}
+          LAB_SEMANTIC_ENABLED={{ 'true' if orchestrator_semantic_enabled else 'false' }}
+          LAB_SEMANTIC_EMBEDDING_BASE_URL=http://127.0.0.1:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'embeddings') | map(attribute='port') | first) }}/v1
+          LAB_SEMANTIC_EMBEDDING_API_KEY={{ llama_cpp_instances | selectattr('alias', 'equalto', 'embeddings') | map(attribute='api_key') | first }}
+          LAB_SEMANTIC_EMBEDDING_MODEL={{ orchestrator_semantic_embedding_model }}
+          LAB_SEMANTIC_EMBEDDING_DIMENSIONS={{ orchestrator_semantic_embedding_dimensions }}
+          LAB_SEMANTIC_CHUNK_MAX_CHARS={{ orchestrator_semantic_chunk_max_chars }}
+          LAB_SEMANTIC_CHUNK_OVERLAP_CHARS={{ orchestrator_semantic_chunk_overlap_chars }}
+          LAB_SEMANTIC_MAX_CHUNKS_PER_SOURCE={{ orchestrator_semantic_max_chunks_per_source }}
+          LAB_SEMANTIC_CONTEXT_MAX_CHUNKS={{ orchestrator_semantic_context_max_chunks }}
+          LAB_SEMANTIC_CONTEXT_MAX_CHARS={{ orchestrator_semantic_context_max_chars }}
           LAB_CAPABILITIES_ALLOWED_LOCAL_ROOTS={{ orchestrator_capabilities_allowed_local_roots }}
           LAB_CAPABILITIES_ALLOWED_URL_SCHEMES={{ orchestrator_capabilities_allowed_url_schemes }}
           LAB_CAPABILITIES_MAX_HTML_BYTES={{ orchestrator_capabilities_max_html_bytes }}

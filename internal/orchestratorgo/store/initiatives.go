@@ -191,6 +191,20 @@ func (s *PostgresStore) ListInitiativePhaseReviews(ctx context.Context, initiati
 	return items, rows.Err()
 }
 
+func (s *PostgresStore) GetInitiativePhaseReview(ctx context.Context, reviewID string) (*domain.InitiativePhaseReviewResponse, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id::text, initiative_id::text, phase, decision, feedback, generated_by,
+		       artifact_markdown_id::text, artifact_json_id::text, created_at
+		FROM initiative_phase_reviews
+		WHERE id = $1
+	`, reviewID)
+	item, err := scanInitiativePhaseReview(row)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	return item, err
+}
+
 func (s *PostgresStore) LinkInitiativeTask(ctx context.Context, params LinkInitiativeTaskParams) (*domain.InitiativeTaskLinkResponse, error) {
 	id := uuid.NewString()
 	if _, err := s.pool.Exec(ctx, `

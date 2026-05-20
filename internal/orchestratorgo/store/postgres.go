@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -778,6 +779,36 @@ type CreateArtifactParams struct {
 	Metadata     map[string]any
 }
 
+type ArtifactIndexSource struct {
+	Artifact     domain.ArtifactResponse
+	TaskID       *string
+	InvocationID *string
+}
+
+type SemanticChunkParams struct {
+	SourceType    string
+	SourceID      string
+	InitiativeID  *string
+	TaskID        *string
+	ArtifactID    *string
+	WorkspaceRoot *string
+	ChunkIndex    int
+	ContentText   string
+	ContentHash   string
+	Metadata      map[string]any
+	Embedding     []float32
+}
+
+type SemanticSearchFilter struct {
+	Embedding     []float32
+	SourceTypes   []string
+	InitiativeID  *string
+	TaskID        *string
+	ArtifactID    *string
+	WorkspaceRoot *string
+	Limit         int
+}
+
 type CreateEvaluationRunParams struct {
 	ResearchRunID     string
 	ReferenceProvider string
@@ -1051,6 +1082,142 @@ func (s *PostgresStore) ListArtifactsByIDs(ctx context.Context, ids []string) ([
 	return collectArtifacts(rows)
 }
 
+func (s *PostgresStore) GetArtifactIndexSource(ctx context.Context, artifactID string) (*ArtifactIndexSource, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id::text, artifact_type, title, uri, media_type, content_text, metadata, created_at,
+		       task_id::text, invocation_id::text
+		FROM artifacts
+		WHERE id = $1
+	`, artifactID)
+	var (
+		item         domain.ArtifactResponse
+		metadataRaw  []byte
+		taskID       *string
+		invocationID *string
+	)
+	if err := row.Scan(
+		&item.ID,
+		&item.ArtifactType,
+		&item.Title,
+		&item.URI,
+		&item.MediaType,
+		&item.ContentText,
+		&metadataRaw,
+		&item.CreatedAt,
+		&taskID,
+		&invocationID,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	_ = json.Unmarshal(metadataRaw, &item.Metadata)
+	if item.Metadata == nil {
+		item.Metadata = map[string]any{}
+	}
+	return &ArtifactIndexSource{Artifact: item, TaskID: taskID, InvocationID: invocationID}, nil
+}
+
+func (s *PostgresStore) DeleteSemanticChunksForSource(ctx context.Context, sourceType, sourceID string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM semantic_chunks WHERE source_type = $1 AND source_id = $2`, sourceType, sourceID)
+	return err
+}
+
+func (s *PostgresStore) UpsertSemanticChunk(ctx context.Context, params SemanticChunkParams) (*domain.SemanticChunkResponse, error) {
+	metadataRaw, err := json.Marshal(nonNilMap(params.Metadata))
+	if err != nil {
+		return nil, err
+	}
+	row := s.pool.QueryRow(ctx, `
+		INSERT INTO semantic_chunks (
+			id, source_type, source_id, initiative_id, task_id, artifact_id, workspace_root,
+			chunk_index, content_text, content_hash, metadata, embedding
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::vector
+		)
+		ON CONFLICT (source_type, source_id, chunk_index, content_hash)
+		DO UPDATE SET
+			initiative_id = EXCLUDED.initiative_id,
+			task_id = EXCLUDED.task_id,
+			artifact_id = EXCLUDED.artifact_id,
+			workspace_root = EXCLUDED.workspace_root,
+			content_text = EXCLUDED.content_text,
+			metadata = EXCLUDED.metadata,
+			embedding = EXCLUDED.embedding,
+			updated_at = NOW()
+		RETURNING id::text, source_type, source_id::text, initiative_id::text, task_id::text, artifact_id::text,
+		          workspace_root, chunk_index, content_text, content_hash, metadata, created_at, updated_at
+	`, uuid.NewString(), params.SourceType, params.SourceID, params.InitiativeID, params.TaskID, params.ArtifactID,
+		params.WorkspaceRoot, params.ChunkIndex, params.ContentText, params.ContentHash, string(metadataRaw), vectorLiteral(params.Embedding))
+	return scanSemanticChunk(row, nil)
+}
+
+func (s *PostgresStore) SearchSemanticChunks(ctx context.Context, filter SemanticSearchFilter) ([]domain.SemanticChunkResponse, error) {
+	limit := filter.Limit
+	if limit <= 0 || limit > 50 {
+		limit = 8
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, source_type, source_id::text, initiative_id::text, task_id::text, artifact_id::text,
+		       workspace_root, chunk_index, content_text, content_hash, metadata, created_at, updated_at,
+		       1 - (embedding <=> $1::vector) AS score
+		FROM semantic_chunks
+		WHERE ($2::text[] IS NULL OR source_type = ANY($2))
+		  AND ($3::uuid IS NULL OR initiative_id = $3)
+		  AND ($4::uuid IS NULL OR task_id = $4)
+		  AND ($5::uuid IS NULL OR artifact_id = $5)
+		  AND ($6::text IS NULL OR workspace_root = $6)
+		ORDER BY embedding <=> $1::vector, updated_at DESC
+		LIMIT $7
+	`, vectorLiteral(filter.Embedding), nullableStringSlice(filter.SourceTypes), nullableUUID(filter.InitiativeID),
+		nullableUUID(filter.TaskID), nullableUUID(filter.ArtifactID), nullableString(filter.WorkspaceRoot), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]domain.SemanticChunkResponse, 0)
+	for rows.Next() {
+		item, err := scanSemanticChunk(rows, new(float64))
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *item)
+	}
+	return items, rows.Err()
+}
+
+func (s *PostgresStore) GetSemanticChunk(ctx context.Context, chunkID string) (*domain.SemanticChunkResponse, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT id::text, source_type, source_id::text, initiative_id::text, task_id::text, artifact_id::text,
+		       workspace_root, chunk_index, content_text, content_hash, metadata, created_at, updated_at
+		FROM semantic_chunks
+		WHERE id = $1
+	`, chunkID)
+	item, err := scanSemanticChunk(row, nil)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	return item, err
+}
+
+func (s *PostgresStore) PatchTaskMetadata(ctx context.Context, taskID string, patch map[string]any) error {
+	if len(patch) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(patch)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
+		UPDATE tasks
+		   SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+		       updated_at = NOW()
+		 WHERE id = $1
+	`, taskID, string(raw))
+	return err
+}
+
 func (s *PostgresStore) CreateEvaluationRun(ctx context.Context, params CreateEvaluationRunParams) (*domain.EvaluationRunResponse, error) {
 	evaluationID := uuid.NewString()
 	if _, err := s.pool.Exec(ctx, `
@@ -1319,6 +1486,40 @@ func nullableJSONB(raw []byte) any {
 	return string(raw)
 }
 
+func nullableString(input *string) any {
+	if input == nil || strings.TrimSpace(*input) == "" {
+		return nil
+	}
+	return *input
+}
+
+func nullableUUID(input *string) any {
+	if input == nil || strings.TrimSpace(*input) == "" {
+		return nil
+	}
+	return *input
+}
+
+func nullableStringSlice(input []string) any {
+	if len(input) == 0 {
+		return nil
+	}
+	return input
+}
+
+func vectorLiteral(values []float32) string {
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, value := range values {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.FormatFloat(float64(value), 'f', -1, 32))
+	}
+	b.WriteByte(']')
+	return b.String()
+}
+
 func nonNilMap(input map[string]any) map[string]any {
 	if input == nil {
 		return map[string]any{}
@@ -1405,6 +1606,60 @@ func collectArtifacts(rows pgx.Rows) ([]domain.ArtifactResponse, error) {
 		items = append(items, *item)
 	}
 	return items, rows.Err()
+}
+
+func scanSemanticChunk(row interface{ Scan(dest ...any) error }, scoreDest *float64) (*domain.SemanticChunkResponse, error) {
+	var (
+		item        domain.SemanticChunkResponse
+		metadataRaw []byte
+		score       *float64
+	)
+	if scoreDest != nil {
+		score = scoreDest
+		err := row.Scan(
+			&item.ID,
+			&item.SourceType,
+			&item.SourceID,
+			&item.InitiativeID,
+			&item.TaskID,
+			&item.ArtifactID,
+			&item.WorkspaceRoot,
+			&item.ChunkIndex,
+			&item.ContentText,
+			&item.ContentHash,
+			&metadataRaw,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+			score,
+		)
+		if err != nil {
+			return nil, err
+		}
+		item.Score = score
+	} else {
+		if err := row.Scan(
+			&item.ID,
+			&item.SourceType,
+			&item.SourceID,
+			&item.InitiativeID,
+			&item.TaskID,
+			&item.ArtifactID,
+			&item.WorkspaceRoot,
+			&item.ChunkIndex,
+			&item.ContentText,
+			&item.ContentHash,
+			&metadataRaw,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+	}
+	_ = json.Unmarshal(metadataRaw, &item.Metadata)
+	if item.Metadata == nil {
+		item.Metadata = map[string]any{}
+	}
+	return &item, nil
 }
 
 func scanTask(row taskScanner) (*domain.TaskResponse, error) {

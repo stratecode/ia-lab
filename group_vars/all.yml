@@ -214,7 +214,7 @@ llama_cpp_instances:
   # ── Embeddings instance (priority 4 — warm) ───────────────────────────────
   - service_name: llama-cpp-embeddings
     port: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_PORT') | default('8084', true) | int }}"
-    hf_repo: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_MODEL') | default('nomic-ai/nomic-embed-text-v1.5-GGUF:Q8_0', true) }}"
+    hf_repo: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_MODEL') | default('gpustack/bge-m3-GGUF:Q8_0', true) }}"
     alias: embeddings
     ctx_size: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_CTX_SIZE') | default('8192', true) | int }}"
     recommended_ctx_size: 2048
@@ -225,7 +225,7 @@ llama_cpp_instances:
     api_key: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_API_KEY') | default('local-embeddings', true) }}"
     instance_lifecycle: "warm"
     priority: 4
-    model_size_mb: 140
+    model_size_mb: 750
     ram_estimation_override_mb: null
     vram_reservation_mb: 192
     memory_max_mb: 1536
@@ -280,6 +280,12 @@ llama_cpp_ram_estimation_factors:
   nomic:
     safety_margin: 1.10                    # 10% safety margin
     bytes_per_token_q8: 0.8
+  bge:
+    safety_margin: 1.15
+    bytes_per_token_q8: 1.0
+  qwen3-embedding:
+    safety_margin: 1.15
+    bytes_per_token_q8: 1.0
   default:
     safety_margin: 1.20                    # 20% for unknown models
     bytes_per_token_q4: 0.6
@@ -456,3 +462,11 @@ orchestrator_images_sidecar_url: "{{ lookup('env', 'LAB_CAPABILITIES_IMAGES_SIDE
 orchestrator_aider_task_path: "{{ lookup('env', 'LAB_AIDER_TASK_PATH') | default('/usr/local/bin/aider-task', true) }}"
 orchestrator_aider_timeout_seconds: "{{ lookup('env', 'LAB_AIDER_TIMEOUT_SECONDS') | default('1800', true) | int }}"
 orchestrator_aider_default_branch: "{{ lookup('env', 'LAB_AIDER_DEFAULT_BRANCH') | default('main', true) }}"
+orchestrator_semantic_enabled: "{{ lookup('env', 'LAB_SEMANTIC_ENABLED') | default('true', true) | bool }}"
+orchestrator_semantic_embedding_model: "{{ lookup('env', 'LAB_SEMANTIC_EMBEDDING_MODEL') | default('bge-m3', true) }}"
+orchestrator_semantic_embedding_dimensions: "{{ lookup('env', 'LAB_SEMANTIC_EMBEDDING_DIMENSIONS') | default('1024', true) | int }}"
+orchestrator_semantic_chunk_max_chars: "{{ lookup('env', 'LAB_SEMANTIC_CHUNK_MAX_CHARS') | default('2400', true) | int }}"
+orchestrator_semantic_chunk_overlap_chars: "{{ lookup('env', 'LAB_SEMANTIC_CHUNK_OVERLAP_CHARS') | default('300', true) | int }}"
+orchestrator_semantic_max_chunks_per_source: "{{ lookup('env', 'LAB_SEMANTIC_MAX_CHUNKS_PER_SOURCE') | default('64', true) | int }}"
+orchestrator_semantic_context_max_chunks: "{{ lookup('env', 'LAB_SEMANTIC_CONTEXT_MAX_CHUNKS') | default('8', true) | int }}"
+orchestrator_semantic_context_max_chars: "{{ lookup('env', 'LAB_SEMANTIC_CONTEXT_MAX_CHARS') | default('12000', true) | int }}"

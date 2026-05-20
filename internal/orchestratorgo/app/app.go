@@ -9,10 +9,12 @@ import (
 
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
+	"github.com/stratecode/lab/internal/orchestratorgo/contextbuilder"
 	"github.com/stratecode/lab/internal/orchestratorgo/httpapi"
 	"github.com/stratecode/lab/internal/orchestratorgo/initiative"
 	"github.com/stratecode/lab/internal/orchestratorgo/logging"
 	"github.com/stratecode/lab/internal/orchestratorgo/research"
+	"github.com/stratecode/lab/internal/orchestratorgo/semantic"
 	"github.com/stratecode/lab/internal/orchestratorgo/store"
 	"github.com/stratecode/lab/internal/orchestratorgo/telegram"
 	"github.com/stratecode/lab/internal/orchestratorgo/worker"
@@ -25,6 +27,7 @@ type Runtime struct {
 	Redis    *store.RedisStore
 	Worker   *worker.RuntimeWorker
 	Research *research.Service
+	Semantic *semantic.Service
 	Bot      *telegram.Bot
 	SafeMode *httpapi.SafeModeState
 }
@@ -60,26 +63,30 @@ func New() (*Runtime, error) {
 		TimeoutSeconds:    20,
 	})
 	researchService := research.New(research.Options{
-		SearchBaseURL:        cfg.WebSearchBaseURL,
-		Capabilities:         capabilityClient,
-		UtilityBaseURL:       cfg.LlamaUtilityBaseURL,
-		UtilityAPIKey:        cfg.LlamaUtilityAPIKey,
+		SearchBaseURL:         cfg.WebSearchBaseURL,
+		Capabilities:          capabilityClient,
+		UtilityBaseURL:        cfg.LlamaUtilityBaseURL,
+		UtilityAPIKey:         cfg.LlamaUtilityAPIKey,
 		UtilityTimeoutSeconds: cfg.LlamaTimeoutSeconds,
 	})
 	initiativeService := initiative.New(cfg, researchService)
-	runtimeWorker := worker.New(cfg, postgres, redisStore, researchService)
+	semanticService := semantic.New(cfg, postgres)
+	contextBuilderService := contextbuilder.New(cfg, semanticService, postgres)
+	runtimeWorker := worker.New(cfg, postgres, redisStore, researchService, contextBuilderService)
 	safeMode := httpapi.NewSafeModeState(cfg.SafeMode)
 	server := &httpapi.Server{
-		Config:        cfg,
-		Postgres:      postgres,
-		Redis:         redisStore,
-		Research:      researchService,
-		Initiatives:   initiativeService,
-		Capabilities:  capabilityClient,
-		SafeMode:      safeMode,
-		Now:           time.Now,
-		Version:       "0.1.0-go-runtime",
-		OpenAIToolsID: cfg.OpenAIToolsModelID,
+		Config:         cfg,
+		Postgres:       postgres,
+		Redis:          redisStore,
+		Research:       researchService,
+		Initiatives:    initiativeService,
+		Capabilities:   capabilityClient,
+		Semantic:       semanticService,
+		ContextBuilder: contextBuilderService,
+		SafeMode:       safeMode,
+		Now:            time.Now,
+		Version:        "0.1.0-go-runtime",
+		OpenAIToolsID:  cfg.OpenAIToolsModelID,
 	}
 	auth := httpapi.NewAuthenticator(
 		postgres,
@@ -109,6 +116,7 @@ func New() (*Runtime, error) {
 		Redis:    redisStore,
 		Worker:   runtimeWorker,
 		Research: researchService,
+		Semantic: semanticService,
 		Bot:      bot,
 		SafeMode: safeMode,
 	}, nil

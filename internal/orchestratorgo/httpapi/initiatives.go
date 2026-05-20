@@ -542,6 +542,26 @@ func (s *Server) launchInitiativeTasks(w http.ResponseWriter, r *http.Request) {
 			writeDetail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		if s.ContextBuilder != nil {
+			task, err := s.Postgres.GetTask(r.Context(), link.TaskID)
+			if err != nil {
+				writeDetail(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if task != nil {
+				contextPackage, err := s.ContextBuilder.BuildForTask(r.Context(), task)
+				if err != nil {
+					writeDetail(w, http.StatusBadGateway, "failed to build task context: "+err.Error())
+					return
+				}
+				if contextPackage != nil && len(contextPackage.Chunks) > 0 {
+					if err := s.Postgres.PatchTaskMetadata(r.Context(), link.TaskID, map[string]any{"context_package": contextPackage}); err != nil {
+						writeDetail(w, http.StatusInternalServerError, err.Error())
+						return
+					}
+				}
+			}
+		}
 		if mode == domain.TaskLaunchModeManual {
 			continue
 		}

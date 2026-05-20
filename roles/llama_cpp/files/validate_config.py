@@ -235,6 +235,10 @@ def _get_model_family(hf_repo):
         return "qwen2.5"
     if "nomic" in repo_lower:
         return "nomic"
+    if "bge-m3" in repo_lower:
+        return "bge"
+    if "qwen3-embedding" in repo_lower:
+        return "qwen3-embedding"
     return "default"
 
 

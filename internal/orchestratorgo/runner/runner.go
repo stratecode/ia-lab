@@ -32,16 +32,26 @@ type Result struct {
 }
 
 type TaskRunner struct {
-	cfg      config.Config
-	planner  *planner.Service
-	research *research.Service
+	cfg            config.Config
+	planner        *planner.Service
+	research       *research.Service
+	contextBuilder ContextBuilder
 }
 
-func New(cfg config.Config, researchService *research.Service) *TaskRunner {
+type ContextBuilder interface {
+	BuildForTask(ctx context.Context, task *domain.TaskResponse) (*domain.ContextPackage, error)
+}
+
+func New(cfg config.Config, researchService *research.Service, contextBuilder ...ContextBuilder) *TaskRunner {
+	var builder ContextBuilder
+	if len(contextBuilder) > 0 {
+		builder = contextBuilder[0]
+	}
 	return &TaskRunner{
-		cfg:      cfg,
-		planner:  planner.New(cfg.LlamaPlannerBaseURL, cfg.LlamaPlannerAPIKey, cfg.LlamaTimeoutSeconds),
-		research: researchService,
+		cfg:            cfg,
+		planner:        planner.New(cfg.LlamaPlannerBaseURL, cfg.LlamaPlannerAPIKey, cfg.LlamaTimeoutSeconds),
+		research:       researchService,
+		contextBuilder: builder,
 	}
 }
 
@@ -49,21 +59,60 @@ func (r *TaskRunner) Execute(task *domain.TaskResponse) Result {
 	if task == nil {
 		return Result{Status: "error", ErrorMessage: "task is nil"}
 	}
+	task = r.withContextPackage(task)
+	var result Result
 	switch agent := derefAgent(task.AssignedAgent); agent {
 	case domain.AgentTypePlanner:
-		return r.executePlanner(task)
+		result = r.executePlanner(task)
 	case domain.AgentTypeResearcher:
-		return r.executeResearcher(task)
+		result = r.executeResearcher(task)
 	case domain.AgentTypeCoder:
-		return r.executeCoder(task)
+		result = r.executeCoder(task)
 	case domain.AgentTypeReviewer:
-		return r.executeReviewer(task)
+		result = r.executeReviewer(task)
 	default:
-		return Result{
+		result = Result{
 			Status:       "error",
 			ErrorMessage: fmt.Sprintf("agent type %q is not supported in orchestrator-go runner", agent),
 		}
 	}
+	return attachContextRefs(result, task)
+}
+
+func (r *TaskRunner) withContextPackage(task *domain.TaskResponse) *domain.TaskResponse {
+	if r.contextBuilder == nil || task == nil {
+		return task
+	}
+	cloned := *task
+	cloned.Metadata = cloneMap(task.Metadata)
+	pkg, err := r.contextBuilder.BuildForTask(context.Background(), &cloned)
+	if err != nil {
+		cloned.Metadata["semantic_context_error"] = err.Error()
+		return &cloned
+	}
+	if pkg == nil || len(pkg.Chunks) == 0 {
+		return &cloned
+	}
+	cloned.Metadata["context_package"] = pkg
+	if pkg.PromptSection != "" {
+		existing := anyStringSliceDefault(cloned.Metadata["capability_context"], []string{})
+		existing = append(existing, pkg.PromptSection)
+		cloned.Metadata["capability_context"] = existing
+	}
+	return &cloned
+}
+
+func attachContextRefs(result Result, task *domain.TaskResponse) Result {
+	pkg, ok := task.Metadata["context_package"].(*domain.ContextPackage)
+	if !ok || pkg == nil {
+		return result
+	}
+	if result.Results == nil {
+		result.Results = map[string]any{}
+	}
+	result.Results["semantic_context_sources"] = pkg.SourceRefs
+	result.Results["semantic_context_chunk_count"] = len(pkg.Chunks)
+	return result
 }
 
 func (r *TaskRunner) executePlanner(task *domain.TaskResponse) Result {
@@ -121,11 +170,11 @@ func (r *TaskRunner) executeResearcher(task *domain.TaskResponse) Result {
 					Status:  "success",
 					Summary: "researcher completed",
 					Results: map[string]any{
-						"status":         "success",
-						"intent":         string(queryResult.Intent),
+						"status":          "success",
+						"intent":          string(queryResult.Intent),
 						"recommendations": []string{queryResult.Answer},
-						"sources":        queryResult.Sources,
-						"confidence":     queryResult.Confidence,
+						"sources":         queryResult.Sources,
+						"confidence":      queryResult.Confidence,
 					},
 				}
 			}
@@ -152,8 +201,8 @@ func (r *TaskRunner) executeResearcher(task *domain.TaskResponse) Result {
 		Status:  "success",
 		Summary: "researcher prepared project context",
 		Results: map[string]any{
-			"status": "success",
-			"project_type": projectType,
+			"status":           "success",
+			"project_type":     projectType,
 			"runtime_or_stack": stack,
 			"recommendations": []string{
 				fmt.Sprintf("Keep %s minimal and directly testable.", projectType),
@@ -270,7 +319,7 @@ func (r *TaskRunner) executeReviewer(task *domain.TaskResponse) Result {
 	}
 	testCommand := anyStringSliceDefault(projectRequest["test_command"], defaultProjectTestCommand(projectType, stack))
 	testResult := map[string]any{
-		"argv": testCommand,
+		"argv":     testCommand,
 		"executed": false,
 	}
 	if len(testCommand) > 0 {
@@ -293,10 +342,10 @@ func (r *TaskRunner) executeReviewer(task *domain.TaskResponse) Result {
 					"stderr", "stdout", "error",
 				),
 				Results: map[string]any{
-					"status":            "error",
+					"status":             "error",
 					"validation_summary": "Project scaffold failed reviewer checks",
-					"missing_files":     missing,
-					"test_result":       testResult,
+					"missing_files":      missing,
+					"test_result":        testResult,
 				},
 			}
 		}
@@ -387,41 +436,41 @@ func buildBoilerplatePlan(task *domain.TaskResponse, metadata map[string]any) (R
 
 	subtasks := []map[string]any{
 		{
-			"title":            "Research scaffold constraints",
-			"description":      fmt.Sprintf("Prepare constraints and validation checklist for %s", projectRootRel),
-			"assigned_agent":   string(domain.AgentTypeResearcher),
-			"priority":         string(domain.PriorityNormal),
+			"title":             "Research scaffold constraints",
+			"description":       fmt.Sprintf("Prepare constraints and validation checklist for %s", projectRootRel),
+			"assigned_agent":    string(domain.AgentTypeResearcher),
+			"priority":          string(domain.PriorityNormal),
 			"requires_approval": false,
-			"execution_target": string(domain.ExecutionTargetLocal),
-			"metadata":         researcherMetadata,
+			"execution_target":  string(domain.ExecutionTargetLocal),
+			"metadata":          researcherMetadata,
 			"tool_request": map[string]any{
-				"tool": "research_project",
+				"tool":            "research_project",
 				"project_request": projectRequest,
 			},
 		},
 		{
-			"title":            "Scaffold project files",
-			"description":      fmt.Sprintf("Create boilerplate for %s", projectRootRel),
-			"assigned_agent":   string(domain.AgentTypeCoder),
-			"priority":         string(domain.PriorityNormal),
+			"title":             "Scaffold project files",
+			"description":       fmt.Sprintf("Create boilerplate for %s", projectRootRel),
+			"assigned_agent":    string(domain.AgentTypeCoder),
+			"priority":          string(domain.PriorityNormal),
 			"requires_approval": asBool(metadata["requires_approval"]),
-			"execution_target": string(domain.ExecutionTargetLocal),
-			"metadata":         coderMetadata,
-			"tool_request":     coderMetadata["tool_request"],
+			"execution_target":  string(domain.ExecutionTargetLocal),
+			"metadata":          coderMetadata,
+			"tool_request":      coderMetadata["tool_request"],
 		},
 		{
-			"title":            "Review scaffolded project",
-			"description":      fmt.Sprintf("Validate generated project at %s", projectRootRel),
-			"assigned_agent":   string(domain.AgentTypeReviewer),
-			"priority":         string(domain.PriorityNormal),
+			"title":             "Review scaffolded project",
+			"description":       fmt.Sprintf("Validate generated project at %s", projectRootRel),
+			"assigned_agent":    string(domain.AgentTypeReviewer),
+			"priority":          string(domain.PriorityNormal),
 			"requires_approval": false,
-			"execution_target": string(domain.ExecutionTargetLocal),
-			"metadata":         reviewerMetadata,
+			"execution_target":  string(domain.ExecutionTargetLocal),
+			"metadata":          reviewerMetadata,
 			"tool_request": map[string]any{
-				"tool":          "review_project",
-				"project_root":  projectRootRel,
+				"tool":           "review_project",
+				"project_root":   projectRootRel,
 				"expected_files": expectedProjectFiles(projectType),
-				"test_command":  testCommand,
+				"test_command":   testCommand,
 			},
 		},
 	}
@@ -429,15 +478,15 @@ func buildBoilerplatePlan(task *domain.TaskResponse, metadata map[string]any) (R
 		Status:  "success",
 		Summary: "planner prepared deterministic multi-agent boilerplate flow",
 		Results: map[string]any{
-			"status":            "success",
-			"plan_summary":      fmt.Sprintf("Create and validate boilerplate project %s with planner, researcher, coder, and reviewer", projectName),
-			"plan_markdown":     fmt.Sprintf("1. Research constraints\n2. Scaffold files\n3. Review and test\n\nTarget: `%s`", projectRootRel),
-			"subtasks":          subtasks,
-			"project_flow":      "boilerplate_v1",
-			"requested_agents":  []string{"researcher", "coder", "reviewer"},
-			"project_root_rel":  projectRootRel,
-			"test_command":      testCommand,
-			"plan_only":         false,
+			"status":           "success",
+			"plan_summary":     fmt.Sprintf("Create and validate boilerplate project %s with planner, researcher, coder, and reviewer", projectName),
+			"plan_markdown":    fmt.Sprintf("1. Research constraints\n2. Scaffold files\n3. Review and test\n\nTarget: `%s`", projectRootRel),
+			"subtasks":         subtasks,
+			"project_flow":     "boilerplate_v1",
+			"requested_agents": []string{"researcher", "coder", "reviewer"},
+			"project_root_rel": projectRootRel,
+			"test_command":     testCommand,
+			"plan_only":        false,
 		},
 	}, true
 }
