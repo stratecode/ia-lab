@@ -33,7 +33,7 @@ const (
 	tuiModeInitiative tuiMode = "initiative"
 )
 
-var tuiViews = []string{"Overview", "Initiatives", "Requirements", "Design", "Plan", "Execution", "Tasks", "Approvals", "Bridge", "Projects", "Chat"}
+var tuiViews = []string{"Initiatives", "Execution", "Approvals", "Bridge", "Projects", "Chat", "Tasks"}
 
 type tuiLoadedMsg struct {
 	health      *domain.HealthResponse
@@ -550,6 +550,11 @@ func (m *TUIModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(msg.models) > 0 {
 			m.models = msg.models
 		}
+		if isInitiativeView(m.currentView()) {
+			if item := m.selectedInitiativeItem(); item != nil && (m.initiativeDetail == nil || strings.TrimSpace(m.initiativeDetail.ID) != strings.TrimSpace(item.ID)) {
+				return m, m.loadInitiativeDetailCmd(item.ID)
+			}
+		}
 		return m, nil
 	case tuiInitiativeDetailMsg:
 		if msg.err != nil {
@@ -740,7 +745,7 @@ func (m *TUIModel) handleNormalMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.currentView() {
-	case "Initiatives", "Requirements", "Design", "Plan", "Execution":
+	case "Initiatives", "Execution":
 		return m.handleInitiativeKeys(msg)
 	case "Tasks":
 		return m.handleTasksKeys(msg)
@@ -889,10 +894,16 @@ func (m *TUIModel) handleInitiativeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up":
 		if m.selectedInitiative > 0 {
 			m.selectedInitiative--
+			if item := m.selectedInitiativeItem(); item != nil {
+				return m, m.loadInitiativeDetailCmd(item.ID)
+			}
 		}
 	case "down":
 		if m.selectedInitiative < len(items)-1 {
 			m.selectedInitiative++
+			if item := m.selectedInitiativeItem(); item != nil {
+				return m, m.loadInitiativeDetailCmd(item.ID)
+			}
 		}
 	case "enter":
 		item := m.selectedInitiativeItem()
@@ -1068,16 +1079,8 @@ func (m *TUIModel) renderHeader() string {
 
 func (m *TUIModel) renderBody() string {
 	switch m.currentView() {
-	case "Overview":
-		return m.renderOverview()
 	case "Initiatives":
 		return m.renderInitiatives()
-	case "Requirements":
-		return m.renderInitiativePhase(domain.InitiativePhaseRequirements)
-	case "Design":
-		return m.renderInitiativePhase(domain.InitiativePhaseDesign)
-	case "Plan":
-		return m.renderInitiativePhase(domain.InitiativePhasePlan)
 	case "Execution":
 		return m.renderExecution()
 	case "Tasks":
@@ -1095,33 +1098,6 @@ func (m *TUIModel) renderBody() string {
 	}
 }
 
-func (m *TUIModel) renderOverview() string {
-	status := "<unknown>"
-	version := ""
-	if m.health != nil {
-		status = m.health.Status
-		version = m.health.Version
-	}
-	taskCounts := map[domain.TaskState]int{}
-	for _, task := range m.tasks {
-		taskCounts[task.State]++
-	}
-	lines := []string{
-		tuiTitleStyle.Render("Overview"),
-		fmt.Sprintf("Health: %s", status),
-		fmt.Sprintf("Version: %s", firstNonEmptyString(version, "<unknown>")),
-		fmt.Sprintf("Bridges: %d", len(m.bridges)),
-		fmt.Sprintf("Initiatives: %d", len(m.initiatives)),
-		fmt.Sprintf("Local tasks: %d", len(m.filteredTasks())),
-		fmt.Sprintf("Pending approvals: %d", len(m.filteredApprovals())),
-		fmt.Sprintf("Queued: %d | In progress: %d | Failed: %d | Completed visible: %d", taskCounts[domain.TaskStateQueued], taskCounts[domain.TaskStateInProgress], taskCounts[domain.TaskStateFailed], taskCounts[domain.TaskStateCompleted]),
-		fmt.Sprintf("Chat model: %s", firstNonEmptyString(firstModel(m.models), "orchestrator-tools")),
-		"",
-		"Use Tab to move between views, Ctrl+F to filter, Ctrl+G for chat, Ctrl+P for project wizard.",
-	}
-	return tuiPanelStyle.Width(maxInt(60, m.width-2)).Render(strings.Join(lines, "\n"))
-}
-
 func (m *TUIModel) renderInitiatives() string {
 	lines := []string{tuiTitleStyle.Render("Initiatives")}
 	if m.mode == tuiModeInitiative {
@@ -1133,9 +1109,10 @@ func (m *TUIModel) renderInitiatives() string {
 		)
 		return tuiPanelStyle.Width(maxInt(60, m.width-2)).Render(strings.Join(lines, "\n"))
 	}
-	lines = append(lines, "`Ctrl+N` new   `Enter` load detail   `Ctrl+E` generate current phase   `Ctrl+A` approve phase   `Ctrl+X` reject phase")
+	lines = append(lines, "`Ctrl+N` new   `Enter` reload detail   `Ctrl+E` generate current phase   `Ctrl+A` approve phase   `Ctrl+X` reject phase")
 	for idx, item := range m.initiatives {
-		line := fmt.Sprintf("%s  %-18s  %-18s  %s", shortID(item.ID), item.Status, item.CurrentPhase, truncateInline(item.Title, 36))
+		next := initiativeNextActionLabel(&item)
+		line := fmt.Sprintf("%s  %-18s  %-18s  %-12s  %s", shortID(item.ID), item.Status, item.CurrentPhase, truncateInline(next, 12), truncateInline(item.Title, 24))
 		if idx == m.selectedInitiative {
 			lines = append(lines, tuiSelectedStyle.Render(line))
 		} else {
@@ -1148,10 +1125,12 @@ func (m *TUIModel) renderInitiatives() string {
 	item := m.selectedInitiativeItem()
 	detail := []string{tuiTitleStyle.Render("Initiative detail")}
 	if item != nil {
+		activeArtifact := m.artifactForPhase(item.CurrentPhase)
 		detail = append(detail,
 			fmt.Sprintf("ID: %s", item.ID),
 			fmt.Sprintf("Status: %s", item.Status),
 			fmt.Sprintf("Current phase: %s", item.CurrentPhase),
+			fmt.Sprintf("Next action: %s", initiativeNextActionLabel(item)),
 			fmt.Sprintf("Workspace: %s", item.WorkspaceRoot),
 			fmt.Sprintf("Tasks linked: %d", initiativeTaskCountForItem(m.initiativeDetail, m.initiativeTasks, item.ID)),
 			fmt.Sprintf("Backlog materialized: %t", m.initiativeExecution.BacklogMaterialized),
@@ -1159,6 +1138,20 @@ func (m *TUIModel) renderInitiatives() string {
 			"",
 			item.Goal,
 		)
+		if activeArtifact != nil {
+			detail = append(detail, "")
+			detail = append(detail, fmt.Sprintf("Active artifact: %s", firstNonEmptyString(derefString(activeArtifact.Title), activeArtifact.ArtifactType)))
+			if version := artifactVersionForTUI(*activeArtifact); version > 0 {
+				detail = append(detail, fmt.Sprintf("Version: v%d", version))
+			}
+			if diff := strings.TrimSpace(asString(activeArtifact.Metadata["diff_summary"])); diff != "" {
+				detail = append(detail, "Diff: "+diff)
+			}
+			if review := m.latestReviewForPhase(item.CurrentPhase); review != nil {
+				detail = append(detail, fmt.Sprintf("Latest review: %s%s", review.Decision, formatReviewFeedback(review.Feedback)))
+			}
+			detail = append(detail, "", truncateMultiline(firstNonEmptyString(stringValue(activeArtifact.ContentText), "<no artifact body>"), 16))
+		}
 		if len(m.initiativeExecution.ModeCounts) > 0 {
 			detail = append(detail, "", fmt.Sprintf("Modes: manual=%d local=%d remote=%d",
 				m.initiativeExecution.ModeCounts[domain.TaskLaunchModeManual],
@@ -1172,60 +1165,26 @@ func (m *TUIModel) renderInitiatives() string {
 				detail = append(detail, fmt.Sprintf("- %s | %s%s", review.Phase, review.Decision, formatReviewFeedback(review.Feedback)))
 			}
 		}
+		for _, phase := range []domain.InitiativePhase{domain.InitiativePhaseRequirements, domain.InitiativePhaseDesign, domain.InitiativePhasePlan} {
+			if history := m.phaseHistory(phase); history != nil && len(history.Items) > 0 {
+				detail = append(detail, "", fmt.Sprintf("%s history:", strings.Title(string(phase))))
+				for _, entry := range history.Items[:minInt(2, len(history.Items))] {
+					versionText := "v?"
+					if entry.Version > 0 {
+						versionText = fmt.Sprintf("v%d", entry.Version)
+					}
+					diffText := ""
+					if entry.DiffSummary != nil && strings.TrimSpace(*entry.DiffSummary) != "" {
+						diffText = " | " + truncateInline(*entry.DiffSummary, 56)
+					}
+					detail = append(detail, fmt.Sprintf("- %s | %s%s%s", versionText, entry.Review.Decision, formatReviewFeedback(entry.Review.Feedback), diffText))
+				}
+			}
+		}
 	}
 	left := tuiPanelStyle.Width(maxInt(46, m.width/2-2)).Render(strings.Join(lines, "\n"))
 	right := tuiPanelStyle.Width(maxInt(46, m.width/2-2)).Render(strings.Join(detail, "\n"))
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-}
-
-func (m *TUIModel) renderInitiativePhase(phase domain.InitiativePhase) string {
-	item := m.selectedInitiativeItem()
-	title := strings.Title(string(phase))
-	lines := []string{tuiTitleStyle.Render(title)}
-	if item == nil {
-		lines = append(lines, tuiMutedStyle.Render("Select an initiative first from the Initiatives view."))
-		return tuiPanelStyle.Width(maxInt(60, m.width-2)).Render(strings.Join(lines, "\n"))
-	}
-	lines = append(lines,
-		fmt.Sprintf("Initiative: %s", item.Title),
-		fmt.Sprintf("Status: %s", item.Status),
-		fmt.Sprintf("Current phase: %s", item.CurrentPhase),
-		"",
-		"`Ctrl+E` generate/regenerate   `Ctrl+A` approve   `Ctrl+X` reject   `Enter` reload detail",
-		"",
-	)
-	artifact := m.artifactForPhase(phase)
-	if artifact == nil {
-		lines = append(lines, tuiMutedStyle.Render("No artifact generated yet for this phase."))
-	} else {
-		lines = append(lines, tuiMutedStyle.Render(fmt.Sprintf("Artifact: %s | updated %s", firstNonEmptyString(derefString(artifact.Title), artifact.ArtifactType), artifact.CreatedAt.Format(time.RFC3339))))
-		if version := artifactVersionForTUI(*artifact); version > 0 {
-			lines = append(lines, tuiMutedStyle.Render(fmt.Sprintf("Version: v%d", version)))
-		}
-		if diff := strings.TrimSpace(asString(artifact.Metadata["diff_summary"])); diff != "" {
-			lines = append(lines, tuiMutedStyle.Render("Diff: "+diff))
-		}
-		if review := m.latestReviewForPhase(phase); review != nil {
-			lines = append(lines, tuiMutedStyle.Render(fmt.Sprintf("Last review: %s%s", review.Decision, formatReviewFeedback(review.Feedback))))
-		}
-		if history := m.phaseHistory(phase); history != nil && len(history.Items) > 0 {
-			lines = append(lines, "", "History:")
-			for _, entry := range history.Items[:minInt(4, len(history.Items))] {
-				versionText := "v?"
-				if entry.Version > 0 {
-					versionText = fmt.Sprintf("v%d", entry.Version)
-				}
-				diffText := ""
-				if entry.DiffSummary != nil && strings.TrimSpace(*entry.DiffSummary) != "" {
-					diffText = " | " + truncateInline(*entry.DiffSummary, 72)
-				}
-				lines = append(lines, fmt.Sprintf("- %s | %s | %s%s%s", entry.Review.Phase, versionText, entry.Review.Decision, formatReviewFeedback(entry.Review.Feedback), diffText))
-			}
-		}
-		lines = append(lines, "")
-		lines = append(lines, firstNonEmptyString(stringValue(artifact.ContentText), tuiMutedStyle.Render("Artifact has no inline text.")))
-	}
-	return tuiPanelStyle.Width(maxInt(60, m.width-2)).Render(strings.Join(lines, "\n"))
 }
 
 func (m *TUIModel) renderExecution() string {
@@ -1238,6 +1197,7 @@ func (m *TUIModel) renderExecution() string {
 		tuiTitleStyle.Render("Execution"),
 		fmt.Sprintf("Initiative: %s", item.Title),
 		fmt.Sprintf("Status: %s", item.Status),
+		fmt.Sprintf("Aggregate: %s | backlog=%t | manual pending=%d", m.initiativeExecution.AggregatedStatus, m.initiativeExecution.BacklogMaterialized, m.initiativeExecution.PendingManual),
 		"`Ctrl+T` cycle mode   `Ctrl+L` launch selected task   `Enter` load task detail",
 		"",
 	}
@@ -1460,7 +1420,7 @@ func (m *TUIModel) renderChat() string {
 }
 
 func (m *TUIModel) renderStatus() string {
-	parts := []string{tuiMutedStyle.Render("Ctrl+C quit"), tuiMutedStyle.Render("Tab switch"), tuiMutedStyle.Render("Ctrl+R refresh")}
+	parts := []string{tuiMutedStyle.Render("Ctrl+C quit"), tuiMutedStyle.Render("Tab switch"), tuiMutedStyle.Render("Ctrl+N initiative"), tuiMutedStyle.Render("Ctrl+P project"), tuiMutedStyle.Render("Ctrl+G chat"), tuiMutedStyle.Render("Ctrl+R refresh")}
 	if m.errText != "" {
 		parts = append(parts, tuiErrorStyle.Render(m.errText))
 	} else {
@@ -1471,7 +1431,7 @@ func (m *TUIModel) renderStatus() string {
 
 func (m *TUIModel) currentView() string {
 	if m.viewIdx < 0 || m.viewIdx >= len(tuiViews) {
-		return "Overview"
+		return "Initiatives"
 	}
 	return tuiViews[m.viewIdx]
 }
@@ -2003,6 +1963,29 @@ func initiativePhaseCanReject(item *domain.InitiativeResponse) bool {
 	return initiativePhaseCanApprove(item)
 }
 
+func initiativeNextActionLabel(item *domain.InitiativeResponse) string {
+	if item == nil {
+		return "none"
+	}
+	switch {
+	case initiativePhaseCanGenerate(item):
+		if item.CurrentPhase == domain.InitiativePhasePlan && item.Status == domain.InitiativeStatusPlanDraft {
+			return "generate tasks"
+		}
+		return "generate"
+	case initiativePhaseCanApprove(item):
+		return "approve/reject"
+	case item.Status == domain.InitiativeStatusExecutionReady:
+		return "launch tasks"
+	case item.Status == domain.InitiativeStatusExecuting:
+		return "follow execution"
+	case item.Status == domain.InitiativeStatusCompleted:
+		return "inspect output"
+	default:
+		return string(item.Status)
+	}
+}
+
 func initiativeTaskCountForItem(detail *domain.InitiativeResponse, tasks *domain.InitiativeTaskListResponse, initiativeID string) int {
 	if detail == nil || strings.TrimSpace(detail.ID) != strings.TrimSpace(initiativeID) {
 		return 0
@@ -2041,7 +2024,7 @@ func executionWorkspacePath(task domain.TaskResponse) string {
 
 func isInitiativeView(view string) bool {
 	switch strings.TrimSpace(view) {
-	case "Initiatives", "Requirements", "Design", "Plan", "Execution":
+	case "Initiatives", "Execution":
 		return true
 	default:
 		return false

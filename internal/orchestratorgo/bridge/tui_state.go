@@ -8,13 +8,13 @@ import (
 )
 
 type TUIState struct {
-	LastView       string            `json:"last_view"`
-	LastWorkspace  string            `json:"last_workspace"`
-	ShowCompleted  bool              `json:"show_completed"`
-	ShowArchived   bool              `json:"show_archived"`
-	RecentProjects []RecentProject   `json:"recent_projects"`
+	LastView          string             `json:"last_view"`
+	LastWorkspace     string             `json:"last_workspace"`
+	ShowCompleted     bool               `json:"show_completed"`
+	ShowArchived      bool               `json:"show_archived"`
+	RecentProjects    []RecentProject    `json:"recent_projects"`
 	RecentInitiatives []RecentInitiative `json:"recent_initiatives"`
-	WizardPresets  map[string]string `json:"wizard_presets"`
+	WizardPresets     map[string]string  `json:"wizard_presets"`
 }
 
 type RecentProject struct {
@@ -78,18 +78,18 @@ func (s *TUIStateStore) Save(state TUIState) error {
 
 func defaultTUIState() TUIState {
 	return TUIState{
-		LastView:       "Overview",
-		ShowCompleted:  false,
-		ShowArchived:   false,
-		RecentProjects: []RecentProject{},
+		LastView:          "Initiatives",
+		ShowCompleted:     false,
+		ShowArchived:      false,
+		RecentProjects:    []RecentProject{},
 		RecentInitiatives: []RecentInitiative{},
-		WizardPresets:  map[string]string{},
+		WizardPresets:     map[string]string{},
 	}
 }
 
 func normalizeTUIState(state *TUIState) {
 	if state.LastView == "" {
-		state.LastView = "Overview"
+		state.LastView = "Initiatives"
 	}
 	state.LastWorkspace = strings.TrimSpace(state.LastWorkspace)
 	if state.RecentProjects == nil {

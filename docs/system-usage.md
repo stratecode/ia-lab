@@ -472,6 +472,10 @@ LAB_AGENT_WORKSPACE_ROOT="/abs/path/to/current/workspace" \
 ./dist/lab-agent-linux-amd64 --env-file .env.bridge tui
 ```
 
+Full operator behavior, views, and keybindings live in:
+
+- [TUI Operator Guide](tui.md)
+
 ## Research mode notes
 
 `orchestrator-tools` is no longer just a thin tool gateway. It now runs a server-side research flow:

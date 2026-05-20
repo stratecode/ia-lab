@@ -43,6 +43,13 @@ func TestTUIStateStoreSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDefaultTUIStateStartsInInitiatives(t *testing.T) {
+	state := defaultTUIState()
+	if state.LastView != "Initiatives" {
+		t.Fatalf("expected default last view to be Initiatives, got %s", state.LastView)
+	}
+}
+
 func TestProjectFormBuildsPlannerProjectRequest(t *testing.T) {
 	form := newProjectForm(CLIOptions{WorkspaceRoot: "/tmp/ws"}, defaultTUIState())
 	form.ParentDirectory.SetValue("/tmp/ws/projects")

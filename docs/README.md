@@ -63,6 +63,7 @@ Tool registry and MCP integrations.
 
 - [Getting Started](getting-started.md)
 - [System Usage Guide](system-usage.md)
+- [TUI Operator Guide](tui.md)
 - [Orchestrator Go Runtime](orchestrator-go-runtime.md)
 - [Local Bridge and CLI](local-bridge.md)
 - [Orchestrator Redeploy Runbook](orchestrator-redeploy.md)

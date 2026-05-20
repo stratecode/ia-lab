@@ -32,7 +32,7 @@ func TestChatModeAllowsPlainTypingButUsesCtrlTForTaskCreation(t *testing.T) {
 func TestNormalModeRequiresModifierShortcuts(t *testing.T) {
 	m := &TUIModel{
 		mode:        tuiModeNormal,
-		viewIdx:     indexOfString(tuiViews, "Overview"),
+		viewIdx:     indexOfString(tuiViews, "Initiatives"),
 		state:       defaultTUIState(),
 		chatInput:   textInputForTest(),
 		projectForm: newProjectForm(CLIOptions{WorkspaceRoot: "/tmp/ws"}, defaultTUIState()),
@@ -85,7 +85,7 @@ func TestApprovalKeysRequireModifier(t *testing.T) {
 func TestNormalModeUsesCtrlNForInitiativeWizard(t *testing.T) {
 	m := &TUIModel{
 		mode:           tuiModeNormal,
-		viewIdx:        indexOfString(tuiViews, "Overview"),
+		viewIdx:        indexOfString(tuiViews, "Initiatives"),
 		state:          defaultTUIState(),
 		initiativeForm: newInitiativeForm(CLIOptions{WorkspaceRoot: "/tmp/ws"}, defaultTUIState()),
 	}
@@ -100,6 +100,43 @@ func TestNormalModeUsesCtrlNForInitiativeWizard(t *testing.T) {
 	updated = model.(*TUIModel)
 	if updated.mode != tuiModeInitiative {
 		t.Fatalf("ctrl+n should open initiative wizard, got %s", updated.mode)
+	}
+}
+
+func TestInitiativeNextActionLabel(t *testing.T) {
+	cases := []struct {
+		name string
+		item *domain.InitiativeResponse
+		want string
+	}{
+		{
+			name: "requirements draft",
+			item: &domain.InitiativeResponse{CurrentPhase: domain.InitiativePhaseRequirements, Status: domain.InitiativeStatusIdeaSubmitted},
+			want: "generate",
+		},
+		{
+			name: "plan draft",
+			item: &domain.InitiativeResponse{CurrentPhase: domain.InitiativePhasePlan, Status: domain.InitiativeStatusPlanDraft},
+			want: "generate tasks",
+		},
+		{
+			name: "review",
+			item: &domain.InitiativeResponse{CurrentPhase: domain.InitiativePhaseDesign, Status: domain.InitiativeStatusDesignReview},
+			want: "approve/reject",
+		},
+		{
+			name: "execution ready",
+			item: &domain.InitiativeResponse{CurrentPhase: domain.InitiativePhasePlan, Status: domain.InitiativeStatusExecutionReady},
+			want: "launch tasks",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := initiativeNextActionLabel(tc.item); got != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, got)
+			}
+		})
 	}
 }
 

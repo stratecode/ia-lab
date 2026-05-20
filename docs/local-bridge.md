@@ -180,13 +180,17 @@ macOS:
 
 The TUI gives you:
 
-- overview of health, bridge, local tasks, and approvals
-- initiative lifecycle views for `Initiatives`, `Requirements`, `Design`, `Plan`, and `Execution`
-- task inspection with results and artifacts
-- approval actions without hunting UUIDs by hand
-- bridge register/heartbeat/smoke/start-stop actions
-- chat with the agent
-- a wizard to create mini projects for lab testing
+- `Initiatives` as the primary operating view
+- `Execution` for selective launch and task inspection
+- `Approvals` for human gates
+- `Bridge` for local bridge operations
+- `Projects` for mini lab scaffolds
+- `Chat` for a minimal prompt surface
+- `Tasks` for raw task inspection
+
+Full operator documentation lives in:
+
+- [TUI Operator Guide](tui.md)
 
 The validated initiative flow is:
 
@@ -208,26 +212,26 @@ The validated local project flow under that initiative is:
 
 It is a cockpit, not a shrine to terminal aesthetics.
 
-### Initiative keybindings
+### TUI keybindings
 
-Inside the initiative-oriented views:
+The current TUI uses `Ctrl+...` shortcuts for actions and keeps plain typing for forms and chat.
 
-- `n` or `i`
+Core bindings:
+
+- `Ctrl+N`
   create initiative
-- `enter` or `l`
-  load initiative detail
-- `g`
-  advance the current phase or generate backlog on `Plan`
-- `a`
-  approve current phase
-- `x`
-  reject current phase
-- `m`
-  cycle selected execution mode on `Execution`
-- `s`
-  launch the selected execution task
+- `Ctrl+E`
+  generate the current phase
+- `Ctrl+A`
+  approve
+- `Ctrl+X`
+  reject or cancel, depending on view
+- `Ctrl+T`
+  cycle execution mode in `Execution`, or convert chat prompt into task in `Chat`
+- `Ctrl+L`
+  launch selected execution task
 
-The TUI governs, approves, launches, and inspects. It does not pretend to be a Markdown IDE in this MVP.
+The TUI governs, approves, launches, and inspects. It still does not pretend to be a Markdown IDE, which is a mercy.
 
 ### CLI commands
 
@@ -470,11 +474,12 @@ Fix:
 Cause:
 
 - orchestrator service restarting
-- Nginx hit the backend during a bad moment, which is a poetic way of saying timing issue
+- reverse proxy buffering or timeout mismatch on long-lived bridge traffic
 
 Fix:
 
 - check `systemctl status orchestrator.service`
+- check the deployed Nginx proxy settings for the orchestrator path
 - retry after health is back to `200`
 
 ### Local task fails with `path escapes workspace`
