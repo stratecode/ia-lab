@@ -68,8 +68,11 @@ func TestFormatInitiativeSummaryMentionsBacklog(t *testing.T) {
 	if !strings.Contains(withoutBacklog, "Backlog: no") {
 		t.Fatalf("expected backlog=no summary, got %q", withoutBacklog)
 	}
-	withBacklog := formatInitiativeSummary(item, []domain.InitiativeTaskLinkResponse{{TaskID: "task-1"}})
+	withBacklog := formatInitiativeSummary(item, []domain.InitiativeTaskLinkResponse{{TaskID: "task-1", ExecutionMode: domain.TaskLaunchModeAgentLocal}})
 	if !strings.Contains(withBacklog, "Backlog: sí") {
 		t.Fatalf("expected backlog=yes summary, got %q", withBacklog)
+	}
+	if !strings.Contains(withBacklog, "Modes: manual=0 local=1 remote=0") {
+		t.Fatalf("expected mode summary, got %q", withBacklog)
 	}
 }

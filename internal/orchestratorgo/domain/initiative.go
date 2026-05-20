@@ -8,18 +8,18 @@ type InitiativeReviewDecision string
 type InitiativeExecutionMode string
 
 const (
-	InitiativeStatusIdeaSubmitted     InitiativeStatus = "idea_submitted"
-	InitiativeStatusRequirementsDraft InitiativeStatus = "requirements_draft"
+	InitiativeStatusIdeaSubmitted      InitiativeStatus = "idea_submitted"
+	InitiativeStatusRequirementsDraft  InitiativeStatus = "requirements_draft"
 	InitiativeStatusRequirementsReview InitiativeStatus = "requirements_review"
-	InitiativeStatusDesignDraft       InitiativeStatus = "design_draft"
-	InitiativeStatusDesignReview      InitiativeStatus = "design_review"
-	InitiativeStatusPlanDraft         InitiativeStatus = "plan_draft"
-	InitiativeStatusPlanReview        InitiativeStatus = "plan_review"
-	InitiativeStatusExecutionReady    InitiativeStatus = "execution_ready"
-	InitiativeStatusExecuting         InitiativeStatus = "executing"
-	InitiativeStatusBlocked           InitiativeStatus = "blocked"
-	InitiativeStatusCompleted         InitiativeStatus = "completed"
-	InitiativeStatusCancelled         InitiativeStatus = "cancelled"
+	InitiativeStatusDesignDraft        InitiativeStatus = "design_draft"
+	InitiativeStatusDesignReview       InitiativeStatus = "design_review"
+	InitiativeStatusPlanDraft          InitiativeStatus = "plan_draft"
+	InitiativeStatusPlanReview         InitiativeStatus = "plan_review"
+	InitiativeStatusExecutionReady     InitiativeStatus = "execution_ready"
+	InitiativeStatusExecuting          InitiativeStatus = "executing"
+	InitiativeStatusBlocked            InitiativeStatus = "blocked"
+	InitiativeStatusCompleted          InitiativeStatus = "completed"
+	InitiativeStatusCancelled          InitiativeStatus = "cancelled"
 
 	InitiativePhaseRequirements InitiativePhase = "requirements"
 	InitiativePhaseDesign       InitiativePhase = "design"
@@ -32,26 +32,26 @@ const (
 
 	InitiativeExecutionModeSelective InitiativeExecutionMode = "selective"
 
-	TaskLaunchModeManual     = "manual"
-	TaskLaunchModeAgentLocal = "agent_local"
+	TaskLaunchModeManual      = "manual"
+	TaskLaunchModeAgentLocal  = "agent_local"
 	TaskLaunchModeAgentRemote = "agent_remote"
 )
 
 type InitiativeResponse struct {
-	ID                         string                    `json:"id"`
-	Title                      string                    `json:"title"`
-	WorkspaceRoot              string                    `json:"workspace_root"`
-	Goal                       string                    `json:"goal"`
-	Status                     InitiativeStatus          `json:"status"`
-	CurrentPhase               InitiativePhase           `json:"current_phase"`
+	ID                           string                  `json:"id"`
+	Title                        string                  `json:"title"`
+	WorkspaceRoot                string                  `json:"workspace_root"`
+	Goal                         string                  `json:"goal"`
+	Status                       InitiativeStatus        `json:"status"`
+	CurrentPhase                 InitiativePhase         `json:"current_phase"`
 	ActiveRequirementsArtifactID *string                 `json:"active_requirements_artifact_id"`
-	ActiveDesignArtifactID     *string                   `json:"active_design_artifact_id"`
-	ActivePlanArtifactID       *string                   `json:"active_plan_artifact_id"`
-	CreatedBy                  string                    `json:"created_by"`
-	ExecutionMode              InitiativeExecutionMode   `json:"execution_mode"`
-	ArchivedAt                 *time.Time                `json:"archived_at"`
-	CreatedAt                  time.Time                 `json:"created_at"`
-	UpdatedAt                  time.Time                 `json:"updated_at"`
+	ActiveDesignArtifactID       *string                 `json:"active_design_artifact_id"`
+	ActivePlanArtifactID         *string                 `json:"active_plan_artifact_id"`
+	CreatedBy                    string                  `json:"created_by"`
+	ExecutionMode                InitiativeExecutionMode `json:"execution_mode"`
+	ArchivedAt                   *time.Time              `json:"archived_at"`
+	CreatedAt                    time.Time               `json:"created_at"`
+	UpdatedAt                    time.Time               `json:"updated_at"`
 }
 
 type InitiativeListResponse struct {
@@ -77,15 +77,53 @@ type InitiativeReviewRequest struct {
 }
 
 type InitiativePhaseReviewResponse struct {
-	ID               string                   `json:"id"`
-	InitiativeID     string                   `json:"initiative_id"`
-	Phase            InitiativePhase          `json:"phase"`
-	Decision         InitiativeReviewDecision `json:"decision"`
-	Feedback         *string                  `json:"feedback"`
-	GeneratedBy      *string                  `json:"generated_by"`
-	ArtifactMarkdownID *string                `json:"artifact_markdown_id"`
-	ArtifactJSONID   *string                  `json:"artifact_json_id"`
-	CreatedAt        time.Time                `json:"created_at"`
+	ID                 string                   `json:"id"`
+	InitiativeID       string                   `json:"initiative_id"`
+	Phase              InitiativePhase          `json:"phase"`
+	Decision           InitiativeReviewDecision `json:"decision"`
+	Feedback           *string                  `json:"feedback"`
+	GeneratedBy        *string                  `json:"generated_by"`
+	ArtifactMarkdownID *string                  `json:"artifact_markdown_id"`
+	ArtifactJSONID     *string                  `json:"artifact_json_id"`
+	CreatedAt          time.Time                `json:"created_at"`
+}
+
+type InitiativePhaseHistoryEntry struct {
+	Review       InitiativePhaseReviewResponse `json:"review"`
+	Version      int                           `json:"version"`
+	DiffSummary  *string                       `json:"diff_summary"`
+	ArtifactType *string                       `json:"artifact_type"`
+	CreatedAt    time.Time                     `json:"created_at"`
+}
+
+type InitiativePhaseHistoryResponse struct {
+	Phase         InitiativePhase               `json:"phase"`
+	ActiveVersion int                           `json:"active_version"`
+	Items         []InitiativePhaseHistoryEntry `json:"items"`
+}
+
+type InitiativeExecutionSummaryResponse struct {
+	BacklogMaterialized bool             `json:"backlog_materialized"`
+	AggregatedStatus    InitiativeStatus `json:"aggregated_status"`
+	TaskCount           int              `json:"task_count"`
+	ModeCounts          map[string]int   `json:"mode_counts"`
+	StateCounts         map[string]int   `json:"state_counts"`
+	PendingManual       int              `json:"pending_manual"`
+}
+
+type InitiativeExecutionPolicyResponse struct {
+	WorkspaceRoot         string   `json:"workspace_root"`
+	Scope                 string   `json:"scope"`
+	AllowedModes          []string `json:"allowed_modes"`
+	ApprovalRequiredModes []string `json:"approval_required_modes"`
+}
+
+type InitiativeDetailResponse struct {
+	Initiative       *InitiativeResponse                `json:"initiative"`
+	Reviews          []InitiativePhaseReviewResponse    `json:"reviews"`
+	Histories        []InitiativePhaseHistoryResponse   `json:"histories"`
+	ExecutionSummary InitiativeExecutionSummaryResponse `json:"execution_summary"`
+	ExecutionPolicy  InitiativeExecutionPolicyResponse  `json:"execution_policy"`
 }
 
 type InitiativeArtifactsResponse struct {
@@ -111,9 +149,9 @@ type InitiativeTaskListResponse struct {
 }
 
 type InitiativeLaunchTasksRequest struct {
-	TaskIDs        []string          `json:"task_ids"`
-	Groups         []string          `json:"groups"`
-	ModeOverrides  map[string]string `json:"mode_overrides"`
+	TaskIDs       []string          `json:"task_ids"`
+	Groups        []string          `json:"groups"`
+	ModeOverrides map[string]string `json:"mode_overrides"`
 }
 
 type InitiativeTaskModeRequest struct {

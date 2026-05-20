@@ -52,8 +52,10 @@ func (s *Service) GenerateRequirements(ctx context.Context, initiative *domain.I
 		researchNotes,
 	}, "\n")
 	payload, err := s.callStructured(ctx, prompt)
-	if err != nil || !validRequirementsPayload(payload) {
+	if err != nil {
 		payload = fallbackRequirements(initiative, feedback, researchNotes)
+	} else if err := ValidateRequirementsPayload(payload); err != nil {
+		return PhaseArtifacts{}, fmt.Errorf("analyst payload validation failed: %w", err)
 	}
 	return PhaseArtifacts{
 		Markdown: renderRequirementsMarkdown(payload),
@@ -75,8 +77,10 @@ func (s *Service) GenerateDesign(ctx context.Context, initiative *domain.Initiat
 		feedbackBlock(feedback),
 	}, "\n")
 	payload, err := s.callStructured(ctx, prompt)
-	if err != nil || !validDesignPayload(payload) {
+	if err != nil {
 		payload = fallbackDesign(initiative, requirements, feedback)
+	} else if err := ValidateDesignPayload(payload); err != nil {
+		return PhaseArtifacts{}, fmt.Errorf("architect payload validation failed: %w", err)
 	}
 	return PhaseArtifacts{
 		Markdown: renderDesignMarkdown(payload),
@@ -103,8 +107,10 @@ func (s *Service) GenerateExecutionPlan(ctx context.Context, initiative *domain.
 		feedbackBlock(feedback),
 	}, "\n")
 	payload, err := s.callStructured(ctx, prompt)
-	if err != nil || !validExecutionPlanPayload(payload) {
+	if err != nil {
 		payload = fallbackExecutionPlan(initiative, design, feedback)
+	} else if err := ValidateExecutionPlanPayload(payload); err != nil {
+		return PhaseArtifacts{}, fmt.Errorf("planner payload validation failed: %w", err)
 	}
 	return PhaseArtifacts{
 		Markdown: renderExecutionPlanMarkdown(payload),
@@ -189,7 +195,16 @@ func (s *Service) researchNotes(ctx context.Context, goal string) string {
 	if s.research == nil || strings.TrimSpace(goal) == "" {
 		return ""
 	}
-	result, err := s.research.Query(ctx, goal)
+	if !research.ShouldUseResearch(goal) {
+		return ""
+	}
+	researchCtx := ctx
+	cancel := func() {}
+	if budget := 5 * time.Second; budget > 0 {
+		researchCtx, cancel = context.WithTimeout(ctx, budget)
+	}
+	defer cancel()
+	result, err := s.research.Query(researchCtx, goal)
 	if err != nil || strings.TrimSpace(result.Answer) == "" {
 		return ""
 	}
@@ -198,7 +213,7 @@ func (s *Service) researchNotes(ctx context.Context, goal string) string {
 
 func fallbackRequirements(initiative *domain.InitiativeResponse, feedback, researchNotes string) map[string]any {
 	return map[string]any{
-		"title": initiative.Title,
+		"title":     initiative.Title,
 		"objective": initiative.Goal,
 		"scope": []string{
 			"Convert the idea into a validated, executable initiative for a single workspace",
@@ -234,7 +249,7 @@ func fallbackRequirements(initiative *domain.InitiativeResponse, feedback, resea
 
 func fallbackDesign(initiative *domain.InitiativeResponse, requirements map[string]any, feedback string) map[string]any {
 	return map[string]any{
-		"title": initiative.Title,
+		"title":        initiative.Title,
 		"architecture": "Go orchestrator runtime remains the control plane. Initiative lifecycle sits above tasks and persists versioned phase artifacts. TUI is the authoring and approval surface, Telegram is remote control.",
 		"components": []map[string]any{
 			{"name": "initiative API", "responsibility": "create, advance, approve, reject, generate and launch"},
@@ -251,9 +266,9 @@ func fallbackDesign(initiative *domain.InitiativeResponse, requirements map[stri
 			"POST /initiatives/{id}/tasks/launch",
 		},
 		"data_model": map[string]any{
-			"initiative": []string{"status", "current_phase", "active artifact ids", "workspace_root"},
+			"initiative":    []string{"status", "current_phase", "active artifact ids", "workspace_root"},
 			"phase_reviews": []string{"phase", "decision", "feedback", "artifact ids"},
-			"task_links": []string{"phase_origin", "execution_mode", "launch_group", "launch_order"},
+			"task_links":    []string{"phase_origin", "execution_mode", "launch_group", "launch_order"},
 		},
 		"testing_strategy": []string{
 			"API integration tests per phase transition",
@@ -287,13 +302,13 @@ func fallbackExecutionPlan(initiative *domain.InitiativeResponse, design map[str
 				"group": "discovery",
 				"tasks": []map[string]any{
 					{
-						"title":            "Research the initiative constraints",
-						"description":      "Produce context, checklist and constraints for the initiative before code execution.",
-						"suggested_agent":  "researcher",
-						"priority":         "normal",
-						"execution_mode":   "agent_local",
-						"execution_target": "local",
-						"approval_required": false,
+						"title":              "Research the initiative constraints",
+						"description":        "Produce context, checklist and constraints for the initiative before code execution.",
+						"suggested_agent":    "researcher",
+						"priority":           "normal",
+						"execution_mode":     "agent_local",
+						"execution_target":   "local",
+						"approval_required":  false,
 						"definition_of_done": "Research context is persisted and references the initiative goal.",
 						"metadata": map[string]any{
 							"initiative_goal": goal,
@@ -306,13 +321,13 @@ func fallbackExecutionPlan(initiative *domain.InitiativeResponse, design map[str
 				"group": "delivery",
 				"tasks": []map[string]any{
 					{
-						"title":            "Create a minimal runnable project",
-						"description":      fmt.Sprintf("Create a minimal project in workspace %s for initiative %s.", initiative.WorkspaceRoot, initiative.Title),
-						"suggested_agent":  "coder",
-						"priority":         "high",
-						"execution_mode":   "agent_local",
-						"execution_target": "local",
-						"approval_required": false,
+						"title":              "Create a minimal runnable project",
+						"description":        fmt.Sprintf("Create a minimal project in workspace %s for initiative %s.", initiative.WorkspaceRoot, initiative.Title),
+						"suggested_agent":    "coder",
+						"priority":           "high",
+						"execution_mode":     "agent_local",
+						"execution_target":   "local",
+						"approval_required":  false,
 						"definition_of_done": "Workspace contains runnable scaffold, manifest and test file.",
 						"metadata": map[string]any{
 							"tool_request": map[string]any{
@@ -334,13 +349,13 @@ func fallbackExecutionPlan(initiative *domain.InitiativeResponse, design map[str
 						},
 					},
 					{
-						"title":            "Validate the generated scaffold",
-						"description":      "Review the scaffolded project and validate expected files and test command.",
-						"suggested_agent":  "reviewer",
-						"priority":         "normal",
-						"execution_mode":   "agent_local",
-						"execution_target": "local",
-						"approval_required": false,
+						"title":              "Validate the generated scaffold",
+						"description":        "Review the scaffolded project and validate expected files and test command.",
+						"suggested_agent":    "reviewer",
+						"priority":           "normal",
+						"execution_mode":     "agent_local",
+						"execution_target":   "local",
+						"approval_required":  false,
 						"definition_of_done": "Reviewer confirms the scaffold passes expected checks.",
 						"metadata": map[string]any{
 							"tool_request": map[string]any{
@@ -368,13 +383,13 @@ func fallbackExecutionPlan(initiative *domain.InitiativeResponse, design map[str
 				"group": "review",
 				"tasks": []map[string]any{
 					{
-						"title":            "Review initiative outputs manually",
-						"description":      "Inspect the generated artifacts, backlog and workspace outcome before expanding execution.",
-						"suggested_agent":  "reviewer",
-						"priority":         "low",
-						"execution_mode":   "manual",
-						"execution_target": "local",
-						"approval_required": false,
+						"title":              "Review initiative outputs manually",
+						"description":        "Inspect the generated artifacts, backlog and workspace outcome before expanding execution.",
+						"suggested_agent":    "reviewer",
+						"priority":           "low",
+						"execution_mode":     "manual",
+						"execution_target":   "local",
+						"approval_required":  false,
 						"definition_of_done": firstNonEmptyString(strings.TrimSpace(feedback), "Operator confirms the initiative is ready for broader execution."),
 						"metadata": map[string]any{
 							"manual_only": true,
@@ -509,34 +524,6 @@ func asString(input any) string {
 		return v
 	default:
 		return ""
-	}
-}
-
-func validRequirementsPayload(payload map[string]any) bool {
-	if len(payload) == 0 {
-		return false
-	}
-	return strings.TrimSpace(asString(payload["objective"])) != ""
-}
-
-func validDesignPayload(payload map[string]any) bool {
-	if len(payload) == 0 {
-		return false
-	}
-	return strings.TrimSpace(asString(payload["architecture"])) != ""
-}
-
-func validExecutionPlanPayload(payload map[string]any) bool {
-	if len(payload) == 0 {
-		return false
-	}
-	switch epics := payload["epics"].(type) {
-	case []any:
-		return len(epics) > 0
-	case []map[string]any:
-		return len(epics) > 0
-	default:
-		return false
 	}
 }
 

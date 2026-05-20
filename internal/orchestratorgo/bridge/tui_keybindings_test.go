@@ -9,7 +9,7 @@ import (
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 )
 
-func TestChatModeAllowsPlainTypingButUsesAltTForTaskCreation(t *testing.T) {
+func TestChatModeAllowsPlainTypingButUsesCtrlTForTaskCreation(t *testing.T) {
 	m := &TUIModel{
 		mode:      tuiModeChat,
 		chatInput: textInputForTest(),
@@ -23,9 +23,9 @@ func TestChatModeAllowsPlainTypingButUsesAltTForTaskCreation(t *testing.T) {
 	}
 
 	updated.chatInput.SetValue("turn this into a task")
-	_, cmd := updated.handleChatMode(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}, Alt: true})
+	_, cmd := updated.handleChatMode(tea.KeyMsg{Type: tea.KeyCtrlT})
 	if cmd == nil {
-		t.Fatal("alt+t should create a task command")
+		t.Fatal("ctrl+t should create a task command")
 	}
 }
 
@@ -44,18 +44,18 @@ func TestNormalModeRequiresModifierShortcuts(t *testing.T) {
 		t.Fatalf("plain p should not open project mode, got %s", updated.mode)
 	}
 
-	model, _ = updated.handleNormalMode(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'p'}, Alt: true})
+	model, _ = updated.handleNormalMode(tea.KeyMsg{Type: tea.KeyCtrlP})
 	updated = model.(*TUIModel)
 	if updated.mode != tuiModeProject {
-		t.Fatalf("alt+p should open project mode, got %s", updated.mode)
+		t.Fatalf("ctrl+p should open project mode, got %s", updated.mode)
 	}
 
 	updated.mode = tuiModeNormal
 	updated.viewIdx = indexOfString(tuiViews, "Tasks")
-	model, _ = updated.handleNormalMode(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}, Alt: true})
+	model, _ = updated.handleNormalMode(tea.KeyMsg{Type: tea.KeyCtrlG})
 	updated = model.(*TUIModel)
 	if updated.mode != tuiModeChat || updated.currentView() != "Chat" {
-		t.Fatalf("alt+g should open chat from any view, got mode=%s view=%s", updated.mode, updated.currentView())
+		t.Fatalf("ctrl+g should open chat from any view, got mode=%s view=%s", updated.mode, updated.currentView())
 	}
 }
 
@@ -76,13 +76,13 @@ func TestApprovalKeysRequireModifier(t *testing.T) {
 		t.Fatalf("plain a should not change selection, got %d", updated.selectedApproval)
 	}
 
-	_, cmd = updated.handleApprovalKeys(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}, Alt: true})
+	_, cmd = updated.handleApprovalKeys(tea.KeyMsg{Type: tea.KeyCtrlA})
 	if cmd == nil {
-		t.Fatal("alt+a should trigger approval command")
+		t.Fatal("ctrl+a should trigger approval command")
 	}
 }
 
-func TestNormalModeUsesAltNForInitiativeWizard(t *testing.T) {
+func TestNormalModeUsesCtrlNForInitiativeWizard(t *testing.T) {
 	m := &TUIModel{
 		mode:           tuiModeNormal,
 		viewIdx:        indexOfString(tuiViews, "Overview"),
@@ -96,10 +96,10 @@ func TestNormalModeUsesAltNForInitiativeWizard(t *testing.T) {
 		t.Fatal("plain tab should switch view, not open initiative wizard")
 	}
 
-	model, _ = updated.handleNormalMode(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}, Alt: true})
+	model, _ = updated.handleNormalMode(tea.KeyMsg{Type: tea.KeyCtrlN})
 	updated = model.(*TUIModel)
 	if updated.mode != tuiModeInitiative {
-		t.Fatalf("alt+n should open initiative wizard, got %s", updated.mode)
+		t.Fatalf("ctrl+n should open initiative wizard, got %s", updated.mode)
 	}
 }
 

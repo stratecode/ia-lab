@@ -101,10 +101,52 @@ func (s *Server) getInitiative(w http.ResponseWriter, r *http.Request) {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"initiative": item,
-		"reviews":    reviews,
+	artifacts, err := s.Postgres.ListInitiativeArtifacts(r.Context(), item.ID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	tasks, err := s.Postgres.ListInitiativeTasks(r.Context(), item.ID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, domain.InitiativeDetailResponse{
+		Initiative:       item,
+		Reviews:          reviews,
+		Histories:        buildInitiativePhaseHistories(item, reviews, artifacts),
+		ExecutionSummary: buildInitiativeExecutionSummary(item, tasks),
+		ExecutionPolicy:  buildInitiativeExecutionPolicy(s.Config.WorkspaceRoot, item.WorkspaceRoot),
 	})
+}
+
+func (s *Server) getInitiativePhaseHistory(w http.ResponseWriter, r *http.Request) {
+	item, err := s.Postgres.GetInitiative(r.Context(), chi.URLParam(r, "initiativeID"))
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if item == nil {
+		writeDetail(w, http.StatusNotFound, "initiative not found")
+		return
+	}
+	phase := domain.InitiativePhase(strings.TrimSpace(chi.URLParam(r, "phase")))
+	if !domain.IsRecognizedInitiativePhase(phase) {
+		writeDetail(w, http.StatusBadRequest, "invalid phase")
+		return
+	}
+	reviews, err := s.Postgres.ListInitiativePhaseReviews(r.Context(), item.ID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	artifacts, err := s.Postgres.ListInitiativeArtifacts(r.Context(), item.ID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	history := buildPhaseHistory(item, phase, reviews, artifacts)
+	writeJSON(w, http.StatusOK, history)
 }
 
 func (s *Server) getInitiativeArtifacts(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +203,7 @@ func (s *Server) advanceInitiative(w http.ResponseWriter, r *http.Request) {
 			writeDetail(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		artifacts, err = s.persistInitiativePhaseArtifacts(r.Context(), item, domain.InitiativePhaseRequirements, payload)
+		artifacts, err = s.persistInitiativePhaseArtifacts(r.Context(), item, domain.InitiativePhaseRequirements, payload, body.Feedback)
 		if err != nil {
 			writeDetail(w, http.StatusInternalServerError, err.Error())
 			return
@@ -183,7 +225,7 @@ func (s *Server) advanceInitiative(w http.ResponseWriter, r *http.Request) {
 			writeDetail(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		artifacts, err = s.persistInitiativePhaseArtifacts(r.Context(), item, domain.InitiativePhaseDesign, payload)
+		artifacts, err = s.persistInitiativePhaseArtifacts(r.Context(), item, domain.InitiativePhaseDesign, payload, body.Feedback)
 		if err != nil {
 			writeDetail(w, http.StatusInternalServerError, err.Error())
 			return
@@ -270,11 +312,39 @@ func (s *Server) resolveInitiativePhase(w http.ResponseWriter, r *http.Request, 
 		writeDetail(w, http.StatusConflict, "phase does not match initiative current phase")
 		return
 	}
+	reviews, err := s.Postgres.ListInitiativePhaseReviews(r.Context(), item.ID)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	activePayload, err := s.getActiveInitiativeArtifactJSON(r.Context(), activeArtifactJSONIDForPhase(item, phase))
+	if err != nil {
+		recordInitiativeAction(reviewActionName(approve), phase, "error", started)
+		writeDetail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validatePhaseArtifactPayload(phase, activePayload); err != nil {
+		recordInitiativeAction(reviewActionName(approve), phase, "error", started)
+		writeDetail(w, http.StatusConflict, err.Error())
+		return
+	}
+	if approve && phase == domain.InitiativePhasePlan {
+		tasks, err := s.Postgres.ListInitiativeTasks(r.Context(), item.ID)
+		if err != nil {
+			writeDetail(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if len(tasks) == 0 {
+			recordInitiativeAction(reviewActionName(approve), phase, "conflict", started)
+			writeDetail(w, http.StatusConflict, "plan cannot be approved before the backlog is materialized")
+			return
+		}
+	}
 	decision := domain.InitiativeReviewRejected
 	if approve {
 		decision = domain.InitiativeReviewApproved
 	}
-	activeMarkdownID, activeJSONID := s.activeArtifactIDsForPhase(item, phase)
+	activeMarkdownID, activeJSONID := latestReviewArtifactIDsForPhase(reviews, phase)
 	operator := firstNonEmptyString(strings.TrimSpace(body.Operator), "operator")
 	if _, err := s.Postgres.CreateInitiativePhaseReview(r.Context(), store.CreateInitiativePhaseReviewParams{
 		InitiativeID:       item.ID,
@@ -375,7 +445,7 @@ func (s *Server) generateInitiativeTasks(w http.ResponseWriter, r *http.Request)
 		writeDetail(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	artifacts, err := s.persistInitiativePhaseArtifacts(r.Context(), item, domain.InitiativePhasePlan, payload)
+	artifacts, err := s.persistInitiativePhaseArtifacts(r.Context(), item, domain.InitiativePhasePlan, payload, body.Feedback)
 	if err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -450,12 +520,18 @@ func (s *Server) launchInitiativeTasks(w http.ResponseWriter, r *http.Request) {
 		writeDetail(w, http.StatusBadRequest, "no launchable initiative tasks matched the request")
 		return
 	}
+	policy := initiativesvc.ResolveExecutionPolicy(s.Config.WorkspaceRoot, item.WorkspaceRoot)
 	launched := make([]domain.TaskResponse, 0, len(selected))
 	for _, link := range selected {
 		mode := firstNonEmptyString(strings.TrimSpace(body.ModeOverrides[link.TaskID]), strings.TrimSpace(link.ExecutionMode))
 		if !domain.IsRecognizedTaskLaunchMode(mode) {
 			recordInitiativeAction("launch", domain.InitiativePhaseExecution, "error", started)
 			writeDetail(w, http.StatusBadRequest, "invalid execution mode override")
+			return
+		}
+		if err := initiativesvc.ValidateTaskLaunchAgainstPolicy(policy, link, mode); err != nil {
+			recordInitiativeAction("launch", domain.InitiativePhaseExecution, "policy_block", started)
+			writeDetail(w, http.StatusConflict, err.Error())
 			return
 		}
 		if _, err := s.Postgres.UpdateInitiativeTaskMode(r.Context(), item.ID, link.TaskID, mode); err != nil {
@@ -514,25 +590,50 @@ func (s *Server) updateInitiativeTaskMode(w http.ResponseWriter, r *http.Request
 		writeDetail(w, http.StatusBadRequest, "invalid execution_mode")
 		return
 	}
-	item, err := s.Postgres.UpdateInitiativeTaskMode(r.Context(), chi.URLParam(r, "initiativeID"), chi.URLParam(r, "taskID"), body.ExecutionMode)
+	initiativeID := chi.URLParam(r, "initiativeID")
+	link, err := s.Postgres.GetInitiativeTaskLink(r.Context(), initiativeID, chi.URLParam(r, "taskID"))
 	if err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := s.Postgres.UpdateTaskLaunchMode(r.Context(), item.TaskID, body.ExecutionMode); err != nil {
+	if link == nil {
+		writeDetail(w, http.StatusNotFound, "initiative task link not found")
+		return
+	}
+	item, err := s.Postgres.GetInitiative(r.Context(), initiativeID)
+	if err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	updated, err := s.Postgres.GetInitiativeTaskLink(r.Context(), item.InitiativeID, item.TaskID)
+	if item == nil {
+		writeDetail(w, http.StatusNotFound, "initiative not found")
+		return
+	}
+	policy := initiativesvc.ResolveExecutionPolicy(s.Config.WorkspaceRoot, item.WorkspaceRoot)
+	if err := initiativesvc.ValidateTaskLaunchAgainstPolicy(policy, *link, body.ExecutionMode); err != nil {
+		recordInitiativeAction("mode_update", domain.InitiativePhaseExecution, "policy_block", started)
+		writeDetail(w, http.StatusConflict, err.Error())
+		return
+	}
+	itemLink, err := s.Postgres.UpdateInitiativeTaskMode(r.Context(), initiativeID, chi.URLParam(r, "taskID"), body.ExecutionMode)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := s.Postgres.UpdateTaskLaunchMode(r.Context(), itemLink.TaskID, body.ExecutionMode); err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	updated, err := s.Postgres.GetInitiativeTaskLink(r.Context(), itemLink.InitiativeID, itemLink.TaskID)
 	if err != nil {
 		recordInitiativeAction("mode_update", domain.InitiativePhaseExecution, "error", started)
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	_, _ = s.Postgres.ReconcileInitiativeExecution(r.Context(), item.InitiativeID)
+	_, _ = s.Postgres.ReconcileInitiativeExecution(r.Context(), itemLink.InitiativeID)
 	log.Info().
-		Str("initiative_id", item.InitiativeID).
-		Str("task_id", item.TaskID).
+		Str("initiative_id", itemLink.InitiativeID).
+		Str("task_id", itemLink.TaskID).
 		Str("execution_mode", body.ExecutionMode).
 		Msg("initiative task mode updated")
 	recordInitiativeAction("mode_update", domain.InitiativePhaseExecution, "success", started)
@@ -544,7 +645,7 @@ type phaseArtifactIDs struct {
 	JSONID     *string `json:"json_id"`
 }
 
-func (s *Server) persistInitiativePhaseArtifacts(ctx context.Context, item *domain.InitiativeResponse, phase domain.InitiativePhase, payload initiativesvc.PhaseArtifacts) (phaseArtifactIDs, error) {
+func (s *Server) persistInitiativePhaseArtifacts(ctx context.Context, item *domain.InitiativeResponse, phase domain.InitiativePhase, payload initiativesvc.PhaseArtifacts, feedback string) (phaseArtifactIDs, error) {
 	reviews, err := s.Postgres.ListInitiativePhaseReviews(ctx, item.ID)
 	if err != nil {
 		return phaseArtifactIDs{}, err
@@ -560,6 +661,18 @@ func (s *Server) persistInitiativePhaseArtifacts(ctx context.Context, item *doma
 		"initiative_phase": string(phase),
 		"version":          version,
 	}
+	activeJSONID := activeArtifactJSONIDForPhase(item, phase)
+	previousJSON := map[string]any{}
+	if activeJSONID != nil {
+		previousJSON, _ = s.getActiveInitiativeArtifactJSON(ctx, activeJSONID)
+		metaBase["previous_artifact_json_id"] = strings.TrimSpace(*activeJSONID)
+	}
+	diffSummary := initiativesvc.SummarizeStructuredDiff(previousJSON, payload.JSON)
+	if strings.TrimSpace(feedback) != "" {
+		metaBase["triggering_feedback"] = strings.TrimSpace(feedback)
+	}
+	metaBase["diff_summary"] = diffSummary
+	metaBase["generated_role"] = generatedRoleForPhase(phase)
 	titleBase := fmt.Sprintf("%s %s v%d", item.Title, strings.Title(string(phase)), version)
 	mdType := "initiative_" + string(phase) + ".md"
 	jsonType := "initiative_" + string(phase) + ".json"
@@ -632,16 +745,16 @@ func (s *Server) updateInitiativeActiveArtifacts(ctx context.Context, item *doma
 	return s.Postgres.UpdateInitiative(ctx, item.ID, params)
 }
 
-func (s *Server) activeArtifactIDsForPhase(item *domain.InitiativeResponse, phase domain.InitiativePhase) (*string, *string) {
+func activeArtifactJSONIDForPhase(item *domain.InitiativeResponse, phase domain.InitiativePhase) *string {
 	switch phase {
 	case domain.InitiativePhaseRequirements:
-		return item.ActiveRequirementsArtifactID, item.ActiveRequirementsArtifactID
+		return item.ActiveRequirementsArtifactID
 	case domain.InitiativePhaseDesign:
-		return item.ActiveDesignArtifactID, item.ActiveDesignArtifactID
+		return item.ActiveDesignArtifactID
 	case domain.InitiativePhasePlan:
-		return item.ActivePlanArtifactID, item.ActivePlanArtifactID
+		return item.ActivePlanArtifactID
 	default:
-		return nil, nil
+		return nil
 	}
 }
 
@@ -843,6 +956,160 @@ func asBoolHTTP(value any) bool {
 		return value == "true" || value == "1" || value == "yes" || value == "on"
 	default:
 		return false
+	}
+}
+
+func validatePhaseArtifactPayload(phase domain.InitiativePhase, payload map[string]any) error {
+	switch phase {
+	case domain.InitiativePhaseRequirements:
+		return initiativesvc.ValidateRequirementsPayload(payload)
+	case domain.InitiativePhaseDesign:
+		return initiativesvc.ValidateDesignPayload(payload)
+	case domain.InitiativePhasePlan:
+		return initiativesvc.ValidateExecutionPlanPayload(payload)
+	default:
+		return fmt.Errorf("phase %s does not support artifact validation", phase)
+	}
+}
+
+func buildInitiativePhaseHistories(item *domain.InitiativeResponse, reviews []domain.InitiativePhaseReviewResponse, artifacts []domain.ArtifactResponse) []domain.InitiativePhaseHistoryResponse {
+	phases := []domain.InitiativePhase{domain.InitiativePhaseRequirements, domain.InitiativePhaseDesign, domain.InitiativePhasePlan}
+	items := make([]domain.InitiativePhaseHistoryResponse, 0, len(phases))
+	for _, phase := range phases {
+		items = append(items, buildPhaseHistory(item, phase, reviews, artifacts))
+	}
+	return items
+}
+
+func buildPhaseHistory(item *domain.InitiativeResponse, phase domain.InitiativePhase, reviews []domain.InitiativePhaseReviewResponse, artifacts []domain.ArtifactResponse) domain.InitiativePhaseHistoryResponse {
+	artifactByID := map[string]domain.ArtifactResponse{}
+	for _, artifact := range artifacts {
+		artifactByID[strings.TrimSpace(artifact.ID)] = artifact
+	}
+	out := domain.InitiativePhaseHistoryResponse{Phase: phase}
+	if active := activeArtifactJSONIDForPhase(item, phase); active != nil {
+		if artifact, ok := artifactByID[strings.TrimSpace(*active)]; ok {
+			out.ActiveVersion = artifactVersion(artifact)
+		}
+	}
+	for _, review := range reviews {
+		if review.Phase != phase {
+			continue
+		}
+		entry := domain.InitiativePhaseHistoryEntry{
+			Review:    review,
+			CreatedAt: review.CreatedAt,
+		}
+		if review.ArtifactJSONID != nil {
+			if artifact, ok := artifactByID[strings.TrimSpace(*review.ArtifactJSONID)]; ok {
+				entry.Version = artifactVersion(artifact)
+				entry.DiffSummary = cleanStringPtr(asString(artifact.Metadata["diff_summary"]))
+				entry.ArtifactType = cleanStringPtr(artifact.ArtifactType)
+			}
+		}
+		out.Items = append(out.Items, entry)
+	}
+	return out
+}
+
+func buildInitiativeExecutionSummary(item *domain.InitiativeResponse, tasks []domain.InitiativeTaskLinkResponse) domain.InitiativeExecutionSummaryResponse {
+	summary := domain.InitiativeExecutionSummaryResponse{
+		BacklogMaterialized: len(tasks) > 0,
+		AggregatedStatus:    deriveInitiativeExecutionStatusHTTP(item.Status, tasks),
+		TaskCount:           len(tasks),
+		ModeCounts:          map[string]int{},
+		StateCounts:         map[string]int{},
+	}
+	for _, task := range tasks {
+		summary.ModeCounts[strings.TrimSpace(task.ExecutionMode)]++
+		summary.StateCounts[strings.TrimSpace(string(task.Task.State))]++
+		if task.ExecutionMode == domain.TaskLaunchModeManual && task.Task.State == domain.TaskStateCreated {
+			summary.PendingManual++
+		}
+	}
+	return summary
+}
+
+func deriveInitiativeExecutionStatusHTTP(current domain.InitiativeStatus, items []domain.InitiativeTaskLinkResponse) domain.InitiativeStatus {
+	if len(items) == 0 {
+		return current
+	}
+	hasFailed := false
+	hasRunning := false
+	hasPendingManual := false
+	allTerminal := true
+	for _, item := range items {
+		if item.ExecutionMode == domain.TaskLaunchModeManual && item.Task.State == domain.TaskStateCreated {
+			hasPendingManual = true
+			allTerminal = false
+			continue
+		}
+		switch item.Task.State {
+		case domain.TaskStateFailed, domain.TaskStateCancelled:
+			hasFailed = true
+			allTerminal = false
+		case domain.TaskStateCompleted:
+		case domain.TaskStateCreated, domain.TaskStateQueued, domain.TaskStateAssigned, domain.TaskStateInProgress, domain.TaskStateWaitingApproval, domain.TaskStateRetrying, domain.TaskStateReview:
+			hasRunning = true
+			allTerminal = false
+		default:
+			allTerminal = false
+		}
+	}
+	switch {
+	case hasFailed:
+		return domain.InitiativeStatusBlocked
+	case hasRunning:
+		return domain.InitiativeStatusExecuting
+	case hasPendingManual:
+		return domain.InitiativeStatusExecutionReady
+	case allTerminal:
+		return domain.InitiativeStatusCompleted
+	default:
+		return current
+	}
+}
+
+func buildInitiativeExecutionPolicy(orchestratorWorkspaceRoot, workspaceRoot string) domain.InitiativeExecutionPolicyResponse {
+	policy := initiativesvc.ResolveExecutionPolicy(orchestratorWorkspaceRoot, workspaceRoot)
+	return domain.InitiativeExecutionPolicyResponse{
+		WorkspaceRoot:         policy.WorkspaceRoot,
+		Scope:                 policy.Scope,
+		AllowedModes:          append([]string{}, policy.AllowedModes...),
+		ApprovalRequiredModes: append([]string{}, policy.ApprovalRequiredModes...),
+	}
+}
+
+func latestReviewArtifactIDsForPhase(reviews []domain.InitiativePhaseReviewResponse, phase domain.InitiativePhase) (*string, *string) {
+	for _, review := range reviews {
+		if review.Phase == phase && (review.ArtifactJSONID != nil || review.ArtifactMarkdownID != nil) {
+			return review.ArtifactMarkdownID, review.ArtifactJSONID
+		}
+	}
+	return nil, nil
+}
+
+func artifactVersion(artifact domain.ArtifactResponse) int {
+	switch value := artifact.Metadata["version"].(type) {
+	case float64:
+		return int(value)
+	case int:
+		return value
+	default:
+		return 0
+	}
+}
+
+func generatedRoleForPhase(phase domain.InitiativePhase) string {
+	switch phase {
+	case domain.InitiativePhaseRequirements:
+		return "analyst"
+	case domain.InitiativePhaseDesign:
+		return "architect"
+	case domain.InitiativePhasePlan:
+		return "planner"
+	default:
+		return "system"
 	}
 }
 

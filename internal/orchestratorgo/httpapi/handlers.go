@@ -81,6 +81,7 @@ func (s *Server) Router(auth *Authenticator) http.Handler {
 		r.Get("/", s.listInitiatives)
 		r.Post("/", s.createInitiative)
 		r.Get("/{initiativeID}", s.getInitiative)
+		r.Get("/{initiativeID}/history/{phase}", s.getInitiativePhaseHistory)
 		r.Get("/{initiativeID}/artifacts", s.getInitiativeArtifacts)
 		r.Get("/{initiativeID}/tasks", s.listInitiativeTasks)
 		r.Post("/{initiativeID}/advance", s.advanceInitiative)

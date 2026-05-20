@@ -193,15 +193,21 @@ func (c *Client) CreateInitiative(ctx context.Context, body domain.InitiativeCre
 	return &out, nil
 }
 
-func (c *Client) GetInitiative(ctx context.Context, initiativeID string) (*domain.InitiativeResponse, []domain.InitiativePhaseReviewResponse, error) {
-	var out struct {
-		Initiative *domain.InitiativeResponse          `json:"initiative"`
-		Reviews    []domain.InitiativePhaseReviewResponse `json:"reviews"`
-	}
+func (c *Client) GetInitiative(ctx context.Context, initiativeID string) (*domain.InitiativeDetailResponse, error) {
+	var out domain.InitiativeDetailResponse
 	if err := c.requestJSON(ctx, http.MethodGet, "/initiatives/"+strings.TrimSpace(initiativeID), nil, &out); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return out.Initiative, out.Reviews, nil
+	return &out, nil
+}
+
+func (c *Client) GetInitiativePhaseHistory(ctx context.Context, initiativeID string, phase domain.InitiativePhase) (*domain.InitiativePhaseHistoryResponse, error) {
+	var out domain.InitiativePhaseHistoryResponse
+	path := fmt.Sprintf("/initiatives/%s/history/%s", strings.TrimSpace(initiativeID), strings.TrimSpace(string(phase)))
+	if err := c.requestJSON(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 func (c *Client) GetInitiativeArtifacts(ctx context.Context, initiativeID string) ([]domain.ArtifactResponse, error) {
@@ -250,9 +256,9 @@ func (c *Client) RejectInitiativePhase(ctx context.Context, initiativeID string,
 
 func (c *Client) GenerateInitiativeTasks(ctx context.Context, initiativeID, feedback string) (*domain.InitiativeResponse, *domain.InitiativeTaskListResponse, error) {
 	var out struct {
-		Initiative *domain.InitiativeResponse   `json:"initiative"`
+		Initiative *domain.InitiativeResponse          `json:"initiative"`
 		Tasks      []domain.InitiativeTaskLinkResponse `json:"tasks"`
-		Total      int                          `json:"total"`
+		Total      int                                 `json:"total"`
 	}
 	path := fmt.Sprintf("/initiatives/%s/tasks/generate", strings.TrimSpace(initiativeID))
 	if err := c.requestJSON(ctx, http.MethodPost, path, domain.InitiativeAdvanceRequest{Feedback: strings.TrimSpace(feedback)}, &out); err != nil {

@@ -564,6 +564,26 @@ func (b *Bot) cmdResolveInitiativePhase(ctx context.Context, arg string, approve
 	if item.CurrentPhase != phase && !(phase == domain.InitiativePhasePlan && item.Status == domain.InitiativeStatusPlanReview) {
 		return fmt.Sprintf("La iniciativa está en %s / %s, no en la fase pedida.", item.Status, item.CurrentPhase)
 	}
+	activeJSONID := activeArtifactJSONIDForPhaseTelegram(item, phase)
+	if activeJSONID == nil || strings.TrimSpace(*activeJSONID) == "" {
+		return "La fase no tiene artifact activo para revisar."
+	}
+	payload, err := b.activeInitiativeArtifactPayload(ctx, *activeJSONID)
+	if err != nil {
+		return "Error leyendo artifact activo: " + err.Error()
+	}
+	if err := validateInitiativePhasePayloadTelegram(phase, payload); err != nil {
+		return "El artifact activo no cumple el contrato mínimo: " + err.Error()
+	}
+	if approve && phase == domain.InitiativePhasePlan {
+		links, err := b.postgres.ListInitiativeTasks(ctx, initiativeID)
+		if err != nil {
+			return "Error leyendo backlog: " + err.Error()
+		}
+		if len(links) == 0 {
+			return "No se puede aprobar el plan sin backlog materializado."
+		}
+	}
 	activeMarkdownID, activeJSONID := activeArtifactIDsForPhase(item, phase)
 	decision := domain.InitiativeReviewRejected
 	if approve {
@@ -663,10 +683,14 @@ func (b *Bot) cmdLaunchInitiativeTasks(ctx context.Context, initiativeID string)
 	if err != nil {
 		return "Error leyendo tareas de iniciativa: " + err.Error()
 	}
+	policy := initiative.ResolveExecutionPolicy(b.cfg.WorkspaceRoot, item.WorkspaceRoot)
 	launched := 0
 	for _, link := range links {
 		if strings.TrimSpace(link.ExecutionMode) == domain.TaskLaunchModeManual {
 			continue
+		}
+		if err := initiative.ValidateTaskLaunchAgainstPolicy(policy, link, link.ExecutionMode); err != nil {
+			return "Política de ejecución: " + err.Error()
 		}
 		if err := b.postgres.UpdateTaskLaunchMode(ctx, link.TaskID, link.ExecutionMode); err != nil {
 			return "Error preparando tarea: " + err.Error()
@@ -965,20 +989,84 @@ func activeArtifactIDsForPhase(item *domain.InitiativeResponse, phase domain.Ini
 	}
 }
 
+func activeArtifactJSONIDForPhaseTelegram(item *domain.InitiativeResponse, phase domain.InitiativePhase) *string {
+	switch phase {
+	case domain.InitiativePhaseRequirements:
+		return item.ActiveRequirementsArtifactID
+	case domain.InitiativePhaseDesign:
+		return item.ActiveDesignArtifactID
+	case domain.InitiativePhasePlan:
+		return item.ActivePlanArtifactID
+	default:
+		return nil
+	}
+}
+
+func (b *Bot) activeInitiativeArtifactPayload(ctx context.Context, artifactID string) (map[string]any, error) {
+	items, err := b.postgres.ListArtifactsByIDs(ctx, []string{strings.TrimSpace(artifactID)})
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, fmt.Errorf("artifact not found")
+	}
+	artifact := items[0]
+	var payload map[string]any
+	if raw := strings.TrimSpace(stringValue(artifact.ContentText)); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &payload); err == nil && len(payload) > 0 {
+			return payload, nil
+		}
+	}
+	if metaPayload, ok := artifact.Metadata["payload"].(map[string]any); ok {
+		return metaPayload, nil
+	}
+	return nil, fmt.Errorf("artifact JSON payload is missing")
+}
+
+func validateInitiativePhasePayloadTelegram(phase domain.InitiativePhase, payload map[string]any) error {
+	switch phase {
+	case domain.InitiativePhaseRequirements:
+		return initiative.ValidateRequirementsPayload(payload)
+	case domain.InitiativePhaseDesign:
+		return initiative.ValidateDesignPayload(payload)
+	case domain.InitiativePhasePlan:
+		return initiative.ValidateExecutionPlanPayload(payload)
+	default:
+		return fmt.Errorf("phase %s is not reviewable", phase)
+	}
+}
+
 func formatInitiativeSummary(item *domain.InitiativeResponse, links []domain.InitiativeTaskLinkResponse) string {
 	backlog := "no"
 	if len(links) > 0 {
 		backlog = "sí"
 	}
+	modeCounts := map[string]int{}
+	for _, link := range links {
+		modeCounts[strings.TrimSpace(link.ExecutionMode)]++
+	}
+	activeArtifacts := "none"
+	switch {
+	case item.ActivePlanArtifactID != nil:
+		activeArtifacts = "plan"
+	case item.ActiveDesignArtifactID != nil:
+		activeArtifacts = "design"
+	case item.ActiveRequirementsArtifactID != nil:
+		activeArtifacts = "requirements"
+	}
 	return fmt.Sprintf(
-		"Initiative %s\n- Status: %s\n- Phase: %s\n- Workspace: %s\n- Goal: %s\n- Backlog: %s\n- Tasks: %d",
+		"Initiative %s\n- Status: %s\n- Phase: %s\n- Workspace: %s\n- Goal: %s\n- Active artifact: %s\n- Backlog: %s\n- Tasks: %d\n- Modes: manual=%d local=%d remote=%d",
 		item.ID,
 		item.Status,
 		item.CurrentPhase,
 		item.WorkspaceRoot,
 		item.Goal,
+		activeArtifacts,
 		backlog,
 		len(links),
+		modeCounts[domain.TaskLaunchModeManual],
+		modeCounts[domain.TaskLaunchModeAgentLocal],
+		modeCounts[domain.TaskLaunchModeAgentRemote],
 	)
 }
 
