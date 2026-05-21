@@ -536,7 +536,7 @@ func (s *Service) synthesizeWithUtility(ctx context.Context, query string, fetch
 			},
 			{
 				"role": "user",
-				"content": fmt.Sprintf("Consulta:\n%s\n\nEvidencia:\n%s", query, strings.Join(evidence, "\n\n")),
+				"content": fmt.Sprintf("[RESEARCH_MODE]\nConsulta:\n%s\n\nEvidencia:\n%s", query, strings.Join(evidence, "\n\n")),
 			},
 		},
 		"temperature": 0.1,

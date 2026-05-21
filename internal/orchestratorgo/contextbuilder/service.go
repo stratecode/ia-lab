@@ -13,6 +13,7 @@ import (
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 	"github.com/stratecode/lab/internal/orchestratorgo/semantic"
+	"github.com/stratecode/lab/internal/orchestratorgo/semanticir"
 	"github.com/stratecode/lab/internal/orchestratorgo/store"
 )
 
@@ -26,6 +27,10 @@ var (
 		Help:    "Context builder latency in seconds.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"agent_type"})
+	semanticIRCompileTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "orchestrator_semantic_ir_compile_total",
+		Help: "Total semantic operational IR compile operations.",
+	}, []string{"agent_type", "status"})
 )
 
 type Service struct {
@@ -85,6 +90,8 @@ func (s *Service) Build(ctx context.Context, req domain.ContextBuildRequest) (*d
 	searchReq := domain.SemanticSearchRequest{
 		Query:         query,
 		SourceTypes:   allowedSources(enriched.AllowedSources),
+		Outcomes:      requestedOutcomes(enriched),
+		MinConfidence: enriched.MinConfidence,
 		WorkspaceRoot: enriched.WorkspaceRoot,
 		Limit:         maxChunks * 3,
 		MaxChars:      maxChars,
@@ -92,7 +99,7 @@ func (s *Service) Build(ctx context.Context, req domain.ContextBuildRequest) (*d
 	if enriched.WorkspaceRoot == nil {
 		searchReq.InitiativeID = enriched.InitiativeID
 	}
-	search, err := s.semantic.Search(ctx, searchReq)
+	search, err := s.searchContext(ctx, searchReq, enriched)
 	if err != nil {
 		contextBuildTotal.WithLabelValues(agentType, "error").Inc()
 		return nil, err
@@ -108,8 +115,25 @@ func (s *Service) Build(ctx context.Context, req domain.ContextBuildRequest) (*d
 		SourceRefs:    sourceRefs(chunks),
 		Constraints:   []string{"Use retrieved context only as supporting evidence; orchestration policy remains authoritative."},
 		Policies:      []string{"Do not expose secrets. Do not retrieve outside the filtered initiative/workspace scope."},
-		PromptSection: promptSection(chunks),
 		GeneratedAt:   time.Now().UTC(),
+	}
+	format := strings.TrimSpace(enriched.OutputFormat)
+	if format == "" {
+		format = "prompt_section"
+	}
+	if format == "prompt_section" || format == "both" {
+		pkg.PromptSection = promptSection(chunks)
+	}
+	if format == "operational_ir" || format == "both" {
+		pkg.OperationalIR = semanticir.Compile(semanticir.CompileRequest{
+			Mode:       modeFromRequest(enriched, agentType),
+			AgentType:  agentType,
+			Chunks:     chunks,
+			Policies:   pkg.Policies,
+			SourceRefs: pkg.SourceRefs,
+			MaxChars:   maxChars,
+		})
+		semanticIRCompileTotal.WithLabelValues(agentType, "success").Inc()
 	}
 	for _, chunk := range chunks {
 		pkg.TotalChars += len([]rune(chunk.ContentText))
@@ -127,6 +151,14 @@ func (s *Service) BuildForTask(ctx context.Context, task *domain.TaskResponse) (
 	if task.AssignedAgent != nil {
 		agentType = string(*task.AssignedAgent)
 	}
+	includeFailed := false
+	includeRejected := false
+	outcomes := []string(nil)
+	if task.AssignedAgent != nil && (*task.AssignedAgent == domain.AgentTypeReviewer || *task.AssignedAgent == domain.AgentTypePlanner) {
+		includeFailed = true
+		includeRejected = true
+		outcomes = []string{"trusted", "failed", "rejected", "invalid"}
+	}
 	return s.Build(ctx, domain.ContextBuildRequest{
 		AgentType:       agentType,
 		TaskID:          &task.ID,
@@ -134,7 +166,60 @@ func (s *Service) BuildForTask(ctx context.Context, task *domain.TaskResponse) (
 		WorkspaceRoot:   task.WorkspacePath,
 		TaskDescription: task.Description,
 		Metadata:        task.Metadata,
+		OutputFormat:    "both",
+		Outcomes:        outcomes,
+		IncludeFailed:   includeFailed,
+		IncludeRejected: includeRejected,
 	})
+}
+
+func (s *Service) searchContext(ctx context.Context, req domain.SemanticSearchRequest, buildReq domain.ContextBuildRequest) (*domain.SemanticSearchResponse, error) {
+	if !wantsBalancedOutcomes(buildReq) {
+		return s.semantic.Search(ctx, req)
+	}
+	groups := [][]string{{"trusted"}, {"failed", "rejected", "invalid"}}
+	merged := []domain.SemanticChunkResponse{}
+	seen := map[string]bool{}
+	for _, outcomes := range groups {
+		groupReq := req
+		groupReq.Outcomes = outcomes
+		groupReq.Limit = maxInt(1, req.Limit/len(groups))
+		resp, err := s.semantic.Search(ctx, groupReq)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range resp.Items {
+			if !seen[item.ID] {
+				merged = append(merged, item)
+				seen[item.ID] = true
+			}
+		}
+	}
+	if len(merged) == 0 {
+		return s.semantic.Search(ctx, req)
+	}
+	return &domain.SemanticSearchResponse{Items: merged, Total: len(merged)}, nil
+}
+
+func wantsBalancedOutcomes(req domain.ContextBuildRequest) bool {
+	hasTrusted := false
+	hasInvalid := req.IncludeFailed || req.IncludeRejected
+	for _, outcome := range req.Outcomes {
+		switch strings.ToLower(strings.TrimSpace(outcome)) {
+		case "trusted":
+			hasTrusted = true
+		case "failed", "rejected", "invalid":
+			hasInvalid = true
+		}
+	}
+	return hasTrusted && hasInvalid
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func emptyPackage(req domain.ContextBuildRequest, agentType string) *domain.ContextPackage {
@@ -184,6 +269,46 @@ func allowedSources(input []string) []string {
 		string(domain.SemanticSourceTask),
 		string(domain.SemanticSourceReview),
 		string(domain.SemanticSourceRepoDoc),
+	}
+}
+
+func requestedOutcomes(req domain.ContextBuildRequest) []string {
+	out := make([]string, 0, len(req.Outcomes)+2)
+	seen := map[string]bool{}
+	for _, outcome := range req.Outcomes {
+		outcome = strings.TrimSpace(strings.ToLower(outcome))
+		if outcome != "" && !seen[outcome] {
+			out = append(out, outcome)
+			seen[outcome] = true
+		}
+	}
+	if req.IncludeFailed && !seen["failed"] {
+		out = append(out, "failed")
+		seen["failed"] = true
+	}
+	if req.IncludeRejected && !seen["rejected"] {
+		out = append(out, "rejected")
+	}
+	return out
+}
+
+func modeFromRequest(req domain.ContextBuildRequest, agentType string) string {
+	if req.Metadata != nil {
+		if mode, ok := req.Metadata["mode"].(string); ok && strings.TrimSpace(mode) != "" {
+			return strings.TrimSpace(mode)
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(agentType)) {
+	case "planner":
+		return "PLAN_MODE"
+	case "coder":
+		return "CODE_MODE"
+	case "reviewer":
+		return "REVIEW_MODE"
+	case "researcher":
+		return "RESEARCH_MODE"
+	default:
+		return strings.ToUpper(strings.TrimSpace(agentType))
 	}
 }
 

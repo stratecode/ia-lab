@@ -46,6 +46,7 @@ func (s *Service) CreatePlan(ctx context.Context, description string, metadata m
 		capabilityContext = "\n\nContexto adicional de capacidades:\n" + strings.Join(items[:minInt(5, len(items))], "\n\n")
 	}
 	prompt := strings.Join([]string{
+		"[PLAN_MODE]",
 		"Eres un planner operativo para un orquestador multiagente.",
 		`Devuelve SOLO JSON valido con esta forma exacta: {"summary":"...","plan":"...","subtasks":[{"title":"...","description":"...","assigned_agent":"coder","priority":"normal","requires_approval":false}]}`,
 		"Reglas:",

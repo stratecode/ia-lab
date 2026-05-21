@@ -179,3 +179,29 @@ func TestReviewerValidatesGeneratedProject(t *testing.T) {
 		t.Fatalf("expected validation summary, got %#v", result.Results)
 	}
 }
+
+func TestReviewerIncludesSemanticFailureMemory(t *testing.T) {
+	metadata := map[string]any{
+		"context_package": &domain.ContextPackage{
+			SourceRefs: []string{"task:failed#0"},
+			OperationalIR: &domain.OperationalIR{
+				ValidationRules: []string{"Avoid missing lab.json"},
+				Invalid: []domain.OperationalItem{{
+					SourceRef:     "task:failed#0",
+					Outcome:       "failed",
+					FailureReason: "lab.json missing",
+				}},
+			},
+		},
+	}
+	sources, rules, checks := reviewerSemanticMemory(metadata)
+	if len(sources) != 1 || sources[0] != "task:failed#0" {
+		t.Fatalf("unexpected sources: %#v", sources)
+	}
+	if len(rules) != 1 || rules[0] != "Avoid missing lab.json" {
+		t.Fatalf("unexpected rules: %#v", rules)
+	}
+	if len(checks) != 1 || !strings.Contains(checks[0], "lab.json missing") {
+		t.Fatalf("unexpected checks: %#v", checks)
+	}
+}

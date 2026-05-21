@@ -239,7 +239,7 @@ func (s *Server) advanceInitiative(w http.ResponseWriter, r *http.Request) {
 		writeDetail(w, http.StatusBadRequest, "initiative cannot be advanced from the current phase")
 		return
 	}
-	if _, err := s.Postgres.CreateInitiativePhaseReview(r.Context(), store.CreateInitiativePhaseReviewParams{
+	if review, err := s.Postgres.CreateInitiativePhaseReview(r.Context(), store.CreateInitiativePhaseReviewParams{
 		InitiativeID:       item.ID,
 		Phase:              phase,
 		Decision:           domain.InitiativeReviewGenerated,
@@ -250,6 +250,8 @@ func (s *Server) advanceInitiative(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
+	} else if review != nil {
+		s.indexReview(r.Context(), review.ID)
 	}
 	params := store.UpdateInitiativeParams{Status: &status}
 	switch phase {
@@ -346,7 +348,7 @@ func (s *Server) resolveInitiativePhase(w http.ResponseWriter, r *http.Request, 
 	}
 	activeMarkdownID, activeJSONID := latestReviewArtifactIDsForPhase(reviews, phase)
 	operator := firstNonEmptyString(strings.TrimSpace(body.Operator), "operator")
-	if _, err := s.Postgres.CreateInitiativePhaseReview(r.Context(), store.CreateInitiativePhaseReviewParams{
+	if review, err := s.Postgres.CreateInitiativePhaseReview(r.Context(), store.CreateInitiativePhaseReviewParams{
 		InitiativeID:       item.ID,
 		Phase:              phase,
 		Decision:           decision,
@@ -357,6 +359,8 @@ func (s *Server) resolveInitiativePhase(w http.ResponseWriter, r *http.Request, 
 	}); err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
+	} else if review != nil {
+		s.indexReview(r.Context(), review.ID)
 	}
 	var nextStatus domain.InitiativeStatus
 	var nextPhase domain.InitiativePhase
@@ -451,7 +455,7 @@ func (s *Server) generateInitiativeTasks(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	generatedBy := "initiative-service"
-	if _, err := s.Postgres.CreateInitiativePhaseReview(r.Context(), store.CreateInitiativePhaseReviewParams{
+	if review, err := s.Postgres.CreateInitiativePhaseReview(r.Context(), store.CreateInitiativePhaseReviewParams{
 		InitiativeID:       item.ID,
 		Phase:              domain.InitiativePhasePlan,
 		Decision:           domain.InitiativeReviewGenerated,
@@ -462,6 +466,8 @@ func (s *Server) generateInitiativeTasks(w http.ResponseWriter, r *http.Request)
 	}); err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
+	} else if review != nil {
+		s.indexReview(r.Context(), review.ID)
 	}
 	updated, err := s.updateInitiativeActiveArtifacts(r.Context(), item, domain.InitiativePhasePlan, domain.InitiativeStatusPlanReview, artifacts)
 	if err != nil {
@@ -708,6 +714,7 @@ func (s *Server) persistInitiativePhaseArtifacts(ctx context.Context, item *doma
 	if err != nil {
 		return phaseArtifactIDs{}, err
 	}
+	s.indexArtifact(ctx, mdID)
 	jsonRaw, _ := json.Marshal(payload.JSON)
 	jsonID, err := s.Postgres.CreateArtifact(ctx, store.CreateArtifactParams{
 		ArtifactType: jsonType,
@@ -722,6 +729,7 @@ func (s *Server) persistInitiativePhaseArtifacts(ctx context.Context, item *doma
 	if err != nil {
 		return phaseArtifactIDs{}, err
 	}
+	s.indexArtifact(ctx, jsonID)
 	return phaseArtifactIDs{MarkdownID: &mdID, JSONID: &jsonID}, nil
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 	"github.com/stratecode/lab/internal/orchestratorgo/research"
 	"github.com/stratecode/lab/internal/orchestratorgo/runner"
+	"github.com/stratecode/lab/internal/orchestratorgo/semantic"
 	"github.com/stratecode/lab/internal/orchestratorgo/store"
 )
 
@@ -23,6 +24,7 @@ type RuntimeWorker struct {
 	postgres    *store.PostgresStore
 	redis       *store.RedisStore
 	runner      *runner.TaskRunner
+	indexer     *semantic.Indexer
 	workerID    string
 	startedAt   time.Time
 	cancel      context.CancelFunc
@@ -31,16 +33,23 @@ type RuntimeWorker struct {
 	mu          sync.RWMutex
 }
 
-func New(cfg config.Config, postgres *store.PostgresStore, redis *store.RedisStore, researchService *research.Service, contextBuilder ...runner.ContextBuilder) *RuntimeWorker {
+func New(cfg config.Config, postgres *store.PostgresStore, redis *store.RedisStore, researchService *research.Service, extras ...any) *RuntimeWorker {
 	var builder runner.ContextBuilder
-	if len(contextBuilder) > 0 {
-		builder = contextBuilder[0]
+	var indexer *semantic.Indexer
+	for _, extra := range extras {
+		switch typed := extra.(type) {
+		case runner.ContextBuilder:
+			builder = typed
+		case *semantic.Indexer:
+			indexer = typed
+		}
 	}
 	return &RuntimeWorker{
 		cfg:       cfg,
 		postgres:  postgres,
 		redis:     redis,
 		runner:    runner.New(cfg, researchService, builder),
+		indexer:   indexer,
 		workerID:  store.GenerateWorkerID(),
 		startedAt: time.Now(),
 		done:      make(chan struct{}),
@@ -175,8 +184,10 @@ func (w *RuntimeWorker) executeTask(ctx context.Context, taskID string) {
 				}
 			}
 		} else {
-			if _, err := w.postgres.CompleteTask(ctx, taskID, "worker:"+w.workerID, result.Summary, result.Results); err != nil {
+			if completed, err := w.postgres.CompleteTask(ctx, taskID, "worker:"+w.workerID, result.Summary, result.Results); err != nil {
 				log.Warn().Err(err).Str("task_id", taskID).Msg("failed to complete task")
+			} else if completed != nil {
+				w.indexTask(ctx, completed.ID)
 			}
 			w.reconcileRootTask(ctx, taskID)
 		}
@@ -209,8 +220,10 @@ func (w *RuntimeWorker) executeTask(ctx context.Context, taskID string) {
 		if errorMessage == "" {
 			errorMessage = "task execution failed"
 		}
-		if _, err := w.postgres.FailTask(ctx, taskID, "worker:"+w.workerID, errorMessage, errorMessage, result.Results); err != nil {
+		if failed, err := w.postgres.FailTask(ctx, taskID, "worker:"+w.workerID, errorMessage, errorMessage, result.Results); err != nil {
 			log.Warn().Err(err).Str("task_id", taskID).Msg("failed to fail task")
+		} else if failed != nil {
+			w.indexTask(ctx, failed.ID)
 		}
 		w.reconcileRootTask(ctx, taskID)
 	}
@@ -228,7 +241,10 @@ func (w *RuntimeWorker) handlePlannerSuccess(ctx context.Context, task *domain.T
 	subtasks := parsePlannerSubtasks(result.Results["subtasks"])
 	planOnly := asBoolMap(result.Results, "plan_only")
 	if planOnly || len(subtasks) == 0 {
-		_, err := w.postgres.CompleteTask(ctx, task.ID, "worker:"+w.workerID, "planner completed without execution subtasks", result.Results)
+		completed, err := w.postgres.CompleteTask(ctx, task.ID, "worker:"+w.workerID, "planner completed without execution subtasks", result.Results)
+		if err == nil && completed != nil {
+			w.indexTask(ctx, completed.ID)
+		}
 		return err
 	}
 
@@ -407,13 +423,24 @@ func (w *RuntimeWorker) reconcileRootTask(ctx context.Context, taskID string) {
 	}
 	if hasFailed {
 		if !domain.IsTerminalState(root.State) {
-			_, _ = w.postgres.FailTask(ctx, root.ID, "worker:"+w.workerID, "One or more subtasks failed", "One or more subtasks failed", root.Results)
+			if failed, err := w.postgres.FailTask(ctx, root.ID, "worker:"+w.workerID, "One or more subtasks failed", "One or more subtasks failed", root.Results); err == nil && failed != nil {
+				w.indexTask(ctx, failed.ID)
+			}
 		}
 		return
 	}
 	if allCompleted && root.State != domain.TaskStateCompleted {
-		_, _ = w.postgres.CompleteTask(ctx, root.ID, "worker:"+w.workerID, "All subtasks completed", root.Results)
+		if completed, err := w.postgres.CompleteTask(ctx, root.ID, "worker:"+w.workerID, "All subtasks completed", root.Results); err == nil && completed != nil {
+			w.indexTask(ctx, completed.ID)
+		}
 	}
+}
+
+func (w *RuntimeWorker) indexTask(ctx context.Context, taskID string) {
+	if w.indexer == nil {
+		return
+	}
+	w.indexer.IndexTask(ctx, taskID)
 }
 
 type plannerSubtask struct {

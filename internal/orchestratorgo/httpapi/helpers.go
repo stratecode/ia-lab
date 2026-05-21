@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -15,6 +16,24 @@ func writeJSON(w http.ResponseWriter, statusCode int, payload any) {
 
 func writeDetail(w http.ResponseWriter, statusCode int, detail string) {
 	writeJSON(w, statusCode, map[string]string{"detail": detail})
+}
+
+func (s *Server) indexTask(ctx context.Context, taskID string) {
+	if s != nil && s.SemanticIndexer != nil {
+		s.SemanticIndexer.IndexTask(ctx, taskID)
+	}
+}
+
+func (s *Server) indexArtifact(ctx context.Context, artifactID string) {
+	if s != nil && s.SemanticIndexer != nil {
+		s.SemanticIndexer.IndexArtifact(ctx, artifactID)
+	}
+}
+
+func (s *Server) indexReview(ctx context.Context, reviewID string) {
+	if s != nil && s.SemanticIndexer != nil {
+		s.SemanticIndexer.IndexReview(ctx, reviewID)
+	}
 }
 
 func writeTaskStateConflict(w http.ResponseWriter, currentState, requestedState domain.TaskState, taskID string) {

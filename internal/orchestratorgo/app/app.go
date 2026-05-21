@@ -71,22 +71,24 @@ func New() (*Runtime, error) {
 	})
 	initiativeService := initiative.New(cfg, researchService)
 	semanticService := semantic.New(cfg, postgres)
+	semanticIndexer := semantic.NewIndexer(semanticService, postgres)
 	contextBuilderService := contextbuilder.New(cfg, semanticService, postgres)
-	runtimeWorker := worker.New(cfg, postgres, redisStore, researchService, contextBuilderService)
+	runtimeWorker := worker.New(cfg, postgres, redisStore, researchService, contextBuilderService, semanticIndexer)
 	safeMode := httpapi.NewSafeModeState(cfg.SafeMode)
 	server := &httpapi.Server{
-		Config:         cfg,
-		Postgres:       postgres,
-		Redis:          redisStore,
-		Research:       researchService,
-		Initiatives:    initiativeService,
-		Capabilities:   capabilityClient,
-		Semantic:       semanticService,
-		ContextBuilder: contextBuilderService,
-		SafeMode:       safeMode,
-		Now:            time.Now,
-		Version:        "0.1.0-go-runtime",
-		OpenAIToolsID:  cfg.OpenAIToolsModelID,
+		Config:          cfg,
+		Postgres:        postgres,
+		Redis:           redisStore,
+		Research:        researchService,
+		Initiatives:     initiativeService,
+		Capabilities:    capabilityClient,
+		Semantic:        semanticService,
+		SemanticIndexer: semanticIndexer,
+		ContextBuilder:  contextBuilderService,
+		SafeMode:        safeMode,
+		Now:             time.Now,
+		Version:         "0.1.0-go-runtime",
+		OpenAIToolsID:   cfg.OpenAIToolsModelID,
 	}
 	auth := httpapi.NewAuthenticator(
 		postgres,

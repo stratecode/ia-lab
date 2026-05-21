@@ -115,6 +115,22 @@ func attachContextRefs(result Result, task *domain.TaskResponse) Result {
 	return result
 }
 
+func reviewerSemanticMemory(metadata map[string]any) ([]string, []string, []string) {
+	pkg, ok := metadata["context_package"].(*domain.ContextPackage)
+	if !ok || pkg == nil || pkg.OperationalIR == nil {
+		return []string{}, []string{}, []string{}
+	}
+	rules := append([]string{}, pkg.OperationalIR.ValidationRules...)
+	checks := make([]string, 0, len(pkg.OperationalIR.Invalid))
+	for _, item := range pkg.OperationalIR.Invalid {
+		if strings.TrimSpace(item.FailureReason) == "" {
+			continue
+		}
+		checks = append(checks, fmt.Sprintf("%s: %s", item.SourceRef, item.FailureReason))
+	}
+	return append([]string{}, pkg.SourceRefs...), rules, checks
+}
+
 func (r *TaskRunner) executePlanner(task *domain.TaskResponse) Result {
 	metadata := cloneMap(task.Metadata)
 	if boilerplate, ok := buildBoilerplatePlan(task, metadata); ok {
@@ -286,6 +302,7 @@ func (r *TaskRunner) executeCoder(task *domain.TaskResponse) Result {
 
 func (r *TaskRunner) executeReviewer(task *domain.TaskResponse) Result {
 	metadata := cloneMap(task.Metadata)
+	semanticSources, semanticRules, priorFailureChecks := reviewerSemanticMemory(metadata)
 	projectRequest, _ := metadata["project_request"].(map[string]any)
 	workspaceRoot := strings.TrimSpace(firstNonEmptyMetadata(metadata, "workspace_root"))
 	if projectRequest == nil || workspaceRoot == "" {
@@ -342,10 +359,13 @@ func (r *TaskRunner) executeReviewer(task *domain.TaskResponse) Result {
 					"stderr", "stdout", "error",
 				),
 				Results: map[string]any{
-					"status":             "error",
-					"validation_summary": "Project scaffold failed reviewer checks",
-					"missing_files":      missing,
-					"test_result":        testResult,
+					"status":                    "error",
+					"validation_summary":        "Project scaffold failed reviewer checks",
+					"missing_files":             missing,
+					"test_result":               testResult,
+					"semantic_context_sources":  semanticSources,
+					"semantic_validation_rules": semanticRules,
+					"prior_failure_checks":      priorFailureChecks,
 				},
 			}
 		}
@@ -356,10 +376,13 @@ func (r *TaskRunner) executeReviewer(task *domain.TaskResponse) Result {
 			Summary:      "reviewer detected missing files",
 			ErrorMessage: "project scaffold is incomplete",
 			Results: map[string]any{
-				"status":             "error",
-				"validation_summary": "Project scaffold is missing expected files",
-				"missing_files":      missing,
-				"test_result":        testResult,
+				"status":                    "error",
+				"validation_summary":        "Project scaffold is missing expected files",
+				"missing_files":             missing,
+				"test_result":               testResult,
+				"semantic_context_sources":  semanticSources,
+				"semantic_validation_rules": semanticRules,
+				"prior_failure_checks":      priorFailureChecks,
 			},
 		}
 	}
@@ -367,11 +390,14 @@ func (r *TaskRunner) executeReviewer(task *domain.TaskResponse) Result {
 		Status:  "success",
 		Summary: "reviewer validated scaffolded project",
 		Results: map[string]any{
-			"status":             "success",
-			"validation_summary": "Project scaffold passed reviewer checks",
-			"project_root":       projectRoot,
-			"expected_files":     expectedFiles,
-			"test_result":        testResult,
+			"status":                    "success",
+			"validation_summary":        "Project scaffold passed reviewer checks",
+			"project_root":              projectRoot,
+			"expected_files":            expectedFiles,
+			"test_result":               testResult,
+			"semantic_context_sources":  semanticSources,
+			"semantic_validation_rules": semanticRules,
+			"prior_failure_checks":      priorFailureChecks,
 			"pass_checks": []string{
 				"project directory exists",
 				"expected files present",

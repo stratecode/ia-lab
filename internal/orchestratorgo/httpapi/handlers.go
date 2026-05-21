@@ -29,18 +29,19 @@ import (
 )
 
 type Server struct {
-	Config         config.Config
-	Postgres       *store.PostgresStore
-	Redis          *store.RedisStore
-	Research       *research.Service
-	Initiatives    *initiative.Service
-	Capabilities   *capabilities.Client
-	Semantic       *semantic.Service
-	ContextBuilder *contextbuilder.Service
-	SafeMode       *SafeModeState
-	Now            func() time.Time
-	Version        string
-	OpenAIToolsID  string
+	Config          config.Config
+	Postgres        *store.PostgresStore
+	Redis           *store.RedisStore
+	Research        *research.Service
+	Initiatives     *initiative.Service
+	Capabilities    *capabilities.Client
+	Semantic        *semantic.Service
+	SemanticIndexer *semantic.Indexer
+	ContextBuilder  *contextbuilder.Service
+	SafeMode        *SafeModeState
+	Now             func() time.Time
+	Version         string
+	OpenAIToolsID   string
 }
 
 func (s *Server) Router(auth *Authenticator) http.Handler {
@@ -437,6 +438,9 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 	if updatedTask == nil {
 		writeDetail(w, http.StatusNotFound, "task not found")
 		return
+	}
+	if domain.IsTerminalState(updatedTask.State) {
+		s.indexTask(r.Context(), updatedTask.ID)
 	}
 	s.reconcileRootTask(r.Context(), updatedTask.ID)
 	writeJSON(w, http.StatusOK, updatedTask)
@@ -1487,7 +1491,7 @@ func (s *Server) callUtilityChat(ctx context.Context, prompt string) (string, er
 			},
 			{
 				"role":    "user",
-				"content": prompt,
+				"content": "[RESEARCH_MODE]\n" + prompt,
 			},
 		},
 		"temperature": 0.2,
@@ -1828,12 +1832,16 @@ func (s *Server) reconcileRootTask(ctx context.Context, taskID string) {
 	}
 	if hasFailed {
 		if !domain.IsTerminalState(root.State) {
-			_, _ = s.Postgres.FailTask(ctx, root.ID, "api:aggregate", "One or more subtasks failed", "One or more subtasks failed", root.Results)
+			if failed, err := s.Postgres.FailTask(ctx, root.ID, "api:aggregate", "One or more subtasks failed", "One or more subtasks failed", root.Results); err == nil && failed != nil {
+				s.indexTask(ctx, failed.ID)
+			}
 		}
 		return
 	}
 	if allCompleted && root.State != domain.TaskStateCompleted {
-		_, _ = s.Postgres.CompleteTask(ctx, root.ID, "api:aggregate", "All subtasks completed", root.Results)
+		if completed, err := s.Postgres.CompleteTask(ctx, root.ID, "api:aggregate", "All subtasks completed", root.Results); err == nil && completed != nil {
+			s.indexTask(ctx, completed.ID)
+		}
 	}
 }
 

@@ -1,0 +1,14 @@
+- name: Reload systemd for cognitive gateway
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: cognitive_gateway_enabled
+
+- name: Restart cognitive gateway services
+  ansible.builtin.systemd:
+    name: "{{ item.service_name | regex_replace('^llama-cpp-', 'cognitive-gateway-') }}"
+    state: restarted
+    enabled: true
+  loop: "{{ llama_cpp_instances | rejectattr('embedding_mode', 'equalto', true) | list }}"
+  loop_control:
+    label: "{{ item.service_name | regex_replace('^llama-cpp-', 'cognitive-gateway-') }}"
+  when: cognitive_gateway_enabled

@@ -89,6 +89,7 @@ func (s *Service) Index(ctx context.Context, req domain.SemanticIndexRequest) (*
 		taskID = source.TaskID
 		initiativeID = stringPtrFromMap(metadata, "initiative_id")
 		workspaceRoot = stringPtrFromMap(metadata, "workspace_root")
+		metadata = mergeMetadata(SanitizeMap(metadata), classifyArtifactMetadata(source.Artifact))
 		if workspaceRoot == nil && taskID != nil {
 			if task, _ := s.postgres.GetTask(ctx, *taskID); task != nil {
 				workspaceRoot = task.WorkspacePath
@@ -108,10 +109,13 @@ func (s *Service) Index(ctx context.Context, req domain.SemanticIndexRequest) (*
 			return nil, fmt.Errorf("task %s not found", sourceID)
 		}
 		text = taskText(task)
-		metadata = task.Metadata
+		metadata = mergeMetadata(SanitizeMap(task.Metadata), classifyTaskMetadata(task))
 		taskID = &task.ID
 		initiativeID = task.InitiativeID
 		workspaceRoot = task.WorkspacePath
+		if workspaceRoot == nil {
+			workspaceRoot = stringPtrFromMap(metadata, "workspace_root")
+		}
 	case string(domain.SemanticSourceReview):
 		review, err := s.postgres.GetInitiativePhaseReview(ctx, sourceID)
 		if err != nil {
@@ -131,6 +135,7 @@ func (s *Service) Index(ctx context.Context, req domain.SemanticIndexRequest) (*
 			"artifact_markdown_id": review.ArtifactMarkdownID,
 			"artifact_json_id":     review.ArtifactJSONID,
 		}
+		metadata = mergeMetadata(metadata, classifyReviewMetadata(review))
 		initiativeID = &review.InitiativeID
 		if initiative, _ := s.postgres.GetInitiative(ctx, review.InitiativeID); initiative != nil {
 			workspaceRoot = &initiative.WorkspaceRoot
@@ -222,6 +227,7 @@ func (s *Service) Search(ctx context.Context, req domain.SemanticSearchRequest) 
 		return nil, err
 	}
 	items = trimSearchResults(items, req.MaxChars)
+	items = filterSearchResults(items, req.Outcomes, req.MinConfidence)
 	semanticSearchTotal.WithLabelValues("success").Inc()
 	semanticSearchDuration.Observe(time.Since(start).Seconds())
 	return &domain.SemanticSearchResponse{Items: items, Total: len(items)}, nil
@@ -343,4 +349,131 @@ func trimSearchResults(items []domain.SemanticChunkResponse, maxChars int) []dom
 		out = append(out, item)
 	}
 	return out
+}
+
+func classifyArtifactMetadata(artifact domain.ArtifactResponse) map[string]any {
+	out := map[string]any{
+		"outcome":    "unknown",
+		"confidence": 0.5,
+		"validated":  false,
+	}
+	artifactType := strings.ToLower(strings.TrimSpace(artifact.ArtifactType))
+	if strings.Contains(artifactType, "requirements") || strings.Contains(artifactType, "design") || strings.Contains(artifactType, "plan") {
+		out["outcome"] = "trusted"
+		out["confidence"] = 0.85
+		out["validated"] = true
+	}
+	if phase, ok := artifact.Metadata["phase"].(string); ok && strings.TrimSpace(phase) != "" {
+		out["task_type"] = phase
+	}
+	if repo, ok := artifact.Metadata["repo"].(string); ok && strings.TrimSpace(repo) != "" {
+		out["repo"] = repo
+	}
+	return out
+}
+
+func classifyTaskMetadata(task *domain.TaskResponse) map[string]any {
+	out := map[string]any{
+		"outcome":    "unknown",
+		"confidence": 0.5,
+		"validated":  false,
+	}
+	switch task.State {
+	case domain.TaskStateCompleted:
+		out["outcome"] = "trusted"
+		out["confidence"] = 0.8
+		out["validated"] = true
+	case domain.TaskStateFailed:
+		out["outcome"] = "failed"
+		out["confidence"] = 1.0
+		out["validated"] = false
+		if task.ErrorMessage != nil {
+			out["failure_reason"] = *task.ErrorMessage
+		}
+	case domain.TaskStateCancelled:
+		out["outcome"] = "invalid"
+		out["confidence"] = 0.7
+		out["validated"] = false
+	}
+	if task.AssignedAgent != nil {
+		out["agent_type"] = string(*task.AssignedAgent)
+	}
+	if task.PlannedAgent != nil {
+		out["planned_agent"] = string(*task.PlannedAgent)
+	}
+	out["task_type"] = string(task.TaskKind)
+	out["execution_target"] = string(task.ExecutionTarget)
+	if task.WorkspacePath != nil {
+		out["repo"] = *task.WorkspacePath
+	}
+	return out
+}
+
+func classifyReviewMetadata(review *domain.InitiativePhaseReviewResponse) map[string]any {
+	out := map[string]any{
+		"confidence": 1.0,
+		"task_type":  string(review.Phase),
+	}
+	switch review.Decision {
+	case domain.InitiativeReviewApproved:
+		out["outcome"] = "trusted"
+		out["validated"] = true
+	case domain.InitiativeReviewRejected:
+		out["outcome"] = "rejected"
+		out["validated"] = false
+		if review.Feedback != nil {
+			out["failure_reason"] = *review.Feedback
+		}
+	default:
+		out["outcome"] = "unknown"
+		out["validated"] = false
+		out["confidence"] = 0.6
+	}
+	return out
+}
+
+func filterSearchResults(items []domain.SemanticChunkResponse, outcomes []string, minConfidence *float64) []domain.SemanticChunkResponse {
+	if len(outcomes) == 0 && minConfidence == nil {
+		return items
+	}
+	allowed := map[string]bool{}
+	for _, outcome := range outcomes {
+		outcome = strings.TrimSpace(strings.ToLower(outcome))
+		if outcome != "" {
+			allowed[outcome] = true
+		}
+	}
+	out := make([]domain.SemanticChunkResponse, 0, len(items))
+	for _, item := range items {
+		outcome, _ := item.Metadata["outcome"].(string)
+		if len(allowed) > 0 && !allowed[strings.ToLower(strings.TrimSpace(outcome))] {
+			continue
+		}
+		if minConfidence != nil {
+			confidence, ok := numericMetadata(item.Metadata["confidence"])
+			if !ok || confidence < *minConfidence {
+				continue
+			}
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func numericMetadata(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		parsed, err := typed.Float64()
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }

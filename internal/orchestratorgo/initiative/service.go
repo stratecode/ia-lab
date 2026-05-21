@@ -132,7 +132,7 @@ func (s *Service) callStructured(ctx context.Context, prompt string) (map[string
 	body := map[string]any{
 		"model": "planner",
 		"messages": []map[string]string{
-			{"role": "user", "content": prompt},
+			{"role": "user", "content": "[PLAN_MODE]\n" + prompt},
 		},
 		"temperature":     0.1,
 		"max_tokens":      2200,

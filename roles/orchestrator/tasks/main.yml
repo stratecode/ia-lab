@@ -226,6 +226,23 @@
             );
             CREATE INDEX IF NOT EXISTS ix_initiative_task_links_initiative_launch_order ON initiative_task_links (initiative_id, launch_order);
 
+            DO $$
+            DECLARE
+              current_dims INTEGER;
+            BEGIN
+              SELECT atttypmod - 4 INTO current_dims
+              FROM pg_attribute
+              WHERE attrelid = 'semantic_chunks'::regclass
+                AND attname = 'embedding'
+                AND NOT attisdropped;
+              IF current_dims IS NOT NULL AND current_dims <> {{ orchestrator_semantic_embedding_dimensions }} THEN
+                DROP TABLE semantic_chunks;
+              END IF;
+            EXCEPTION
+              WHEN undefined_table THEN
+                NULL;
+            END $$;
+
             CREATE TABLE IF NOT EXISTS semantic_chunks (
               id UUID PRIMARY KEY,
               source_type TEXT NOT NULL,
@@ -238,7 +255,7 @@
               content_text TEXT NOT NULL,
               content_hash TEXT NOT NULL,
               metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-              embedding vector(1024) NOT NULL,
+              embedding vector({{ orchestrator_semantic_embedding_dimensions }}) NOT NULL,
               created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
               updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
               UNIQUE (source_type, source_id, chunk_index, content_hash)

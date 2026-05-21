@@ -120,16 +120,20 @@ func (s *Server) submitBridgeTaskResult(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	case "success":
-		if _, err := s.Postgres.CompleteTask(r.Context(), taskID, "bridge:"+bridgeID, firstNonEmptyString(derefStringPtr(body.Summary), "Local bridge execution completed"), results); err != nil {
+		if completed, err := s.Postgres.CompleteTask(r.Context(), taskID, "bridge:"+bridgeID, firstNonEmptyString(derefStringPtr(body.Summary), "Local bridge execution completed"), results); err != nil {
 			writeDetail(w, http.StatusInternalServerError, err.Error())
 			return
+		} else if completed != nil {
+			s.indexTask(r.Context(), completed.ID)
 		}
 		s.reconcileRootTask(r.Context(), taskID)
 	default:
 		errorMessage := firstNonEmptyString(derefStringPtr(body.ErrorMessage), derefStringPtr(body.Stderr), derefStringPtr(body.Stdout), "Local bridge execution failed")
-		if _, err := s.Postgres.FailTask(r.Context(), taskID, "bridge:"+bridgeID, errorMessage, errorMessage, results); err != nil {
+		if failed, err := s.Postgres.FailTask(r.Context(), taskID, "bridge:"+bridgeID, errorMessage, errorMessage, results); err != nil {
 			writeDetail(w, http.StatusInternalServerError, err.Error())
 			return
+		} else if failed != nil {
+			s.indexTask(r.Context(), failed.ID)
 		}
 		s.reconcileRootTask(r.Context(), taskID)
 	}
@@ -231,6 +235,9 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 	}
 	if err := s.Postgres.UpdateToolInvocationArtifactIDs(ctx, invocationID, artifactIDs); err != nil {
 		return nil, "", nil, err
+	}
+	for _, artifactID := range artifactIDs {
+		s.indexArtifact(ctx, artifactID)
 	}
 
 	results := map[string]any{
