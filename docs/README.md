@@ -6,6 +6,7 @@ This index lists all documentation artifacts for the Local AI Agents Platform, g
 
 Platform architecture, design decisions, and operational constraints.
 
+- [Master Plan](architecture/master-plan.md)
 - [Architecture Overview](architecture/overview.md)
 - [Task Types Taxonomy](architecture/task-types.md)
 - [Operational Limits](architecture/operational-limits.md)

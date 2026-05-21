@@ -2,6 +2,8 @@
 
 This guide explains how to use the platform as it actually exists today: through Telegram, Open WebUI, the orchestrator HTTP API, and the capability layer exposed behind them.
 
+This document describes operational usage. For the canonical product definition, MVP boundaries, and roadmap, use the [Master Plan](architecture/master-plan.md).
+
 ## Entry points
 
 There are four practical ways to use the system:

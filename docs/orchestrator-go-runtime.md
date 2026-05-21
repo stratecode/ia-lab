@@ -2,6 +2,8 @@
 
 This document defines the production-oriented Go runtime that now owns `orchestrator.service`. Python remains only where it still earns its keep: the document and image sidecars.
 
+This is a runtime scope document, not the product roadmap. For validated workflow, MVP boundaries, and next implementation priorities, use the [Master Plan](architecture/master-plan.md).
+
 ## Current scope
 
 The Go runtime covers the compatibility base and the first write-oriented lifecycle wave:

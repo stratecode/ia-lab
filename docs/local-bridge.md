@@ -2,6 +2,8 @@
 
 This document explains how to install, run, and troubleshoot the local execution bridge that connects one workspace on the control machine to the Go orchestrator.
 
+This document is operational. It describes how the bridge works and how to run it. For product direction, validated scope, and roadmap, use the [Master Plan](architecture/master-plan.md).
+
 The bridge is intentionally narrow:
 
 - it owns one workspace root

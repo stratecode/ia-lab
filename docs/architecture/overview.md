@@ -2,6 +2,8 @@
 
 Describes the layered architecture of the Local AI Agents Platform, defining each system layer's responsibility, constituent components, and boundaries with adjacent layers.
 
+This document describes system structure. For official product direction, validated scope, MVP boundaries, and roadmap, use the [Master Plan](master-plan.md).
+
 ## System Layers
 
 The platform is organized into five distinct layers, each with a clear responsibility boundary. Communication flows downward through the stack, with events propagating upward for observability and control.

@@ -161,6 +161,8 @@ Deployment now includes the minimum PostgreSQL compatibility patch required by t
 
 The canonical deployment path is the `orchestrator` role plus the Go binary built from `cmd/orchestrator-go`. The remaining Python runtime is intentionally narrow and limited to `src/cap_sidecars/` because PDF/DOCX/OCR tooling is still better there than in a performative rewrite.
 
+For the official product direction, validated workflow, and next implementation priorities, use the [Master Plan](docs/architecture/master-plan.md). This README summarizes the repository and deployment shape; it is not the roadmap authority.
+
 ## Observability
 
 - **Prometheus** — system metrics via node_exporter
@@ -190,6 +192,7 @@ Sensitive variables in the vault:
 
 ## Additional documentation
 
+- [Master Plan](docs/architecture/master-plan.md) — canonical product direction, MVP boundaries, and roadmap
 - [Getting Started](docs/getting-started.md) — full setup guide from scratch (SSH keys, vault, first run)
 - [System Usage Guide](docs/system-usage.md) — Telegram, Open WebUI, and orchestrator API usage
 - [Orchestrator Go Runtime](docs/orchestrator-go-runtime.md) — Go runtime architecture, build flow, and deployment model
