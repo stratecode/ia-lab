@@ -102,13 +102,13 @@ The bot is access-restricted to the Telegram user IDs configured in `LAB_TELEGRA
 /run prepara un plan e implementa una mejora de logs en el orquestador
 /plan diseña el trabajo para migrar el servicio a systemd separado
 /coder resume este traceback y dime la causa raíz
-/planner diseña un plan de despliegue para FastAPI + Redis + PostgreSQL
+/planner diseña un plan de despliegue para el runtime Go del orquestador con Redis y PostgreSQL
 /web últimas novedades de PostgreSQL logical replication
 /fetch https://example.com/article
 /doc https://example.com/spec.pdf resume los riesgos principales
 /image https://example.com/screenshot.png
 /research compara NATS vs Redis Streams para colas internas
-/eval últimas mejoras de FastAPI en 2026
+/eval últimas mejoras del runtime Go del orquestador en 2026
 /server services
 ```
 

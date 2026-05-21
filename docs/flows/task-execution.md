@@ -13,7 +13,7 @@ The task execution flow is the primary workflow in the Local AI Agents Platform.
 | Attribute | Value |
 |-----------|-------|
 | **Participating Agent** | Orchestrator |
-| **Trigger** | User request via Interface Layer (Telegram, Slack, Web UI) |
+| **Trigger** | User request via Interface Layer (Telegram, Open WebUI, or TUI/CLI bridge) |
 | **Data Payload** | `TaskCreatedPayload`: task_id (UUID), task_description (string), metadata (object), source_channel (string), timestamp (ISO 8601) |
 | **Terminal Conditions** | **Success:** Task persisted with state `created`, `task_lifecycle.created` event emitted. **Failure:** Validation error (missing description, invalid metadata), task rejected before persistence. |
 

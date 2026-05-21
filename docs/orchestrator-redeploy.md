@@ -23,8 +23,7 @@ set -a && source .env && set +a
 Run these checks before touching the host:
 
 ```bash
-python3 -m compileall src/orchestrator
-pytest -q tests/unit/test_consumer_loop.py tests/unit/test_main_helpers.py
+./scripts/test-orchestrator-go.sh
 ansible-playbook playbooks/bootstrap.yml --syntax-check
 ```
 
@@ -89,7 +88,7 @@ Then confirm interactively from Telegram:
 If the new deploy fails, keep rollback boring:
 
 1. Restore the previous backup tarball from `/srv/ai-lab/backups/`
-2. Reinstall the previous package or restore the prior virtualenv snapshot
+2. Restore the previous Go runtime binary and the sidecar environment snapshot if required
 3. Restore the previous unit files in `/etc/systemd/system/`
 4. Restart `orchestrator.service`
 5. Confirm `/health`, cleanup timer, and backup timer again

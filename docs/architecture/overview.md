@@ -11,15 +11,15 @@ The platform is organized into five distinct layers, each with a clear responsib
 | Attribute | Description |
 |-----------|-------------|
 | **Responsibility** | Receives user requests from external channels, normalizes input into a common command format, and delivers responses back to users. Acts as the sole entry point for human interaction with the platform. |
-| **Components** | Telegram Bot, Slack Integration, Web UI |
+| **Components** | Telegram Bot, Open WebUI, TUI/CLI Local Bridge |
 | **Upper Boundary** | External users and third-party messaging platforms |
-| **Lower Boundary** | Orchestration Layer — passes normalized requests to n8n Workflows or FastAPI Orchestrator via HTTP/webhook |
+| **Lower Boundary** | Orchestration Layer — passes normalized requests to the Go orchestrator via HTTP or bridge APIs |
 
 **Component Details:**
 
-- **Telegram Bot** — Listens for commands and messages via Telegram Bot API long-polling; translates chat messages into structured task requests
-- **Slack Integration** — Receives slash commands and interactive messages via Slack Events API; maps Slack threads to task conversations
-- **Web UI** — Browser-based dashboard for task management, agent monitoring, and manual overrides; communicates directly with FastAPI Orchestrator
+- **Telegram Bot** — Listens for commands and messages via Telegram Bot API long-polling; translates operator messages into structured task or initiative requests
+- **Open WebUI** — Browser-based conversational UI connected to local models and the orchestrator-compatible backend
+- **TUI/CLI Local Bridge** — Primary operator cockpit for initiative flow, selective launch, approvals, and local execution bridge management
 
 ---
 
@@ -28,15 +28,17 @@ The platform is organized into five distinct layers, each with a clear responsib
 | Attribute | Description |
 |-----------|-------------|
 | **Responsibility** | Routes incoming requests to the appropriate agent, manages task lifecycle state, enforces [operational limits](operational-limits.md), coordinates multi-agent workflows, and handles [approval gates](../security/approval-model.md). |
-| **Components** | n8n Workflows, FastAPI Orchestrator, Redis Task Queue |
+| **Components** | Go Orchestrator API, Embedded Worker Runtime, Redis Task Queue, PostgreSQL Persistence, Capability Sidecars |
 | **Upper Boundary** | Interface Layer — receives normalized requests via HTTP/webhook |
 | **Lower Boundary** | Agent Layer — dispatches tasks to agents via Redis Task Queue |
 
 **Component Details:**
 
-- **n8n Workflows** — Visual workflow automation handling channel-specific routing logic; transforms interface-layer webhooks into orchestrator API calls
-- **FastAPI Orchestrator** — Core service managing task state machine, [permission enforcement](../security/permissions.md), scheduling decisions per [resource scheduling](resource-scheduling.md), and event emission
+- **Go Orchestrator API** — Core control plane managing task and initiative state machines, [permission enforcement](../security/permissions.md), scheduling decisions per [resource scheduling](resource-scheduling.md), research, approvals, and event-facing persistence
+- **Embedded Worker Runtime** — Claims remote planner, researcher, coder, and reviewer tasks, executes supported flows, and reconciles task trees
 - **Redis Task Queue** — Priority-based message broker decoupling orchestration from agent execution; supports priority-first, FIFO-within-priority scheduling
+- **PostgreSQL Persistence** — System of record for tasks, initiatives, approvals, artifacts, evaluations, and bridge state
+- **Capability Sidecars** — Narrow Python services for document and image processing where the tooling still justifies it
 
 ---
 
@@ -105,14 +107,16 @@ The platform is organized into five distinct layers, each with a clear responsib
 graph TB
     subgraph "Interface Layer"
         TELEGRAM[Telegram Bot]
-        SLACK[Slack Integration]
-        WEBUI[Web UI]
+        WEBUI[Open WebUI]
+        TUI[TUI/CLI Bridge]
     end
 
     subgraph "Orchestration Layer"
-        N8N[n8n Workflows]
-        FASTAPI[FastAPI Orchestrator]
+        GOAPI[Go Orchestrator API]
+        GOWORKER[Embedded Worker Runtime]
         QUEUE[Redis Task Queue]
+        POSTGRES[PostgreSQL]
+        SIDECARS[Python Sidecars]
     end
 
     subgraph "Agent Layer"
@@ -139,11 +143,13 @@ graph TB
         GIT[Git Repos]
     end
 
-    TELEGRAM --> N8N
-    SLACK --> N8N
-    WEBUI --> FASTAPI
-    N8N --> FASTAPI
-    FASTAPI --> QUEUE
+    TELEGRAM --> GOAPI
+    WEBUI --> GOAPI
+    TUI --> GOAPI
+    GOAPI --> QUEUE
+    GOAPI --> POSTGRES
+    GOAPI --> SIDECARS
+    GOWORKER --> QUEUE
     QUEUE --> PLANNER
     QUEUE --> CODER
     QUEUE --> REVIEWER
@@ -158,7 +164,7 @@ graph TB
 
     CODER --> GIT
     INFRA_AGENT --> DOCKER
-    FASTAPI --> REDIS
+    GOAPI --> REDIS
     PROMETHEUS --> GRAFANA
 ```
 
@@ -199,7 +205,7 @@ graph TB
 
         subgraph "Docker Containers"
             GRAFANA_C[Grafana Container]
-            N8N_C[n8n Container]
+            POSTGRES_C[PostgreSQL Container]
         end
 
         subgraph "Systemd Services"
@@ -207,7 +213,9 @@ graph TB
             LLAMA_SVC2[llama-planner.service]
             LLAMA_SVC3[llama-utility.service]
             LLAMA_SVC4[llama-embeddings.service]
-            FASTAPI_SVC[fastapi-orchestrator.service]
+            ORCHGO_SVC[orchestrator.service]
+            DOCS_SIDECAR[orchestrator-cap-docs.service]
+            IMAGES_SIDECAR[orchestrator-cap-images.service]
             REDIS_SVC[redis.service]
             PROM_SVC[prometheus.service]
         end
@@ -226,20 +234,19 @@ graph TB
     subgraph "External"
         USERS[Users]
         TELEGRAM_API[Telegram API]
-        SLACK_API[Slack API]
         ROUTE53[AWS Route53 DDNS]
     end
 
     USERS --> NGINX_SVC
-    TELEGRAM_API --> N8N_C
-    SLACK_API --> N8N_C
     NGINX_SVC --> GRAFANA_C
-    NGINX_SVC --> FASTAPI_SVC
-    NGINX_SVC --> N8N_C
-    FASTAPI_SVC --> REDIS_SVC
-    FASTAPI_SVC --> LLAMA_SVC1
-    FASTAPI_SVC --> LLAMA_SVC2
-    FASTAPI_SVC --> LLAMA_SVC3
+    NGINX_SVC --> ORCHGO_SVC
+    ORCHGO_SVC --> REDIS_SVC
+    ORCHGO_SVC --> POSTGRES_C
+    ORCHGO_SVC --> DOCS_SIDECAR
+    ORCHGO_SVC --> IMAGES_SIDECAR
+    ORCHGO_SVC --> LLAMA_SVC1
+    ORCHGO_SVC --> LLAMA_SVC2
+    ORCHGO_SVC --> LLAMA_SVC3
     LLAMA_SVC1 --> VULKAN
     LLAMA_SVC2 --> VULKAN
     LLAMA_SVC3 --> VULKAN

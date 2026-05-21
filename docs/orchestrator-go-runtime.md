@@ -1,6 +1,6 @@
 # Orchestrator Go Runtime
 
-This document defines the production-oriented Go runtime that now owns `orchestrator.service`. The legacy Python API runtime has been retired. Python remains only where it still earns its keep: the document and image sidecars.
+This document defines the production-oriented Go runtime that now owns `orchestrator.service`. Python remains only where it still earns its keep: the document and image sidecars.
 
 ## Current scope
 
@@ -46,14 +46,14 @@ The Go runtime covers the compatibility base and the first write-oriented lifecy
 Current write support is intentionally narrow:
 
 - `POST /tasks` persists a root task, applies idempotency, classifies it into `planner` or `coder`, and enqueues it in Redis.
-- queue capacity is enforced with the same environment contract already used by the Python service.
+- queue capacity is enforced through the same environment contract used by the current runtime.
 - if Redis enqueue fails after persistence, the task is compensated to `cancelled` instead of being left queued in fiction only.
 - `PATCH /tasks/{id}` enforces valid state transitions.
 - `POST /tasks/{id}/cancel` cancels a task only from cancellable states.
 - `POST /approvals/{id}/approve` resolves a pending approval, transitions the task back to `queued`, and re-enqueues it for worker pickup.
 - `POST /approvals/{id}/reject` resolves a pending approval and cancels the task.
 - an embedded worker registers itself in Redis, emits heartbeats, claims queued planner/coder tasks, and moves them into `in_progress`.
-- local bridge registration, heartbeat, task claim, and result submission now live in the Go runtime instead of the retired Python API.
+- local bridge registration, heartbeat, task claim, and result submission now live in the Go runtime.
 - `planner` tasks can now call the configured planner LLM endpoint and persist the returned structured plan.
 - `coder` tasks can now execute real `aider-task` runs when `metadata.repo_name` or `metadata.repo_path` is provided.
 - the fallback coder path still supports:
