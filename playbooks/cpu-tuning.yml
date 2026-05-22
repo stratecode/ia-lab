@@ -1,0 +1,7 @@
+---
+- name: Apply CPU tuning for AMD homelab hosts
+  hosts: all
+  become: true
+
+  roles:
+    - role: cpu_tuning

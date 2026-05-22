@@ -1,0 +1,4 @@
+- name: Reload systemd for cpu tuning
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: cpu_tuning_enabled

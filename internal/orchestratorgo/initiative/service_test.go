@@ -2,6 +2,11 @@ package initiative
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -27,6 +32,36 @@ func TestGenerateRequirementsFallsBackToStructuredShape(t *testing.T) {
 	}
 	if artifacts.Markdown == "" {
 		t.Fatal("expected markdown output")
+	}
+}
+
+func TestGenerateRequirementsFallsBackWhenPlannerPayloadIsInvalid(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": `{"title":"broken","scope":["x"]}`}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	svc := New(config.Config{
+		LlamaPlannerBaseURL: server.URL + "/v1",
+		LlamaTimeoutSeconds: 5,
+		LlamaPlannerAPIKey:  "",
+	}, nil)
+	item := &domain.InitiativeResponse{
+		ID:            "initiative-invalid-req",
+		Title:         "Workspace delivery MVP",
+		WorkspaceRoot: "/tmp/initiative-workspace",
+		Goal:          "Turn an idea into approved requirements",
+	}
+	artifacts, err := svc.GenerateRequirements(context.Background(), item, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := asString(artifacts.JSON["objective"]); got != item.Goal {
+		t.Fatalf("expected fallback objective %q, got %q", item.Goal, got)
 	}
 }
 
@@ -76,6 +111,182 @@ func TestGenerateExecutionPlanFallsBackToMultiAgentBacklog(t *testing.T) {
 		if !foundAgents[agent] {
 			t.Fatalf("expected %s in generated backlog, got %#v", agent, artifacts.JSON)
 		}
+	}
+}
+
+func TestGenerateExecutionPlanFallsBackWhenPlannerPayloadIsInvalid(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": `{"title":"broken","epics":[]}`}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	svc := New(config.Config{
+		LlamaPlannerBaseURL: server.URL + "/v1",
+		LlamaTimeoutSeconds: 5,
+	}, nil)
+	item := &domain.InitiativeResponse{
+		ID:            "initiative-invalid-plan",
+		Title:         "Workspace delivery MVP",
+		WorkspaceRoot: "/tmp/initiative-workspace",
+		Goal:          "Create a runnable MVP scaffold",
+	}
+	artifacts, err := svc.GenerateExecutionPlan(context.Background(), item, map[string]any{
+		"architecture": "Go orchestrator plus local bridge",
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := asString(artifacts.JSON["title"]); got != item.Title {
+		t.Fatalf("expected fallback title %q, got %q", item.Title, got)
+	}
+}
+
+func TestGenerateExecutionPlanUsesRepoWorkflowForExistingGitRepo(t *testing.T) {
+	svc := New(config.Config{}, nil)
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	item := &domain.InitiativeResponse{
+		ID:            "initiative-3",
+		Title:         "Repo maintenance MVP",
+		WorkspaceRoot: filepath.Join(root, "python-slugify"),
+		Goal:          "Patch the CLI regression and validate the repository",
+	}
+	if err := os.MkdirAll(item.WorkspaceRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(item.WorkspaceRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := svc.GenerateExecutionPlan(context.Background(), item, map[string]any{
+		"architecture": "Go orchestrator plus local bridge",
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := asString(artifacts.JSON["project_flow"]); got != "repo_workflow_v1" {
+		t.Fatalf("expected repo_workflow_v1, got %q", got)
+	}
+	epics := artifacts.JSON["epics"].([]map[string]any)
+	coderTask := epics[1]["tasks"].([]map[string]any)[0]
+	if !asBool(coderTask["approval_required"]) {
+		t.Fatal("expected coder task to require approval")
+	}
+	metadata := coderTask["metadata"].(map[string]any)
+	toolRequest := metadata["tool_request"].(map[string]any)
+	if asString(toolRequest["tool"]) != "apply_patch" {
+		t.Fatalf("expected apply_patch tool, got %#v", toolRequest["tool"])
+	}
+	if asString(toolRequest["patch"]) == "" {
+		t.Fatal("expected deterministic patch payload")
+	}
+}
+
+func TestGenerateExecutionPlanUsesBenchmarkCaseFileWhenPresent(t *testing.T) {
+	svc := New(config.Config{}, nil)
+	root := t.TempDir()
+	workspaceRoot := filepath.Join(root, "bench-repo")
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, ".lab"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	casePayload := map[string]any{
+		"id":                        "bench-case-1",
+		"case_type":                 "review_only",
+		"repo_profile":              "python_cli_framework",
+		"repo_url":                  "https://github.com/pallets/click",
+		"default_branch":            "main",
+		"project_type":              "existing_repo",
+		"runtime_or_stack":          "python",
+		"project_root":              ".",
+		"test_focus":                "option parsing review",
+		"test_command":              []string{"python3", "-m", "pytest", "-q", "tests/test_arguments.py"},
+		"expected_files":            []string{"src/click/core.py", "tests/test_arguments.py"},
+		"coder_tool":                "write_file",
+		"patch_target":              ".lab/repo-workflow-marker.txt",
+		"write_content":             "benchmark marker\n",
+		"coder_summary":             "Apply the benchmark-defined deterministic repo change.",
+		"benchmark_memory_mode":     "on",
+		"benchmark_memory_strategy": "pattern_first",
+	}
+	raw, _ := json.Marshal(casePayload)
+	if err := os.WriteFile(filepath.Join(workspaceRoot, ".lab", "benchmark-case.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	item := &domain.InitiativeResponse{
+		ID:            "initiative-4",
+		Title:         "Repo benchmark",
+		WorkspaceRoot: workspaceRoot,
+		Goal:          "Run deterministic benchmark workflow",
+	}
+	artifacts, err := svc.GenerateExecutionPlan(context.Background(), item, map[string]any{
+		"architecture": "Go orchestrator plus local bridge",
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	epics := artifacts.JSON["epics"].([]map[string]any)
+	coderTask := epics[1]["tasks"].([]map[string]any)[0]
+	metadata := coderTask["metadata"].(map[string]any)
+	if got := asString(metadata["benchmark_case_id"]); got != "bench-case-1" {
+		t.Fatalf("expected benchmark case id in metadata, got %q", got)
+	}
+	if got := asString(metadata["context_memory_strategy"]); got != "pattern_first" {
+		t.Fatalf("expected benchmark strategy in metadata, got %q", got)
+	}
+	projectRequest := metadata["project_request"].(map[string]any)
+	if got := asString(projectRequest["repository_url"]); got != "https://github.com/pallets/click" {
+		t.Fatalf("expected repository_url from benchmark case, got %q", got)
+	}
+}
+
+func TestGenerateExecutionPlanUsesRepoWorkflowForBenchmarkTitleWithoutGitVisibility(t *testing.T) {
+	svc := New(config.Config{}, nil)
+	root := t.TempDir()
+	workspaceRoot := filepath.Join(root, "bench-repo")
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, ".lab"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"id":                        "bench-case-2",
+		"case_type":                 "deterministic_bugfix",
+		"repo_profile":              "benchmark_repo_workflow",
+		"repo_url":                  "https://github.com/example/demo",
+		"default_branch":            "main",
+		"project_type":              "existing_repo",
+		"runtime_or_stack":          "python",
+		"project_root":              ".",
+		"coder_tool":                "write_file",
+		"patch_target":              ".lab/repo-workflow-marker.txt",
+		"write_content":             "benchmark marker\n",
+		"coder_summary":             "Apply the benchmark-defined deterministic repo change.",
+		"benchmark_memory_mode":     "on",
+		"benchmark_memory_strategy": "repo_specific_first",
+	})
+	if err := os.WriteFile(filepath.Join(workspaceRoot, ".lab", "benchmark-case.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	item := &domain.InitiativeResponse{
+		ID:            "initiative-5",
+		Title:         "Benchmark demo-case",
+		WorkspaceRoot: workspaceRoot,
+		Goal:          "Run deterministic benchmark workflow",
+	}
+	artifacts, err := svc.GenerateExecutionPlan(context.Background(), item, map[string]any{
+		"architecture": "Go orchestrator plus local bridge",
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := asString(artifacts.JSON["project_flow"]); got != "repo_workflow_v1" {
+		t.Fatalf("expected repo_workflow_v1 for benchmark title, got %q", got)
 	}
 }
 
@@ -144,8 +355,8 @@ func TestResolveExecutionPolicyAndModeValidation(t *testing.T) {
 		t.Fatal("agent_remote should be blocked for local_bridge scope")
 	}
 	task.Task.Metadata["approval_required"] = true
-	if err := ValidateTaskLaunchAgainstPolicy(policy, task, domain.TaskLaunchModeAgentLocal); err == nil {
-		t.Fatal("approval_required task should not auto-launch")
+	if err := ValidateTaskLaunchAgainstPolicy(policy, task, domain.TaskLaunchModeAgentLocal); err != nil {
+		t.Fatalf("approval-gated local task should still launch and request execution approval later: %v", err)
 	}
 }
 

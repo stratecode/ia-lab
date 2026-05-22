@@ -69,14 +69,21 @@ func (s *Service) Build(ctx context.Context, req domain.ContextBuildRequest) (*d
 			}
 		}
 	}
+	enriched.MemoryMode, enriched.MemoryStrategy = resolveMemorySettings(enriched)
 	query := semantic.SanitizeText(buildQuery(enriched))
 	if query == "" {
 		return emptyPackage(enriched, agentType), nil
 	}
-	if enriched.WorkspaceRoot == nil && enriched.InitiativeID == nil {
+	if enriched.MemoryMode == "off" {
 		pkg := emptyPackage(enriched, agentType)
 		pkg.Query = query
-		pkg.Policies = []string{"Semantic retrieval skipped because no workspace_root or initiative_id scope was available."}
+		pkg.Policies = []string{"Semantic retrieval skipped because memory_mode=off."}
+		return pkg, nil
+	}
+	if enriched.WorkspaceRoot == nil && enriched.InitiativeID == nil && !hasRepoMemoryScope(enriched.Metadata) {
+		pkg := emptyPackage(enriched, agentType)
+		pkg.Query = query
+		pkg.Policies = []string{"Semantic retrieval skipped because no workspace_root, initiative_id, or repository memory scope was available."}
 		return pkg, nil
 	}
 	maxChunks := enriched.MaxChunks
@@ -96,6 +103,7 @@ func (s *Service) Build(ctx context.Context, req domain.ContextBuildRequest) (*d
 		Limit:         maxChunks * 3,
 		MaxChars:      maxChars,
 	}
+	applyRepoMemoryScope(&searchReq, enriched)
 	if enriched.WorkspaceRoot == nil {
 		searchReq.InitiativeID = enriched.InitiativeID
 	}
@@ -106,16 +114,18 @@ func (s *Service) Build(ctx context.Context, req domain.ContextBuildRequest) (*d
 	}
 	chunks := rankAndTrim(search.Items, enriched, maxChunks, maxChars)
 	pkg := &domain.ContextPackage{
-		AgentType:     agentType,
-		TaskID:        enriched.TaskID,
-		InitiativeID:  enriched.InitiativeID,
-		WorkspaceRoot: enriched.WorkspaceRoot,
-		Query:         query,
-		Chunks:        chunks,
-		SourceRefs:    sourceRefs(chunks),
-		Constraints:   []string{"Use retrieved context only as supporting evidence; orchestration policy remains authoritative."},
-		Policies:      []string{"Do not expose secrets. Do not retrieve outside the filtered initiative/workspace scope."},
-		GeneratedAt:   time.Now().UTC(),
+		AgentType:      agentType,
+		TaskID:         enriched.TaskID,
+		InitiativeID:   enriched.InitiativeID,
+		WorkspaceRoot:  enriched.WorkspaceRoot,
+		Query:          query,
+		MemoryMode:     enriched.MemoryMode,
+		MemoryStrategy: enriched.MemoryStrategy,
+		Chunks:         chunks,
+		SourceRefs:     sourceRefs(chunks),
+		Constraints:    []string{"Use retrieved context only as supporting evidence; orchestration policy remains authoritative."},
+		Policies:       []string{"Do not expose secrets. Do not retrieve outside the filtered initiative/workspace scope."},
+		GeneratedAt:    time.Now().UTC(),
 	}
 	format := strings.TrimSpace(enriched.OutputFormat)
 	if format == "" {
@@ -166,6 +176,8 @@ func (s *Service) BuildForTask(ctx context.Context, task *domain.TaskResponse) (
 		WorkspaceRoot:   task.WorkspacePath,
 		TaskDescription: task.Description,
 		Metadata:        task.Metadata,
+		MemoryMode:      firstNonEmptyMetadata(task.Metadata, "context_memory_mode", "benchmark_memory_mode", "memory_mode"),
+		MemoryStrategy:  firstNonEmptyMetadata(task.Metadata, "context_memory_strategy", "benchmark_memory_strategy", "memory_strategy"),
 		OutputFormat:    "both",
 		Outcomes:        outcomes,
 		IncludeFailed:   includeFailed,
@@ -224,15 +236,17 @@ func maxInt(a, b int) int {
 
 func emptyPackage(req domain.ContextBuildRequest, agentType string) *domain.ContextPackage {
 	return &domain.ContextPackage{
-		AgentType:     agentType,
-		TaskID:        req.TaskID,
-		InitiativeID:  req.InitiativeID,
-		WorkspaceRoot: req.WorkspaceRoot,
-		Chunks:        []domain.ContextChunk{},
-		SourceRefs:    []string{},
-		Constraints:   []string{},
-		Policies:      []string{},
-		GeneratedAt:   time.Now().UTC(),
+		AgentType:      agentType,
+		TaskID:         req.TaskID,
+		InitiativeID:   req.InitiativeID,
+		WorkspaceRoot:  req.WorkspaceRoot,
+		MemoryMode:     req.MemoryMode,
+		MemoryStrategy: req.MemoryStrategy,
+		Chunks:         []domain.ContextChunk{},
+		SourceRefs:     []string{},
+		Constraints:    []string{},
+		Policies:       []string{},
+		GeneratedAt:    time.Now().UTC(),
 	}
 }
 
@@ -240,6 +254,22 @@ func buildQuery(req domain.ContextBuildRequest) string {
 	var b strings.Builder
 	b.WriteString(req.TaskDescription)
 	if len(req.Metadata) > 0 {
+		if repoURL, ok := firstStringFromMetadata(req.Metadata, "repository_url", "repo_url"); ok {
+			b.WriteString("\nRepository URL: ")
+			b.WriteString(repoURL)
+		}
+		if repoProfile, ok := firstStringFromMetadata(req.Metadata, "repo_profile"); ok {
+			b.WriteString("\nRepository profile: ")
+			b.WriteString(repoProfile)
+		}
+		if caseID, ok := firstStringFromMetadata(req.Metadata, "benchmark_case_id"); ok {
+			b.WriteString("\nBenchmark case: ")
+			b.WriteString(caseID)
+		}
+		if caseType, ok := firstStringFromMetadata(req.Metadata, "benchmark_case_type"); ok {
+			b.WriteString("\nBenchmark case type: ")
+			b.WriteString(caseType)
+		}
 		if goal, ok := req.Metadata["goal"].(string); ok {
 			b.WriteString("\nGoal: ")
 			b.WriteString(goal)
@@ -270,6 +300,37 @@ func allowedSources(input []string) []string {
 		string(domain.SemanticSourceReview),
 		string(domain.SemanticSourceRepoDoc),
 	}
+}
+
+func applyRepoMemoryScope(searchReq *domain.SemanticSearchRequest, req domain.ContextBuildRequest) {
+	if searchReq == nil {
+		return
+	}
+	repoURL := strings.TrimSpace(metadataString(req.Metadata, "repository_url", "repo_url"))
+	repoProfile := strings.TrimSpace(metadataString(req.Metadata, "repo_profile"))
+	caseType := strings.TrimSpace(metadataString(req.Metadata, "benchmark_case_type"))
+	strategy := normalizeMemoryStrategy(req.MemoryStrategy)
+	if repoURL == "" && repoProfile == "" && caseType == "" {
+		return
+	}
+	if repoURL != "" {
+		searchReq.RepositoryURL = &repoURL
+	}
+	if repoProfile != "" {
+		searchReq.RepoProfile = &repoProfile
+	}
+	if caseType != "" {
+		searchReq.CaseType = &caseType
+	}
+	if strategy == "repo_specific_first" || strategy == "pattern_first" {
+		searchReq.WorkspaceRoot = nil
+	}
+}
+
+func hasRepoMemoryScope(metadata map[string]any) bool {
+	return strings.TrimSpace(metadataString(metadata, "repository_url", "repo_url")) != "" ||
+		strings.TrimSpace(metadataString(metadata, "repo_profile")) != "" ||
+		strings.TrimSpace(metadataString(metadata, "benchmark_case_type")) != ""
 }
 
 func requestedOutcomes(req domain.ContextBuildRequest) []string {
@@ -326,13 +387,18 @@ func rankAndTrim(items []domain.SemanticChunkResponse, req domain.ContextBuildRe
 		if len([]rune(text)) > remaining {
 			text = semantic.TruncateChars(text, remaining)
 		}
+		metadata := semantic.SanitizeMap(item.Metadata)
+		matchType := memoryMatchType(item, req)
+		if matchType != "" {
+			metadata["memory_match_type"] = matchType
+		}
 		chunk := domain.ContextChunk{
 			ID:           item.ID,
 			SourceType:   item.SourceType,
 			SourceID:     item.SourceID,
 			ChunkIndex:   item.ChunkIndex,
 			ContentText:  text,
-			Metadata:     semantic.SanitizeMap(item.Metadata),
+			Metadata:     metadata,
 			Score:        item.Score,
 			SourceRef:    fmt.Sprintf("%s:%s#%d", item.SourceType, item.SourceID, item.ChunkIndex),
 			InitiativeID: item.InitiativeID,
@@ -364,7 +430,134 @@ func adjustedScore(item domain.SemanticChunkResponse, req domain.ContextBuildReq
 			score += 0.08
 		}
 	}
+	repoURL := metadataString(req.Metadata, "repository_url", "repo_url")
+	itemRepoURL := metadataString(item.Metadata, "repository_url", "repo_url")
+	repoProfile := metadataString(req.Metadata, "repo_profile")
+	itemRepoProfile := metadataString(item.Metadata, "repo_profile")
+	caseType := metadataString(req.Metadata, "benchmark_case_type")
+	itemCaseType := metadataString(item.Metadata, "benchmark_case_type")
+	strategy := normalizeMemoryStrategy(req.MemoryStrategy)
+	switch strategy {
+	case "repo_specific_first":
+		if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
+			score += 0.45
+		}
+		if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
+			score += 0.24
+		}
+		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
+			score += 0.14
+		}
+	case "pattern_first":
+		if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
+			score += 0.34
+		}
+		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
+			score += 0.24
+		}
+		if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
+			score += 0.18
+		}
+	default:
+		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
+			score += 0.10
+		}
+		if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
+			score += 0.08
+		}
+		if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
+			score += 0.06
+		}
+	}
 	return score
+}
+
+func resolveMemorySettings(req domain.ContextBuildRequest) (string, string) {
+	mode := normalizeMemoryMode(req.MemoryMode)
+	if mode == "" {
+		mode = normalizeMemoryMode(metadataString(req.Metadata, "context_memory_mode", "benchmark_memory_mode", "memory_mode"))
+	}
+	if mode == "" {
+		mode = "on"
+	}
+	strategy := normalizeMemoryStrategy(req.MemoryStrategy)
+	if strategy == "" {
+		strategy = normalizeMemoryStrategy(metadataString(req.Metadata, "context_memory_strategy", "benchmark_memory_strategy", "memory_strategy"))
+	}
+	if strategy == "" {
+		strategy = "repo_specific_first"
+	}
+	return mode, strategy
+}
+
+func normalizeMemoryMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "off":
+		return "off"
+	case "on":
+		return "on"
+	default:
+		return ""
+	}
+}
+
+func normalizeMemoryStrategy(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "repo_specific_first":
+		return "repo_specific_first"
+	case "pattern_first":
+		return "pattern_first"
+	case "semantic_only":
+		return "semantic_only"
+	default:
+		return ""
+	}
+}
+
+func memoryMatchType(item domain.SemanticChunkResponse, req domain.ContextBuildRequest) string {
+	repoURL := metadataString(req.Metadata, "repository_url", "repo_url")
+	itemRepoURL := metadataString(item.Metadata, "repository_url", "repo_url")
+	if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
+		return "repo_specific"
+	}
+	repoProfile := metadataString(req.Metadata, "repo_profile")
+	itemRepoProfile := metadataString(item.Metadata, "repo_profile")
+	caseType := metadataString(req.Metadata, "benchmark_case_type")
+	itemCaseType := metadataString(item.Metadata, "benchmark_case_type")
+	if (repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile) ||
+		(caseType != "" && itemCaseType != "" && caseType == itemCaseType) {
+		return "pattern_similar"
+	}
+	return "semantic_related"
+}
+
+func metadataString(metadata map[string]any, keys ...string) string {
+	if metadata == nil {
+		return ""
+	}
+	for _, key := range keys {
+		if value, ok := metadata[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	if projectRequest, ok := metadata["project_request"].(map[string]any); ok {
+		for _, key := range keys {
+			if value, ok := projectRequest[key].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	return ""
+}
+
+func firstStringFromMetadata(metadata map[string]any, keys ...string) (string, bool) {
+	value := metadataString(metadata, keys...)
+	return value, value != ""
+}
+
+func firstNonEmptyMetadata(metadata map[string]any, keys ...string) string {
+	value, _ := firstStringFromMetadata(metadata, keys...)
+	return value
 }
 
 func sourceRefs(chunks []domain.ContextChunk) []string {

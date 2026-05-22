@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -132,6 +133,50 @@ func TestPlannerBoilerplateFlowGeneratesMultiAgentSubtasks(t *testing.T) {
 	}
 }
 
+func TestPlannerRepoWorkflowGeneratesDeterministicRepoSubtasks(t *testing.T) {
+	plannerAgent := domain.AgentTypePlanner
+	root := t.TempDir()
+	workspaceRoot := filepath.Join(root, "python-slugify")
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	task := &domain.TaskResponse{
+		ID:            "task-existing-repo",
+		Description:   "Patch an existing repository",
+		AssignedAgent: &plannerAgent,
+		Metadata: map[string]any{
+			"workspace_root": workspaceRoot,
+			"project_request": map[string]any{
+				"project_root": ".",
+				"goal":         "Validate regex pattern wiring",
+			},
+		},
+	}
+	r := New(config.Config{DefaultGitBranch: "main"}, nil)
+	result := r.Execute(task)
+	if result.Status != "success" {
+		t.Fatalf("unexpected planner status: %#v", result)
+	}
+	if got := asString(result.Results["project_flow"]); got != "repo_workflow_v1" {
+		t.Fatalf("expected repo_workflow_v1, got %q", got)
+	}
+	subtasks, ok := result.Results["subtasks"].([]map[string]any)
+	if !ok || len(subtasks) != 3 {
+		t.Fatalf("expected 3 subtasks, got %#v", result.Results["subtasks"])
+	}
+	if subtasks[1]["assigned_agent"] != "coder" || !asBool(subtasks[1]["requires_approval"]) {
+		t.Fatalf("expected approval-gated coder task, got %#v", subtasks[1])
+	}
+	coderMetadata := subtasks[1]["metadata"].(map[string]any)
+	toolRequest := coderMetadata["tool_request"].(map[string]any)
+	if asString(toolRequest["tool"]) != "apply_patch" {
+		t.Fatalf("expected apply_patch tool request, got %#v", toolRequest["tool"])
+	}
+	if asString(toolRequest["patch"]) == "" {
+		t.Fatal("expected deterministic patch payload")
+	}
+}
+
 func TestReviewerValidatesGeneratedProject(t *testing.T) {
 	root := t.TempDir()
 	projectRoot := filepath.Join(root, "demo-cli")
@@ -203,5 +248,61 @@ func TestReviewerIncludesSemanticFailureMemory(t *testing.T) {
 	}
 	if len(checks) != 1 || !strings.Contains(checks[0], "lab.json missing") {
 		t.Fatalf("unexpected checks: %#v", checks)
+	}
+}
+
+func TestBuildRepoWorkflowPlanUsesBenchmarkCaseFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".lab"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	casePayload := map[string]any{
+		"id":                        "bench-case-runner",
+		"case_type":                 "deterministic_bugfix",
+		"repo_profile":              "go_cli_tui",
+		"repo_url":                  "https://github.com/charmbracelet/glow",
+		"default_branch":            "master",
+		"project_type":              "existing_repo",
+		"runtime_or_stack":          "go",
+		"project_root":              ".",
+		"test_focus":                "markdown rendering regression",
+		"test_command":              []string{"go", "test", "./..."},
+		"expected_files":            []string{"main.go", "glow_test.go"},
+		"coder_tool":                "write_file",
+		"patch_target":              ".lab/repo-workflow-marker.txt",
+		"write_content":             "benchmark marker\n",
+		"coder_summary":             "Apply benchmark-defined deterministic repo change.",
+		"benchmark_memory_mode":     "on",
+		"benchmark_memory_strategy": "repo_specific_first",
+	}
+	raw, _ := json.Marshal(casePayload)
+	if err := os.WriteFile(filepath.Join(root, ".lab", "benchmark-case.json"), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, ok := buildRepoWorkflowPlan(map[string]any{
+		"workspace_root": root,
+		"project_request": map[string]any{
+			"goal": "Run benchmark workflow",
+		},
+	})
+	if !ok {
+		t.Fatal("expected repo workflow plan")
+	}
+	subtasks := result.Results["subtasks"].([]map[string]any)
+	coder := subtasks[1]
+	metadata := coder["metadata"].(map[string]any)
+	if got := asString(metadata["benchmark_case_id"]); got != "bench-case-runner" {
+		t.Fatalf("expected benchmark case id, got %q", got)
+	}
+	projectRequest := metadata["project_request"].(map[string]any)
+	if got := asString(projectRequest["runtime_or_stack"]); got != "go" {
+		t.Fatalf("expected runtime_or_stack from benchmark case, got %q", got)
+	}
+	toolRequest := metadata["tool_request"].(map[string]any)
+	if got := asString(toolRequest["path"]); got != ".lab/repo-workflow-marker.txt" {
+		t.Fatalf("expected benchmark patch target, got %q", got)
 	}
 }

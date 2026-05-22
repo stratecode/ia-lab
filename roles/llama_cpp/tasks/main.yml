@@ -3,7 +3,9 @@
     name:
       - build-essential
       - cmake
+      - curl
       - git
+      - jq
       - ninja-build
       - pkg-config
       - libssl-dev
@@ -49,6 +51,29 @@
     - { path: "{{ llama_cpp_cache_dir }}", owner: "{{ llama_cpp_user }}", group: "{{ llama_cpp_group }}", mode: "0755" }
   when: llama_cpp_enabled
 
+- name: Check existing llama.cpp source checkout health
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "{{ llama_cpp_src_dir }}"
+      - fsck
+      - --full
+      - --no-dangling
+  register: llama_cpp_src_health
+  changed_when: false
+  failed_when: false
+  when: llama_cpp_enabled
+
+- name: Remove corrupted llama.cpp source checkout
+  ansible.builtin.file:
+    path: "{{ llama_cpp_src_dir }}"
+    state: absent
+  when:
+    - llama_cpp_enabled
+    - llama_cpp_src_health.rc is defined
+    - llama_cpp_src_health.rc != 0
+
 - name: Clone llama.cpp source
   ansible.builtin.git:
     repo: https://github.com/ggml-org/llama.cpp.git
@@ -66,6 +91,46 @@
   register: llama_cpp_binary
   when: llama_cpp_enabled
 
+- name: Validate llama-server runtime linkage
+  ansible.builtin.command:
+    argv:
+      - ldd
+      - "{{ llama_cpp_build_dir }}/bin/llama-server"
+  register: llama_cpp_binary_ldd
+  changed_when: false
+  failed_when: false
+  when: llama_cpp_enabled and llama_cpp_binary.stat.exists
+
+- name: Detect zero-byte llama.cpp shared libraries
+  ansible.builtin.find:
+    paths: "{{ llama_cpp_build_dir }}/bin"
+    patterns: "libggml*.so*"
+    file_type: file
+    size: 0
+  register: llama_cpp_zero_byte_libs
+  when: llama_cpp_enabled and llama_cpp_binary.stat.exists
+
+- name: Compute whether llama.cpp rebuild is required
+  ansible.builtin.set_fact:
+    llama_cpp_rebuild_required: >-
+      {{
+        llama_cpp_git_clone.changed
+        or not llama_cpp_binary.stat.exists
+        or ((llama_cpp_binary_ldd.rc | default(0)) != 0)
+        or ((llama_cpp_zero_byte_libs.matched | default(0)) | int > 0)
+      }}
+  when: llama_cpp_enabled
+
+- name: Remove corrupted llama.cpp build directory before rebuild
+  ansible.builtin.file:
+    path: "{{ llama_cpp_build_dir }}"
+    state: absent
+  when:
+    - llama_cpp_enabled
+    - llama_cpp_rebuild_required | default(false)
+    - llama_cpp_binary.stat.exists
+    - ((llama_cpp_binary_ldd.rc | default(0)) != 0 or ((llama_cpp_zero_byte_libs.matched | default(0)) | int > 0))
+
 - name: Configure llama.cpp build
   ansible.builtin.command:
     argv:
@@ -82,7 +147,7 @@
       - -DGGML_NATIVE=ON
       - -DGGML_BLAS=ON
       - -DGGML_BLAS_VENDOR=OpenBLAS
-  when: llama_cpp_enabled and (llama_cpp_git_clone.changed or not llama_cpp_binary.stat.exists)
+  when: llama_cpp_enabled and llama_cpp_rebuild_required | default(false)
 
 - name: Build llama.cpp (async — may take several minutes)
   ansible.builtin.command:
@@ -90,14 +155,14 @@
       - cmake
       - --build
       - "{{ llama_cpp_build_dir }}"
-      - "-j{{ ansible_facts['processor_vcpus'] | default(llama_cpp_build_jobs, true) }}"
+      - "-j{{ llama_cpp_build_jobs | default(ansible_facts['processor_vcpus'], true) }}"
       - --config
       - Release
   async: "{{ llama_cpp_build_async_seconds }}"
   poll: "{{ llama_cpp_build_poll_seconds }}"
   register: llama_cpp_build_result
   notify: Restart llama.cpp services
-  when: llama_cpp_enabled and (llama_cpp_git_clone.changed or not llama_cpp_binary.stat.exists)
+  when: llama_cpp_enabled and llama_cpp_rebuild_required | default(false)
 
 - name: Validate Vulkan detection before service install
   ansible.builtin.command:
@@ -417,9 +482,39 @@
       OUTPUT_FILE="/var/lib/prometheus/node-exporter/llama_cpp.prom"
       TEMP_FILE="${OUTPUT_FILE}.tmp"
 
+      emit_failure_metrics() {
+        local reason="$1"
+        local missing_tool="${2:-}"
+        cat > "$TEMP_FILE" <<'HEADER'
+      # HELP llama_cpp_monitor_last_run_success Whether the last monitor run completed successfully (1=yes, 0=no)
+      # TYPE llama_cpp_monitor_last_run_success gauge
+      # HELP llama_cpp_monitor_dependency_missing Whether a required monitor dependency is missing (1=yes, 0=no)
+      # TYPE llama_cpp_monitor_dependency_missing gauge
+      # HELP llama_cpp_monitor_config_valid Whether the monitor configuration JSON is valid (1=yes, 0=no)
+      # TYPE llama_cpp_monitor_config_valid gauge
+      HEADER
+        echo "llama_cpp_monitor_last_run_success 0" >> "$TEMP_FILE"
+        echo "llama_cpp_monitor_config_valid 0" >> "$TEMP_FILE"
+        if [[ -n "$missing_tool" ]]; then
+          echo "llama_cpp_monitor_dependency_missing{tool=\"${missing_tool}\"} 1" >> "$TEMP_FILE"
+        fi
+        mv "$TEMP_FILE" "$OUTPUT_FILE"
+        echo "WARN: ${reason}" >&2
+        exit 0
+      }
+
+      for tool in jq curl awk grep systemctl; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+          emit_failure_metrics "required dependency missing: ${tool}" "$tool"
+        fi
+      done
+
       if [[ ! -f "$CONFIG_FILE" ]]; then
-        echo "ERROR: Config file not found: $CONFIG_FILE" >&2
-        exit 1
+        emit_failure_metrics "config file not found: $CONFIG_FILE"
+      fi
+
+      if ! jq empty "$CONFIG_FILE" >/dev/null 2>&1; then
+        emit_failure_metrics "invalid JSON config: $CONFIG_FILE"
       fi
 
       # Read thresholds from config
@@ -434,6 +529,12 @@
 
       # Start output
       cat > "$TEMP_FILE" <<'HEADER'
+      # HELP llama_cpp_monitor_last_run_success Whether the last monitor run completed successfully (1=yes, 0=no)
+      # TYPE llama_cpp_monitor_last_run_success gauge
+      # HELP llama_cpp_monitor_dependency_missing Whether a required monitor dependency is missing (1=yes, 0=no)
+      # TYPE llama_cpp_monitor_dependency_missing gauge
+      # HELP llama_cpp_monitor_config_valid Whether the monitor configuration JSON is valid (1=yes, 0=no)
+      # TYPE llama_cpp_monitor_config_valid gauge
       # HELP llama_cpp_memory_current_bytes Current memory usage per instance (cgroup)
       # TYPE llama_cpp_memory_current_bytes gauge
       # HELP llama_cpp_memory_max_bytes Memory limit per instance (cgroup)
@@ -448,10 +549,17 @@
       # TYPE llama_cpp_threshold_exceeded gauge
       HEADER
 
+      echo "llama_cpp_monitor_last_run_success 1" >> "$TEMP_FILE"
+      echo "llama_cpp_monitor_config_valid 1" >> "$TEMP_FILE"
+      echo "llama_cpp_monitor_dependency_missing{tool=\"jq\"} 0" >> "$TEMP_FILE"
+      echo "llama_cpp_monitor_dependency_missing{tool=\"curl\"} 0" >> "$TEMP_FILE"
+      echo "llama_cpp_monitor_dependency_missing{tool=\"awk\"} 0" >> "$TEMP_FILE"
+      echo "llama_cpp_monitor_dependency_missing{tool=\"grep\"} 0" >> "$TEMP_FILE"
+      echo "llama_cpp_monitor_dependency_missing{tool=\"systemctl\"} 0" >> "$TEMP_FILE"
+
       for i in $(seq 0 $((INSTANCE_COUNT - 1))); do
         SERVICE_NAME=$(jq -r ".instances[$i].service_name" "$CONFIG_FILE")
         PORT=$(jq -r ".instances[$i].port" "$CONFIG_FILE")
-        API_KEY=$(jq -r ".instances[$i].api_key" "$CONFIG_FILE")
         PRIORITY=$(jq -r ".instances[$i].priority" "$CONFIG_FILE")
 
         # ── Query cgroup memory stats via systemctl ──
@@ -559,6 +667,7 @@
       OnBootSec=30s
       OnUnitActiveSec={{ llama_cpp_monitoring.check_interval_seconds }}s
       AccuracySec=5s
+      Persistent=true
 
       [Install]
       WantedBy=timers.target

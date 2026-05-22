@@ -1,0 +1,108 @@
+- name: Gather service facts for CPU tuning
+  ansible.builtin.service_facts:
+  when: cpu_tuning_enabled
+
+- name: Check amd-pstate scaling driver
+  ansible.builtin.slurp:
+    src: /sys/devices/system/cpu/cpu0/cpufreq/scaling_driver
+  register: cpu_tuning_scaling_driver
+  when: cpu_tuning_enabled
+
+- name: Assert amd-pstate-epp is active
+  ansible.builtin.assert:
+    that:
+      - (cpu_tuning_scaling_driver.content | b64decode | trim) == "amd-pstate-epp"
+    fail_msg: >-
+      cpu_tuning requires amd-pstate-epp, got
+      {{ cpu_tuning_scaling_driver.content | b64decode | trim }}
+  when: cpu_tuning_enabled
+
+- name: Install CPU tuning packages
+  ansible.builtin.apt:
+    name:
+      - linux-tools-generic
+      - "linux-tools-{{ ansible_facts['kernel'] }}"
+      - cpufrequtils
+    state: present
+  when: cpu_tuning_enabled
+
+- name: Disable power-profiles-daemon when present
+  ansible.builtin.systemd:
+    name: power-profiles-daemon
+    enabled: false
+    state: stopped
+  when:
+    - cpu_tuning_enabled
+    - "'power-profiles-daemon.service' in ansible_facts.services"
+
+- name: Deploy cpu-tuning systemd service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/cpu-tuning.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=CPU tuning for homelab
+      After=multi-user.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/cpupower frequency-set -g {{ cpu_tuning_governor }}
+      ExecStart=/bin/bash -c 'max_khz=$$(cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq); target_khz=$$((max_khz * {{ cpu_tuning_max_freq_percent | int }} / 100)); /usr/bin/cpupower frequency-set -u $${target_khz}KHz'
+      ExecStart=/bin/bash -c 'echo {{ cpu_tuning_epp }} | tee /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference'
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Reload systemd for cpu tuning
+  when: cpu_tuning_enabled
+
+- name: Flush cpu tuning handlers
+  ansible.builtin.meta: flush_handlers
+  when: cpu_tuning_enabled
+
+- name: Enable cpu-tuning service
+  ansible.builtin.systemd:
+    name: cpu-tuning.service
+    enabled: true
+  when: cpu_tuning_enabled
+
+- name: Start cpu-tuning service
+  ansible.builtin.systemd:
+    name: cpu-tuning.service
+    state: started
+  when: cpu_tuning_enabled
+
+- name: Validate cpupower settings
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/cpupower
+      - frequency-info
+  register: cpu_tuning_frequency_info
+  changed_when: false
+  when: cpu_tuning_enabled
+
+- name: Validate energy performance preference
+  ansible.builtin.command:
+    argv:
+      - /bin/cat
+      - /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference
+  register: cpu_tuning_epp_value
+  changed_when: false
+  when: cpu_tuning_enabled
+
+- name: Assert energy performance preference was applied
+  ansible.builtin.assert:
+    that:
+      - cpu_tuning_epp_value.stdout | trim == cpu_tuning_epp
+    fail_msg: >-
+      energy_performance_preference is
+      {{ cpu_tuning_epp_value.stdout | trim }}, expected {{ cpu_tuning_epp }}
+  when: cpu_tuning_enabled
+
+- name: Emit cpu tuning validation summary
+  ansible.builtin.debug:
+    msg:
+      - "{{ cpu_tuning_frequency_info.stdout }}"
+      - "max_freq_percent={{ cpu_tuning_max_freq_percent }}"
+      - "energy_performance_preference={{ cpu_tuning_epp_value.stdout | trim }}"
+  when: cpu_tuning_enabled

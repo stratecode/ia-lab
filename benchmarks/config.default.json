@@ -1,0 +1,15 @@
+{
+  "repos_file": "benchmarks/repos.default.json",
+  "case_ids": [
+    "python-slugify-regex-cli",
+    "click-option-review",
+    "glow-render-review"
+  ],
+  "modes": [
+    "memory_off",
+    "memory_on"
+  ],
+  "runs_per_case": 1,
+  "default_memory_strategy": "repo_specific_first",
+  "external_soft_fail": true
+}

@@ -806,6 +806,9 @@ type SemanticSearchFilter struct {
 	TaskID        *string
 	ArtifactID    *string
 	WorkspaceRoot *string
+	RepositoryURL *string
+	RepoProfile   *string
+	CaseType      *string
 	Limit         int
 }
 
@@ -1168,10 +1171,14 @@ func (s *PostgresStore) SearchSemanticChunks(ctx context.Context, filter Semanti
 		  AND ($4::uuid IS NULL OR task_id = $4)
 		  AND ($5::uuid IS NULL OR artifact_id = $5)
 		  AND ($6::text IS NULL OR workspace_root = $6)
+		  AND ($7::text IS NULL OR COALESCE(metadata->>'repository_url', metadata->'project_request'->>'repository_url', '') = $7)
+		  AND ($8::text IS NULL OR COALESCE(metadata->>'repo_profile', metadata->'project_request'->>'repo_profile', '') = $8)
+		  AND ($9::text IS NULL OR COALESCE(metadata->>'benchmark_case_type', metadata->'project_request'->>'benchmark_case_type', '') = $9)
 		ORDER BY embedding <=> $1::vector, updated_at DESC
-		LIMIT $7
+		LIMIT $10
 	`, vectorLiteral(filter.Embedding), nullableStringSlice(filter.SourceTypes), nullableUUID(filter.InitiativeID),
-		nullableUUID(filter.TaskID), nullableUUID(filter.ArtifactID), nullableString(filter.WorkspaceRoot), limit)
+		nullableUUID(filter.TaskID), nullableUUID(filter.ArtifactID), nullableString(filter.WorkspaceRoot),
+		nullableString(filter.RepositoryURL), nullableString(filter.RepoProfile), nullableString(filter.CaseType), limit)
 	if err != nil {
 		return nil, err
 	}

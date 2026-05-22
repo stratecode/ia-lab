@@ -916,6 +916,12 @@ func normalizeInitiativeToolRequest(metadata map[string]any, assigned domain.Age
 	if goal := strings.TrimSpace(asString(metadata["initiative_goal"])); goal != "" && strings.TrimSpace(asString(toolRequest["goal"])) == "" {
 		toolRequest["goal"] = goal
 	}
+	if asBoolHTTP(metadata["approval_required"]) {
+		metadata["requires_approval"] = true
+		if _, exists := toolRequest["requires_approval"]; !exists {
+			toolRequest["requires_approval"] = true
+		}
+	}
 	metadata["tool_request"] = toolRequest
 }
 

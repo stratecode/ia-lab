@@ -52,6 +52,23 @@ execution_timeout:
 - Time includes all inference calls, tool executions, and wait periods
 - The Orchestrator monitors elapsed time and enforces termination when the limit is reached
 
+## Host Load and Thermal Limits
+
+The platform also needs host-level limits for expensive local work such as model compilation, large repository indexing, or long native builds.
+
+### Practical guidance
+
+- Do not derive local build parallelism from available vCPUs alone.
+- On thermally constrained AMD mini PCs, native builds can complete successfully at `-j1` while the same host reboots at `-j2` or `-j4`.
+- Build concurrency must therefore be treated as an operational limit tied to thermal budget, not just to CPU count.
+
+### Recommendations
+
+- gate expensive local jobs behind host-health checks
+- persist enough state to resume after reboot or re-queue safely
+- validate compiled artifacts after interrupted builds instead of trusting file existence
+- prefer prebuilt artifacts or offline build stages when repeated recompilation offers no product value
+
 ## Retry Policies
 
 Each task type defines a retry policy for transient failures. Maximum retries are configurable between 1 and 10 attempts.

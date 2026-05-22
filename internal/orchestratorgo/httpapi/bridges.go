@@ -3,7 +3,10 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -177,7 +180,9 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 		return nil, "", nil, err
 	}
 
-	artifactIDs := make([]string, 0, 4+len(result.Artifacts))
+	artifactsToPersist := append([]map[string]any{}, result.Artifacts...)
+	artifactsToPersist = append(artifactsToPersist, buildRepoWorkflowMemoryArtifacts(task, result)...)
+	artifactIDs := make([]string, 0, 4+len(artifactsToPersist))
 	appendTextArtifact := func(kind, title, content string) error {
 		if strings.TrimSpace(content) == "" {
 			return nil
@@ -217,7 +222,7 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 			return nil, "", nil, err
 		}
 	}
-	for _, artifact := range result.Artifacts {
+	for _, artifact := range artifactsToPersist {
 		artifactID, err := s.Postgres.CreateArtifact(ctx, store.CreateArtifactParams{
 			TaskID:       taskIDPtr,
 			InvocationID: &invocationID,
@@ -249,12 +254,283 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 		"diff":               derefStringPtr(result.Diff),
 		"changed_files":      result.ChangedFiles,
 		"test_results":       result.TestResults,
-		"artifacts":          result.Artifacts,
+		"artifacts":          artifactsToPersist,
 		"error_message":      derefStringPtr(result.ErrorMessage),
 		"tool_invocation_id": invocationID,
 		"artifact_ids":       artifactIDs,
 	}
 	return results, invocationID, artifactIDs, nil
+}
+
+func buildRepoWorkflowMemoryArtifacts(task *domain.TaskResponse, result domain.LocalBridgeResultRequest) []map[string]any {
+	if task == nil {
+		return nil
+	}
+	metadata := task.Metadata
+	projectRequest, _ := metadata["project_request"].(map[string]any)
+	repoProfile := firstNonEmptyString(
+		strings.TrimSpace(asString(projectRequest["repo_profile"])),
+		strings.TrimSpace(asString(metadata["repo_profile"])),
+		strings.TrimSpace(asString(metadata["repo_workflow"])),
+	)
+	if repoProfile == "" {
+		return nil
+	}
+	agent := ""
+	if task.AssignedAgent != nil {
+		agent = strings.TrimSpace(string(*task.AssignedAgent))
+	}
+	if agent != string(domain.AgentTypeCoder) && agent != string(domain.AgentTypeReviewer) {
+		return nil
+	}
+	status := strings.ToLower(strings.TrimSpace(result.Status))
+	if status == "" || status == "waiting_approval" {
+		return nil
+	}
+	workspaceRoot := strings.TrimSpace(asString(metadata["workspace_root"]))
+	if workspaceRoot == "" && task.WorkspacePath != nil {
+		workspaceRoot = strings.TrimSpace(*task.WorkspacePath)
+	}
+	projectRoot := strings.TrimSpace(asString(projectRequest["project_root"]))
+	repoPath := workspaceRoot
+	if projectRoot != "" && projectRoot != "." {
+		if filepath.IsAbs(projectRoot) {
+			repoPath = projectRoot
+		} else if workspaceRoot != "" {
+			repoPath = filepath.Join(workspaceRoot, projectRoot)
+		}
+	}
+	repoName := firstNonEmptyString(strings.TrimSpace(asString(projectRequest["project_name"])), filepath.Base(repoPath), "repo")
+	stage := "patch_apply"
+	if agent == string(domain.AgentTypeReviewer) {
+		stage = "review"
+	}
+	outcome := "failed"
+	if status == "success" {
+		outcome = "trusted"
+	}
+	resolvedCommit := gitOutput(repoPath, "rev-parse", "HEAD")
+	resolvedBranch := gitOutput(repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	summary := strings.TrimSpace(derefStringPtr(result.Summary))
+	if summary == "" {
+		summary = strings.TrimSpace(task.Description)
+	}
+	errorMessage := strings.TrimSpace(derefStringPtr(result.ErrorMessage))
+	casePayload := map[string]any{
+		"memory_kind":               "repo_workflow_case",
+		"workflow":                  firstNonEmptyString(strings.TrimSpace(asString(metadata["repo_workflow"])), "repo_workflow_v1"),
+		"repo_profile":              repoProfile,
+		"repository_name":           repoName,
+		"repository_url":            strings.TrimSpace(asString(projectRequest["repository_url"])),
+		"benchmark_case_id":         strings.TrimSpace(asString(metadata["benchmark_case_id"])),
+		"benchmark_case_type":       strings.TrimSpace(asString(metadata["benchmark_case_type"])),
+		"benchmark_memory_mode":     strings.TrimSpace(asString(metadata["benchmark_memory_mode"])),
+		"benchmark_memory_strategy": strings.TrimSpace(asString(metadata["benchmark_memory_strategy"])),
+		"default_branch":            strings.TrimSpace(asString(projectRequest["default_branch"])),
+		"resolved_branch":           resolvedBranch,
+		"resolved_commit":           resolvedCommit,
+		"workspace_root":            workspaceRoot,
+		"project_root":              firstNonEmptyString(projectRoot, "."),
+		"initiative_id":             stringValue(task.InitiativeID),
+		"task_id":                   task.ID,
+		"assigned_agent":            agent,
+		"execution_stage":           stage,
+		"result_status":             status,
+		"outcome":                   outcome,
+		"summary":                   summary,
+		"error_message":             errorMessage,
+		"changed_files":             result.ChangedFiles,
+		"diff_present":              strings.TrimSpace(derefStringPtr(result.Diff)) != "",
+		"test_command":              anyStringSliceHTTPDefault(projectRequest["test_command"], []string{}),
+		"expected_files":            anyStringSliceHTTPDefault(projectRequest["expected_files"], []string{}),
+		"test_results":              nonNilMapHTTP(result.TestResults),
+		"definition_of_done":        strings.TrimSpace(asString(metadata["definition_of_done"])),
+	}
+	caseRaw, _ := json.MarshalIndent(casePayload, "", "  ")
+	lesson := renderRepoWorkflowLesson(casePayload)
+	artifacts := []map[string]any{
+		{
+			"type":                      "repo_workflow_case",
+			"title":                     fmt.Sprintf("Repo workflow case: %s %s", repoName, stage),
+			"media_type":                "application/json",
+			"content_text":              string(caseRaw),
+			"repo_profile":              repoProfile,
+			"repository_url":            casePayload["repository_url"],
+			"benchmark_case_id":         casePayload["benchmark_case_id"],
+			"benchmark_case_type":       casePayload["benchmark_case_type"],
+			"benchmark_memory_mode":     casePayload["benchmark_memory_mode"],
+			"benchmark_memory_strategy": casePayload["benchmark_memory_strategy"],
+			"workflow":                  casePayload["workflow"],
+			"execution_stage":           casePayload["execution_stage"],
+			"outcome":                   outcome,
+			"memory_kind":               "case",
+		},
+		{
+			"type":                      "repo_workflow_lesson",
+			"title":                     fmt.Sprintf("Repo workflow lesson: %s %s", repoName, stage),
+			"media_type":                "text/markdown",
+			"content_text":              lesson,
+			"repo_profile":              repoProfile,
+			"repository_url":            casePayload["repository_url"],
+			"benchmark_case_id":         casePayload["benchmark_case_id"],
+			"benchmark_case_type":       casePayload["benchmark_case_type"],
+			"benchmark_memory_mode":     casePayload["benchmark_memory_mode"],
+			"benchmark_memory_strategy": casePayload["benchmark_memory_strategy"],
+			"workflow":                  casePayload["workflow"],
+			"execution_stage":           casePayload["execution_stage"],
+			"outcome":                   outcome,
+			"memory_kind":               "lesson",
+		},
+	}
+	if benchmarkCaseID := strings.TrimSpace(asString(casePayload["benchmark_case_id"])); benchmarkCaseID != "" {
+		benchmarkCaseRaw, _ := json.MarshalIndent(map[string]any{
+			"benchmark_case_id":         benchmarkCaseID,
+			"benchmark_case_type":       casePayload["benchmark_case_type"],
+			"repository_name":           repoName,
+			"repository_url":            casePayload["repository_url"],
+			"repo_profile":              repoProfile,
+			"default_branch":            casePayload["default_branch"],
+			"benchmark_memory_mode":     casePayload["benchmark_memory_mode"],
+			"benchmark_memory_strategy": casePayload["benchmark_memory_strategy"],
+		}, "", "  ")
+		benchmarkRunRaw, _ := json.MarshalIndent(map[string]any{
+			"benchmark_case_id":         benchmarkCaseID,
+			"benchmark_case_type":       casePayload["benchmark_case_type"],
+			"workflow":                  casePayload["workflow"],
+			"repository_name":           repoName,
+			"repository_url":            casePayload["repository_url"],
+			"repo_profile":              repoProfile,
+			"resolved_branch":           resolvedBranch,
+			"resolved_commit":           resolvedCommit,
+			"task_id":                   task.ID,
+			"initiative_id":             stringValue(task.InitiativeID),
+			"assigned_agent":            agent,
+			"execution_stage":           stage,
+			"result_status":             status,
+			"outcome":                   outcome,
+			"benchmark_memory_mode":     casePayload["benchmark_memory_mode"],
+			"benchmark_memory_strategy": casePayload["benchmark_memory_strategy"],
+			"changed_files":             result.ChangedFiles,
+			"test_command":              anyStringSliceHTTPDefault(projectRequest["test_command"], []string{}),
+			"test_results":              nonNilMapHTTP(result.TestResults),
+			"diff_present":              strings.TrimSpace(derefStringPtr(result.Diff)) != "",
+		}, "", "  ")
+		artifacts = append(artifacts,
+			map[string]any{
+				"type":                      "benchmark_case",
+				"title":                     fmt.Sprintf("Benchmark case: %s", benchmarkCaseID),
+				"media_type":                "application/json",
+				"content_text":              string(benchmarkCaseRaw),
+				"repo_profile":              repoProfile,
+				"repository_url":            casePayload["repository_url"],
+				"benchmark_case_id":         benchmarkCaseID,
+				"benchmark_case_type":       casePayload["benchmark_case_type"],
+				"benchmark_memory_mode":     casePayload["benchmark_memory_mode"],
+				"benchmark_memory_strategy": casePayload["benchmark_memory_strategy"],
+				"workflow":                  casePayload["workflow"],
+				"outcome":                   outcome,
+				"memory_kind":               "benchmark_case",
+			},
+			map[string]any{
+				"type":                      "benchmark_run",
+				"title":                     fmt.Sprintf("Benchmark run: %s %s", benchmarkCaseID, stage),
+				"media_type":                "application/json",
+				"content_text":              string(benchmarkRunRaw),
+				"repo_profile":              repoProfile,
+				"repository_url":            casePayload["repository_url"],
+				"benchmark_case_id":         benchmarkCaseID,
+				"benchmark_case_type":       casePayload["benchmark_case_type"],
+				"benchmark_memory_mode":     casePayload["benchmark_memory_mode"],
+				"benchmark_memory_strategy": casePayload["benchmark_memory_strategy"],
+				"workflow":                  casePayload["workflow"],
+				"execution_stage":           casePayload["execution_stage"],
+				"outcome":                   outcome,
+				"memory_kind":               "benchmark_run",
+			},
+		)
+	}
+	return artifacts
+}
+
+func renderRepoWorkflowLesson(casePayload map[string]any) string {
+	lines := []string{
+		"# Repo Workflow Lesson",
+		"",
+		fmt.Sprintf("- Repository: %s", asString(casePayload["repository_name"])),
+		fmt.Sprintf("- Workflow: %s", asString(casePayload["workflow"])),
+		fmt.Sprintf("- Profile: %s", asString(casePayload["repo_profile"])),
+		fmt.Sprintf("- Stage: %s", asString(casePayload["execution_stage"])),
+		fmt.Sprintf("- Outcome: %s", asString(casePayload["outcome"])),
+		fmt.Sprintf("- Summary: %s", asString(casePayload["summary"])),
+	}
+	if branch := strings.TrimSpace(asString(casePayload["resolved_branch"])); branch != "" {
+		lines = append(lines, fmt.Sprintf("- Branch: %s", branch))
+	}
+	if commit := strings.TrimSpace(asString(casePayload["resolved_commit"])); commit != "" {
+		lines = append(lines, fmt.Sprintf("- Commit: %s", commit))
+	}
+	if changed := anyStringSliceHTTPDefault(casePayload["changed_files"], []string{}); len(changed) > 0 {
+		lines = append(lines, fmt.Sprintf("- Changed files: %s", strings.Join(changed, ", ")))
+	}
+	if testCommand := anyStringSliceHTTPDefault(casePayload["test_command"], []string{}); len(testCommand) > 0 {
+		lines = append(lines, fmt.Sprintf("- Validation command: `%s`", strings.Join(testCommand, " ")))
+	}
+	if errorMessage := strings.TrimSpace(asString(casePayload["error_message"])); errorMessage != "" {
+		lines = append(lines, fmt.Sprintf("- Failure signal: %s", errorMessage))
+	}
+	lines = append(lines, "", "## Reuse")
+	if asString(casePayload["outcome"]) == "trusted" {
+		lines = append(lines, "- Reuse this case as a trusted precedent for the same repo profile and stage.")
+	} else {
+		lines = append(lines, "- Reuse this case as a warning: inspect the failure signal before retrying the same stage.")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func gitOutput(dir string, args ...string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" || len(args) == 0 {
+		return ""
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	raw, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+func anyStringSliceHTTP(value any) ([]string, bool) {
+	switch items := value.(type) {
+	case []string:
+		return items, true
+	case []any:
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			text := strings.TrimSpace(asString(item))
+			if text != "" {
+				out = append(out, text)
+			}
+		}
+		return out, len(out) > 0
+	default:
+		return nil, false
+	}
+}
+
+func anyStringSliceHTTPDefault(value any, fallback []string) []string {
+	if items, ok := anyStringSliceHTTP(value); ok {
+		return items
+	}
+	return fallback
+}
+
+func nonNilMapHTTP(value map[string]any) map[string]any {
+	if value == nil {
+		return map[string]any{}
+	}
+	return value
 }
 
 func derefStringPtr(value *string) string {

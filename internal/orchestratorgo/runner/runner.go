@@ -133,6 +133,9 @@ func reviewerSemanticMemory(metadata map[string]any) ([]string, []string, []stri
 
 func (r *TaskRunner) executePlanner(task *domain.TaskResponse) Result {
 	metadata := cloneMap(task.Metadata)
+	if repoWorkflow, ok := buildRepoWorkflowPlan(metadata); ok {
+		return repoWorkflow
+	}
 	if boilerplate, ok := buildBoilerplatePlan(task, metadata); ok {
 		return boilerplate
 	}
@@ -412,6 +415,9 @@ func buildBoilerplatePlan(task *domain.TaskResponse, metadata map[string]any) (R
 	if projectRequest == nil {
 		return Result{}, false
 	}
+	if repoWorkflowRoot(metadata, projectRequest) != "" {
+		return Result{}, false
+	}
 	projectName := sanitizeProjectName(asString(projectRequest["project_name"]))
 	projectType := firstNonEmptyMetadata(projectRequest, "project_type")
 	stack := firstNonEmptyMetadata(projectRequest, "runtime_or_stack")
@@ -512,6 +518,134 @@ func buildBoilerplatePlan(task *domain.TaskResponse, metadata map[string]any) (R
 			"requested_agents": []string{"researcher", "coder", "reviewer"},
 			"project_root_rel": projectRootRel,
 			"test_command":     testCommand,
+			"plan_only":        false,
+		},
+	}, true
+}
+
+func buildRepoWorkflowPlan(metadata map[string]any) (Result, bool) {
+	projectRequest, _ := metadata["project_request"].(map[string]any)
+	workspaceRoot := repoWorkflowRoot(metadata, projectRequest)
+	if workspaceRoot == "" {
+		return Result{}, false
+	}
+	profile := detectRunnerRepoWorkflowProfile(workspaceRoot)
+	projectRequest = cloneMap(projectRequest)
+	projectRequest["project_name"] = profile.repoName
+	projectRequest["project_root"] = profile.projectRoot
+	projectRequest["project_type"] = profile.projectType
+	projectRequest["runtime_or_stack"] = profile.stack
+	projectRequest["repository_url"] = profile.repositoryURL
+	projectRequest["default_branch"] = profile.defaultBranch
+	projectRequest["goal"] = firstNonEmptyMetadata(projectRequest, "goal")
+	projectRequest["test_focus"] = profile.testFocus
+	projectRequest["test_command"] = profile.testCommand
+	projectRequest["expected_files"] = profile.expectedFiles
+	projectRequest["repo_profile"] = profile.profileName
+	if profile.benchmarkCaseID != "" {
+		projectRequest["benchmark_case_id"] = profile.benchmarkCaseID
+	}
+	if profile.benchmarkCaseType != "" {
+		projectRequest["benchmark_case_type"] = profile.benchmarkCaseType
+	}
+	if profile.benchmarkMemoryMode != "" {
+		projectRequest["benchmark_memory_mode"] = profile.benchmarkMemoryMode
+	}
+	if profile.benchmarkMemoryPolicy != "" {
+		projectRequest["benchmark_memory_strategy"] = profile.benchmarkMemoryPolicy
+	}
+
+	researcherMetadata := map[string]any{
+		"project_request": projectRequest,
+		"workspace_root":  workspaceRoot,
+		"tool_request": map[string]any{
+			"tool":            "research_project",
+			"project_request": projectRequest,
+			"project_root":    profile.projectRoot,
+			"goal":            firstNonEmptyMetadata(projectRequest, "goal"),
+			"test_command":    profile.testCommand,
+		},
+	}
+	applyRunnerBenchmarkMetadata(researcherMetadata, profile)
+	coderToolRequest := map[string]any{
+		"tool":              profile.coderTool,
+		"project_root":      profile.projectRoot,
+		"requires_approval": true,
+	}
+	if profile.patchTarget != "" {
+		coderToolRequest["path"] = profile.patchTarget
+	}
+	if profile.patch != "" {
+		coderToolRequest["patch"] = profile.patch
+	}
+	if profile.writeContent != "" {
+		coderToolRequest["content"] = profile.writeContent
+	}
+	coderMetadata := map[string]any{
+		"project_request":   projectRequest,
+		"workspace_root":    workspaceRoot,
+		"requires_approval": true,
+		"repo_workflow":     "repo_workflow_v1",
+		"tool_request":      coderToolRequest,
+	}
+	applyRunnerBenchmarkMetadata(coderMetadata, profile)
+	reviewerMetadata := map[string]any{
+		"project_request": projectRequest,
+		"workspace_root":  workspaceRoot,
+		"tool_request": map[string]any{
+			"tool":           "review_project",
+			"project_root":   profile.projectRoot,
+			"expected_files": profile.expectedFiles,
+			"test_command":   profile.testCommand,
+		},
+	}
+	applyRunnerBenchmarkMetadata(reviewerMetadata, profile)
+
+	subtasks := []map[string]any{
+		{
+			"title":             "Research repository constraints",
+			"description":       fmt.Sprintf("Inspect the repository at %s and prepare execution constraints.", workspaceRoot),
+			"assigned_agent":    string(domain.AgentTypeResearcher),
+			"priority":          string(domain.PriorityNormal),
+			"requires_approval": false,
+			"execution_target":  string(domain.ExecutionTargetLocal),
+			"metadata":          researcherMetadata,
+			"tool_request":      researcherMetadata["tool_request"],
+		},
+		{
+			"title":             "Apply deterministic repository patch",
+			"description":       profile.coderSummary,
+			"assigned_agent":    string(domain.AgentTypeCoder),
+			"priority":          string(domain.PriorityNormal),
+			"requires_approval": true,
+			"execution_target":  string(domain.ExecutionTargetLocal),
+			"metadata":          coderMetadata,
+			"tool_request":      coderMetadata["tool_request"],
+		},
+		{
+			"title":             "Review repository changes",
+			"description":       fmt.Sprintf("Validate repository state at %s", profile.projectRoot),
+			"assigned_agent":    string(domain.AgentTypeReviewer),
+			"priority":          string(domain.PriorityNormal),
+			"requires_approval": false,
+			"execution_target":  string(domain.ExecutionTargetLocal),
+			"metadata":          reviewerMetadata,
+			"tool_request":      reviewerMetadata["tool_request"],
+		},
+	}
+	return Result{
+		Status:  "success",
+		Summary: "planner prepared deterministic existing-repo workflow",
+		Results: map[string]any{
+			"status":           "success",
+			"plan_summary":     fmt.Sprintf("Patch and validate existing repository %s", profile.repoName),
+			"plan_markdown":    fmt.Sprintf("1. Research repository constraints\n2. Apply deterministic patch\n3. Review and test\n\nTarget: `%s`", profile.projectRoot),
+			"subtasks":         subtasks,
+			"project_flow":     "repo_workflow_v1",
+			"repo_profile":     profile.profileName,
+			"requested_agents": []string{"researcher", "coder", "reviewer"},
+			"project_root_rel": profile.projectRoot,
+			"test_command":     profile.testCommand,
 			"plan_only":        false,
 		},
 	}, true
@@ -720,6 +854,15 @@ func firstNonEmptyMetadata(metadata map[string]any, keys ...string) string {
 	return ""
 }
 
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if text := strings.TrimSpace(value); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
 func truncateOutput(text string, max int) string {
 	text = strings.TrimSpace(text)
 	if len(text) <= max {
@@ -741,11 +884,226 @@ func cloneMap(input map[string]any) map[string]any {
 
 var runnerProjectNameSanitizer = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
+type runnerRepoWorkflowProfile struct {
+	profileName           string
+	projectType           string
+	stack                 string
+	repoName              string
+	projectRoot           string
+	repositoryURL         string
+	defaultBranch         string
+	testFocus             string
+	testCommand           []string
+	expectedFiles         []string
+	coderTool             string
+	patchTarget           string
+	patch                 string
+	writeContent          string
+	coderSummary          string
+	benchmarkCaseID       string
+	benchmarkCaseType     string
+	benchmarkMemoryMode   string
+	benchmarkMemoryPolicy string
+}
+
 func sanitizeProjectName(value string) string {
 	value = strings.TrimSpace(value)
 	value = runnerProjectNameSanitizer.ReplaceAllString(value, "-")
 	value = strings.Trim(value, "-.")
 	return value
+}
+
+func repoWorkflowRoot(metadata map[string]any, projectRequest map[string]any) string {
+	workspaceRoot := strings.TrimSpace(firstNonEmptyMetadata(metadata, "workspace_root"))
+	if workspaceRoot != "" && workspaceHasGitRepo(workspaceRoot) {
+		return workspaceRoot
+	}
+	if projectRequest == nil {
+		return ""
+	}
+	projectRoot := strings.TrimSpace(asString(projectRequest["project_root"]))
+	if projectRoot == "" {
+		return ""
+	}
+	if !filepath.IsAbs(projectRoot) && workspaceRoot != "" {
+		projectRoot = filepath.Join(workspaceRoot, projectRoot)
+	}
+	if workspaceHasGitRepo(projectRoot) {
+		return projectRoot
+	}
+	return ""
+}
+
+func workspaceHasGitRepo(root string) bool {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(root, ".git"))
+	return err == nil && info != nil
+}
+
+func detectRunnerRepoWorkflowProfile(workspaceRoot string) runnerRepoWorkflowProfile {
+	profile := runnerRepoWorkflowProfile{
+		profileName:   "existing_repo_generic",
+		projectType:   "existing_repo",
+		stack:         "python",
+		repoName:      filepath.Base(strings.TrimSpace(workspaceRoot)),
+		projectRoot:   ".",
+		repositoryURL: "",
+		defaultBranch: "",
+		testFocus:     "existing repository review",
+		testCommand:   []string{},
+		expectedFiles: []string{"README.md"},
+		coderTool:     "write_file",
+		patchTarget:   ".lab/repo-workflow-marker.txt",
+		writeContent:  "repo workflow marker\n",
+		coderSummary:  "Write a deterministic marker file inside the repository workspace.",
+	}
+	if benchmarkProfile, ok := loadRunnerBenchmarkRepoWorkflowProfile(workspaceRoot); ok {
+		return benchmarkProfile
+	}
+	if profile.repoName == "" || profile.repoName == "." || profile.repoName == string(filepath.Separator) {
+		profile.repoName = "repo"
+	}
+	if strings.EqualFold(profile.repoName, "python-slugify") {
+		profile.profileName = "python_slugify_v1"
+		profile.testFocus = "CLI regex_pattern wiring"
+		profile.testCommand = []string{"python3", "-m", "pytest", "-q", "test.py"}
+		profile.expectedFiles = []string{"pyproject.toml", "slugify/__main__.py", "slugify/slugify.py", "test.py"}
+		profile.repositoryURL = "https://github.com/un33k/python-slugify"
+		profile.defaultBranch = "master"
+		profile.coderTool = "apply_patch"
+		profile.patchTarget = "slugify/__main__.py"
+		profile.patch = pythonSlugifyRunnerPatch()
+		profile.writeContent = ""
+		profile.coderSummary = "Patch python-slugify so the CLI forwards regex_pattern into slugify() and cover it with a deterministic regression test."
+	}
+	return profile
+}
+
+func applyRunnerBenchmarkMetadata(metadata map[string]any, profile runnerRepoWorkflowProfile) {
+	if metadata == nil {
+		return
+	}
+	if profile.benchmarkCaseID != "" {
+		metadata["benchmark_case_id"] = profile.benchmarkCaseID
+	}
+	if profile.benchmarkCaseType != "" {
+		metadata["benchmark_case_type"] = profile.benchmarkCaseType
+	}
+	if profile.benchmarkMemoryMode != "" {
+		metadata["benchmark_memory_mode"] = profile.benchmarkMemoryMode
+		metadata["context_memory_mode"] = profile.benchmarkMemoryMode
+	}
+	if profile.benchmarkMemoryPolicy != "" {
+		metadata["benchmark_memory_strategy"] = profile.benchmarkMemoryPolicy
+		metadata["context_memory_strategy"] = profile.benchmarkMemoryPolicy
+	}
+}
+
+func loadRunnerBenchmarkRepoWorkflowProfile(workspaceRoot string) (runnerRepoWorkflowProfile, bool) {
+	casePath := filepath.Join(strings.TrimSpace(workspaceRoot), ".lab", "benchmark-case.json")
+	raw, err := os.ReadFile(casePath)
+	if err != nil {
+		return runnerRepoWorkflowProfile{}, false
+	}
+	var payload struct {
+		ID             string   `json:"id"`
+		CaseType       string   `json:"case_type"`
+		RepoProfile    string   `json:"repo_profile"`
+		RepoURL        string   `json:"repo_url"`
+		DefaultBranch  string   `json:"default_branch"`
+		ProjectType    string   `json:"project_type"`
+		Runtime        string   `json:"runtime_or_stack"`
+		ProjectRoot    string   `json:"project_root"`
+		TestFocus      string   `json:"test_focus"`
+		TestCommand    []string `json:"test_command"`
+		ExpectedFiles  []string `json:"expected_files"`
+		CoderTool      string   `json:"coder_tool"`
+		PatchTarget    string   `json:"patch_target"`
+		Patch          string   `json:"patch"`
+		WriteContent   string   `json:"write_content"`
+		CoderSummary   string   `json:"coder_summary"`
+		MemoryMode     string   `json:"benchmark_memory_mode"`
+		MemoryStrategy string   `json:"benchmark_memory_strategy"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return runnerRepoWorkflowProfile{}, false
+	}
+	profile := runnerRepoWorkflowProfile{
+		profileName:           firstNonEmptyString(strings.TrimSpace(payload.RepoProfile), "benchmark_repo_workflow"),
+		projectType:           firstNonEmptyString(strings.TrimSpace(payload.ProjectType), "existing_repo"),
+		stack:                 firstNonEmptyString(strings.TrimSpace(payload.Runtime), "python"),
+		repoName:              filepath.Base(strings.TrimSpace(workspaceRoot)),
+		projectRoot:           firstNonEmptyString(strings.TrimSpace(payload.ProjectRoot), "."),
+		repositoryURL:         strings.TrimSpace(payload.RepoURL),
+		defaultBranch:         strings.TrimSpace(payload.DefaultBranch),
+		testFocus:             firstNonEmptyString(strings.TrimSpace(payload.TestFocus), "benchmark workflow"),
+		testCommand:           cloneRunnerStrings(payload.TestCommand),
+		expectedFiles:         cloneRunnerStrings(payload.ExpectedFiles),
+		coderTool:             firstNonEmptyString(strings.TrimSpace(payload.CoderTool), "write_file"),
+		patchTarget:           strings.TrimSpace(payload.PatchTarget),
+		patch:                 payload.Patch,
+		writeContent:          payload.WriteContent,
+		coderSummary:          firstNonEmptyString(strings.TrimSpace(payload.CoderSummary), "Apply benchmark-defined repository change."),
+		benchmarkCaseID:       strings.TrimSpace(payload.ID),
+		benchmarkCaseType:     strings.TrimSpace(payload.CaseType),
+		benchmarkMemoryMode:   firstNonEmptyString(strings.TrimSpace(payload.MemoryMode), "on"),
+		benchmarkMemoryPolicy: firstNonEmptyString(strings.TrimSpace(payload.MemoryStrategy), "repo_specific_first"),
+	}
+	if profile.repoName == "" || profile.repoName == "." || profile.repoName == string(filepath.Separator) {
+		profile.repoName = "repo"
+	}
+	if len(profile.expectedFiles) == 0 {
+		profile.expectedFiles = []string{"README.md"}
+	}
+	return profile, true
+}
+
+func cloneRunnerStrings(input []string) []string {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(input))
+	for _, item := range input {
+		text := strings.TrimSpace(item)
+		if text != "" {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func pythonSlugifyRunnerPatch() string {
+	return strings.Join([]string{
+		"diff --git a/slugify/__main__.py b/slugify/__main__.py",
+		"--- a/slugify/__main__.py",
+		"+++ b/slugify/__main__.py",
+		"@@ -76,6 +76,7 @@ def slugify_params(args: argparse.Namespace) -> dict[str, Any]:",
+		"         save_order=args.save_order,",
+		"         separator=args.separator,",
+		"         stopwords=args.stopwords,",
+		"+        regex_pattern=args.regex_pattern,",
+		"         lowercase=args.lowercase,",
+		"         replacements=args.replacements,",
+		"         allow_unicode=args.allow_unicode",
+		"diff --git a/test.py b/test.py",
+		"--- a/test.py",
+		"+++ b/test.py",
+		"@@ -612,6 +612,11 @@ class TestCommandParams(unittest.TestCase):",
+		"         expected = self.make_params(stopwords=['abba', 'beatles'], max_length=98, separator='+')",
+		"         self.assertParamsMatch(expected, params)",
+		" ",
+		"+    def test_regex_pattern_param(self):",
+		"+        params = self.get_params_from_cli('--regex-pattern', '[^a-z]+')",
+		"+        expected = self.make_params(regex_pattern='[^a-z]+')",
+		"+        self.assertParamsMatch(expected, params)",
+		"+",
+		"     def test_replacements_right(self):",
+		"         params = self.get_params_from_cli('--replacements', 'A->B', 'C->D')",
+		"         expected = self.make_params(replacements=[['A', 'B'], ['C', 'D']])",
+	}, "\n")
 }
 
 func defaultProjectTestCommand(projectType, stack string) []string {

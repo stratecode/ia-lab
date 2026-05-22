@@ -123,9 +123,6 @@ func ValidateTaskLaunchAgainstPolicy(policy ExecutionPolicy, link domain.Initiat
 	if !policy.AllowsMode(mode) {
 		return fmt.Errorf("execution mode %q is not allowed for workspace scope %s", mode, policy.Scope)
 	}
-	if mode != domain.TaskLaunchModeManual && asBool(link.Task.Metadata["approval_required"]) {
-		return fmt.Errorf("task %s requires manual approval before automatic launch", link.TaskID)
-	}
 	return nil
 }
 

@@ -132,6 +132,9 @@ This can be used for:
 - Docker group membership applies to new login sessions. Reconnect your shell after the playbook if you want to run `docker` as the non-root user.
 - `prometheus-node-exporter` is scraped by the local Prometheus instance.
 - The `llama.cpp` units are configured to restart when the compiled binary or unit definition changes, so context-size or runtime tuning updates actually reach the running processes instead of staying trapped in systemd files like decorative lies.
+- On Ryzen mini PCs with `amd-pstate-epp`, compiling `llama.cpp` with aggressive parallelism can push the host into sustained `85–90C` territory and trigger hard reboots. Treat `llama_cpp_build_jobs` as a host-specific thermal limit, not as “number of cores minus superstition”.
+- For thermally constrained hosts, use CPU tuning before heavy builds and prefer `llama_cpp_build_jobs=1` as the safe baseline. `2` and above must be revalidated on that exact machine under real cooling conditions.
+- If a build is interrupted by reboot, assume the source checkout and `build/bin` artifacts may be corrupted. Purge `/opt/llama.cpp/build` and, if Git objects are damaged, `/opt/llama.cpp/src` before retrying.
 
 ## Security note
 

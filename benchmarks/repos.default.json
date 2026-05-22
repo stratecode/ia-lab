@@ -1,0 +1,44 @@
+[
+  {
+    "id": "python-slugify",
+    "repo_url": "https://github.com/un33k/python-slugify",
+    "default_branch": "master",
+    "repo_profile": "python_cli_library",
+    "runtime_or_stack": "python"
+  },
+  {
+    "id": "click",
+    "repo_url": "https://github.com/pallets/click",
+    "default_branch": "main",
+    "repo_profile": "python_cli_framework",
+    "runtime_or_stack": "python"
+  },
+  {
+    "id": "flask",
+    "repo_url": "https://github.com/pallets/flask",
+    "default_branch": "main",
+    "repo_profile": "python_web_framework",
+    "runtime_or_stack": "python"
+  },
+  {
+    "id": "httpie-cli",
+    "repo_url": "https://github.com/httpie/cli",
+    "default_branch": "master",
+    "repo_profile": "python_cli_application",
+    "runtime_or_stack": "python"
+  },
+  {
+    "id": "glow",
+    "repo_url": "https://github.com/charmbracelet/glow",
+    "default_branch": "master",
+    "repo_profile": "go_cli_tui",
+    "runtime_or_stack": "go"
+  },
+  {
+    "id": "ripgrep",
+    "repo_url": "https://github.com/BurntSushi/ripgrep",
+    "default_branch": "master",
+    "repo_profile": "rust_cli_workspace",
+    "runtime_or_stack": "rust"
+  }
+]

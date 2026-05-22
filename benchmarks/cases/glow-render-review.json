@@ -1,0 +1,18 @@
+{
+  "id": "glow-render-review",
+  "repo_id": "glow",
+  "case_type": "review_only",
+  "goal": "Run a deterministic benchmark workflow for Glow and validate the repository tests.",
+  "repo_profile": "go_cli_tui",
+  "project_type": "existing_repo",
+  "runtime_or_stack": "go",
+  "project_root": ".",
+  "test_focus": "rendering review",
+  "test_command": ["go", "test", "./..."],
+  "expected_files": ["main.go", "glow_test.go", "url_test.go"],
+  "coder_tool": "write_file",
+  "patch_target": ".lab/repo-workflow-marker.txt",
+  "write_content": "glow benchmark marker\n",
+  "coder_summary": "Write a deterministic benchmark marker file before repository review.",
+  "benchmark_memory_strategy": "pattern_first"
+}

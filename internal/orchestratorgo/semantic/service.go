@@ -201,8 +201,9 @@ func (s *Service) Search(ctx context.Context, req domain.SemanticSearchRequest) 
 	if query == "" {
 		return nil, fmt.Errorf("query is required")
 	}
-	if req.InitiativeID == nil && req.TaskID == nil && req.ArtifactID == nil && req.WorkspaceRoot == nil {
-		return nil, fmt.Errorf("semantic search requires initiative_id, task_id, artifact_id, or workspace_root filter")
+	if req.InitiativeID == nil && req.TaskID == nil && req.ArtifactID == nil && req.WorkspaceRoot == nil &&
+		req.RepositoryURL == nil && req.RepoProfile == nil && req.CaseType == nil {
+		return nil, fmt.Errorf("semantic search requires initiative_id, task_id, artifact_id, workspace_root, repository_url, repo_profile, or benchmark_case_type filter")
 	}
 	embedding, err := s.embeddings.Embed(ctx, query)
 	if err != nil {
@@ -220,6 +221,9 @@ func (s *Service) Search(ctx context.Context, req domain.SemanticSearchRequest) 
 		TaskID:        req.TaskID,
 		ArtifactID:    req.ArtifactID,
 		WorkspaceRoot: req.WorkspaceRoot,
+		RepositoryURL: req.RepositoryURL,
+		RepoProfile:   req.RepoProfile,
+		CaseType:      req.CaseType,
 		Limit:         limit,
 	})
 	if err != nil {

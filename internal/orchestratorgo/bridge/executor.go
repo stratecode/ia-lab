@@ -316,8 +316,8 @@ func (e *WorkspaceExecutor) reviewProject(ctx context.Context, request map[strin
 }
 
 func (e *WorkspaceExecutor) applyPatch(ctx context.Context, request map[string]any) (domain.LocalBridgeResultRequest, error) {
-	patch := strings.TrimSpace(asString(request["patch"]))
-	if patch == "" {
+	patch := asString(request["patch"])
+	if strings.TrimSpace(patch) == "" {
 		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: "patch is required"}
 	}
 	cmd := exec.CommandContext(ctx, "git", "apply", "--whitespace=nowarn", "-")

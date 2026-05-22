@@ -1,0 +1,18 @@
+{
+  "id": "click-option-review",
+  "repo_id": "click",
+  "case_type": "review_only",
+  "goal": "Run a deterministic benchmark workflow for Click and validate the repository tests.",
+  "repo_profile": "python_cli_framework",
+  "project_type": "existing_repo",
+  "runtime_or_stack": "python",
+  "project_root": ".",
+  "test_focus": "CLI option parsing review",
+  "test_command": ["python3", "-m", "pytest", "-q", "tests/test_options.py"],
+  "expected_files": ["src/click/core.py", "tests/test_options.py"],
+  "coder_tool": "write_file",
+  "patch_target": ".lab/repo-workflow-marker.txt",
+  "write_content": "click benchmark marker\n",
+  "coder_summary": "Write a deterministic benchmark marker file before repository review.",
+  "benchmark_memory_strategy": "pattern_first"
+}

@@ -48,6 +48,22 @@ That subset playbook should import:
 - `monitor`
 - `observability`
 
+## Llama.cpp rebuild warning
+
+Do not rerun the full bootstrap playbook just to rebuild `llama.cpp` unless you also want package upgrades and the rest of the stack touched. For runtime rebuilds, target the `llama_cpp` role or a narrow playbook instead.
+
+For thermally constrained Ryzen mini PCs:
+
+```bash
+ansible-playbook -i inventory.yml /tmp/deploy-llama-cpp.yml --limit lab -e llama_cpp_build_jobs=1
+```
+
+Operational guidance:
+
+- `llama_cpp_build_jobs=1` is the safe baseline when the host has already shown thermal instability.
+- `llama_cpp_build_jobs=2` or higher should be treated as an experiment gated by real temperature observation.
+- If the host reboots mid-build, purge `/opt/llama.cpp/build` before retrying and verify the resulting binaries with `ldd /opt/llama.cpp/build/bin/llama-server`.
+
 ## Post-switch verification
 
 Verify host state through Ansible:

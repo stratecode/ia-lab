@@ -47,6 +47,9 @@ type SemanticSearchRequest struct {
 	TaskID        *string  `json:"task_id,omitempty"`
 	ArtifactID    *string  `json:"artifact_id,omitempty"`
 	WorkspaceRoot *string  `json:"workspace_root,omitempty"`
+	RepositoryURL *string  `json:"repository_url,omitempty"`
+	RepoProfile   *string  `json:"repo_profile,omitempty"`
+	CaseType      *string  `json:"benchmark_case_type,omitempty"`
 	Outcomes      []string `json:"outcomes,omitempty"`
 	MinConfidence *float64 `json:"min_confidence,omitempty"`
 	Limit         int      `json:"limit,omitempty"`
@@ -65,6 +68,8 @@ type ContextBuildRequest struct {
 	WorkspaceRoot   *string        `json:"workspace_root,omitempty"`
 	TaskDescription string         `json:"task_description,omitempty"`
 	Metadata        map[string]any `json:"metadata,omitempty"`
+	MemoryMode      string         `json:"memory_mode,omitempty"`
+	MemoryStrategy  string         `json:"memory_strategy,omitempty"`
 	AllowedSources  []string       `json:"allowed_source_types,omitempty"`
 	OutputFormat    string         `json:"output_format,omitempty"`
 	Outcomes        []string       `json:"outcomes,omitempty"`
@@ -90,19 +95,21 @@ type ContextChunk struct {
 }
 
 type ContextPackage struct {
-	AgentType     string         `json:"agent_type"`
-	TaskID        *string        `json:"task_id,omitempty"`
-	InitiativeID  *string        `json:"initiative_id,omitempty"`
-	WorkspaceRoot *string        `json:"workspace_root,omitempty"`
-	Query         string         `json:"query"`
-	Chunks        []ContextChunk `json:"chunks"`
-	SourceRefs    []string       `json:"source_refs"`
-	Constraints   []string       `json:"constraints"`
-	Policies      []string       `json:"policies"`
-	PromptSection string         `json:"prompt_section"`
-	OperationalIR *OperationalIR `json:"operational_ir,omitempty"`
-	TotalChars    int            `json:"total_chars"`
-	GeneratedAt   time.Time      `json:"generated_at"`
+	AgentType      string         `json:"agent_type"`
+	TaskID         *string        `json:"task_id,omitempty"`
+	InitiativeID   *string        `json:"initiative_id,omitempty"`
+	WorkspaceRoot  *string        `json:"workspace_root,omitempty"`
+	Query          string         `json:"query"`
+	MemoryMode     string         `json:"memory_mode,omitempty"`
+	MemoryStrategy string         `json:"memory_strategy,omitempty"`
+	Chunks         []ContextChunk `json:"chunks"`
+	SourceRefs     []string       `json:"source_refs"`
+	Constraints    []string       `json:"constraints"`
+	Policies       []string       `json:"policies"`
+	PromptSection  string         `json:"prompt_section"`
+	OperationalIR  *OperationalIR `json:"operational_ir,omitempty"`
+	TotalChars     int            `json:"total_chars"`
+	GeneratedAt    time.Time      `json:"generated_at"`
 }
 
 type OperationalIR struct {

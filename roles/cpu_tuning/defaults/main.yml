@@ -1,0 +1,4 @@
+cpu_tuning_enabled: true
+cpu_tuning_governor: performance
+cpu_tuning_max_freq_percent: 75
+cpu_tuning_epp: performance

@@ -6,38 +6,37 @@ import (
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 )
 
-func TestRankAndTrimPrioritizesSameInitiativeAndFailures(t *testing.T) {
-	initiativeID := "11111111-1111-1111-1111-111111111111"
-	otherID := "22222222-2222-2222-2222-222222222222"
-	items := []domain.SemanticChunkResponse{
-		{
-			ID:           "other",
-			SourceType:   string(domain.SemanticSourceArtifact),
-			SourceID:     otherID,
-			InitiativeID: &otherID,
-			ContentText:  "other initiative",
-			Score:        floatPtr(0.90),
-			Metadata:     map[string]any{},
-		},
-		{
-			ID:           "same-failure",
-			SourceType:   string(domain.SemanticSourceTask),
-			SourceID:     initiativeID,
-			InitiativeID: &initiativeID,
-			ContentText:  "same initiative failure",
-			Score:        floatPtr(0.75),
-			Metadata:     map[string]any{"failure_class": "test_failure"},
+func TestApplyRepoMemoryScopePrefersRepoFiltersOverWorkspaceForRepoStrategies(t *testing.T) {
+	workspaceRoot := "/tmp/run-a/repo"
+	searchReq := domain.SemanticSearchRequest{WorkspaceRoot: &workspaceRoot}
+	req := domain.ContextBuildRequest{
+		MemoryStrategy: "repo_specific_first",
+		Metadata: map[string]any{
+			"repository_url":      "https://github.com/un33k/python-slugify",
+			"repo_profile":        "python_slugify_v1",
+			"benchmark_case_type": "deterministic_bugfix",
 		},
 	}
-	chunks := rankAndTrim(items, domain.ContextBuildRequest{InitiativeID: &initiativeID}, 2, 1000)
-	if len(chunks) != 2 {
-		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	applyRepoMemoryScope(&searchReq, req)
+	if searchReq.WorkspaceRoot != nil {
+		t.Fatalf("expected workspace scope to be cleared for repo-specific retrieval, got %v", *searchReq.WorkspaceRoot)
 	}
-	if chunks[0].ID != "same-failure" {
-		t.Fatalf("expected same initiative failure first, got %s", chunks[0].ID)
+	if searchReq.RepositoryURL == nil || *searchReq.RepositoryURL != "https://github.com/un33k/python-slugify" {
+		t.Fatalf("expected repository url filter, got %#v", searchReq.RepositoryURL)
+	}
+	if searchReq.RepoProfile == nil || *searchReq.RepoProfile != "python_slugify_v1" {
+		t.Fatalf("expected repo profile filter, got %#v", searchReq.RepoProfile)
+	}
+	if searchReq.CaseType == nil || *searchReq.CaseType != "deterministic_bugfix" {
+		t.Fatalf("expected case type filter, got %#v", searchReq.CaseType)
 	}
 }
 
-func floatPtr(value float64) *float64 {
-	return &value
+func TestHasRepoMemoryScope(t *testing.T) {
+	if hasRepoMemoryScope(nil) {
+		t.Fatal("expected nil metadata to have no repo memory scope")
+	}
+	if !hasRepoMemoryScope(map[string]any{"project_request": map[string]any{"repo_profile": "python_slugify_v1"}}) {
+		t.Fatal("expected repo_profile in project_request to enable repo memory scope")
+	}
 }

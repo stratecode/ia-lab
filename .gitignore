@@ -25,3 +25,7 @@ bin/
 *~
 *.pyc
 tmp/
+
+# Local benchmark configuration and generated reports
+benchmarks/benchmark.local.json
+benchmarks/runs/

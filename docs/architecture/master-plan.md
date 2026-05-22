@@ -88,6 +88,17 @@ Objective: move from controlled workflow to useful engineering work on existing 
 - tighten bridge behavior, result reporting, and version compatibility
 - use semantic memory to improve context quality, traceability, and recovery
 
+### Cross-Cutting: Resilience and Resume
+
+Objective: keep the system useful when the host, bridge, or long-running execution is interrupted.
+
+- treat restart recovery as a product capability, not an operational afterthought
+- checkpoint task intent, patch payloads, commands, and execution stage before expensive work begins
+- make bridge claims lease-based so interrupted work can be safely resumed or re-queued
+- persist enough execution state to continue from the last durable phase after reboot
+- gate heavy local work behind host health and resource budget checks
+- prefer reproducible caches or prebuilt artifacts for expensive dependencies such as `llama.cpp`
+
 ## Limits and Non-Goals
 
 The current system is not:
