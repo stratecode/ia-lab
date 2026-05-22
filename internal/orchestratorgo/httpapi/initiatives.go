@@ -557,8 +557,17 @@ func (s *Server) launchInitiativeTasks(w http.ResponseWriter, r *http.Request) {
 			if task != nil {
 				contextPackage, err := s.ContextBuilder.BuildForTask(r.Context(), task)
 				if err != nil {
-					writeDetail(w, http.StatusBadGateway, "failed to build task context: "+err.Error())
-					return
+					log.Warn().
+						Err(err).
+						Str("initiative_id", item.ID).
+						Str("task_id", link.TaskID).
+						Msg("failed to build task context; launching without semantic context")
+					if patchErr := s.Postgres.PatchTaskMetadata(r.Context(), link.TaskID, map[string]any{
+						"context_build_error": err.Error(),
+					}); patchErr != nil {
+						writeDetail(w, http.StatusInternalServerError, patchErr.Error())
+						return
+					}
 				}
 				if contextPackage != nil && len(contextPackage.Chunks) > 0 {
 					if err := s.Postgres.PatchTaskMetadata(r.Context(), link.TaskID, map[string]any{"context_package": contextPackage}); err != nil {

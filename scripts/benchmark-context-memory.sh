@@ -510,30 +510,57 @@ runs = []
 for path in sorted(root.glob("*/benchmark_run.json")):
     runs.append(json.loads(path.read_text()))
 
-summary_path = root / "summary.json"
-summary_path.write_text(json.dumps(runs, indent=2) + "\n")
-
-by_repo = {}
+aggregates = {}
 for row in runs:
     repo = row.get("repo_id") or row.get("case_id") or "unknown"
-    by_repo.setdefault(repo, {})[row.get("mode")] = row
+    mode = row.get("mode") or "unknown"
+    slot = aggregates.setdefault(repo, {}).setdefault(mode, {
+        "run_count": 0,
+        "success_count": 0,
+        "score_total": 0,
+        "hit_total": 0,
+        "forbidden_total": 0,
+        "effects": {},
+        "resolved_commit": row.get("resolved_commit") or "",
+    })
+    slot["run_count"] += 1
+    if row.get("status") == "success":
+        slot["success_count"] += 1
+    slot["score_total"] += int(row.get("score", 0) or 0)
+    slot["hit_total"] += len(row.get("memory_hits") or [])
+    slot["forbidden_total"] += int(row.get("forbidden_hit_count", 0) or 0)
+    effect = row.get("memory_effect")
+    if effect:
+        slot["effects"][effect] = slot["effects"].get(effect, 0) + 1
+
+summary = {
+    "runs": runs,
+    "aggregates": aggregates,
+}
+(root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 
 lines = [
     "# Benchmark Summary",
     "",
-    "| Repo | Mode Off | Hits Off | Mode On | Hits On | Delta | Commit |",
-    "|---|---:|---:|---:|---:|---:|---|",
+    "| Repo | Runs | Off Avg | On Avg | Delta | On Hits Avg | Forbidden | On Success | Effect | Commit |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---|---|",
 ]
-for repo, modes in sorted(by_repo.items()):
+for repo, modes in sorted(aggregates.items()):
     off = modes.get("memory_off", {})
     on = modes.get("memory_on", {})
-    off_score = int(off.get("score", 0) or 0)
-    on_score = int(on.get("score", 0) or 0)
-    off_hits = len(off.get("memory_hits") or [])
-    on_hits = len(on.get("memory_hits") or [])
-    delta = on_score - off_score
-    commit = (off.get("resolved_commit") or on.get("resolved_commit") or "")[:12]
-    lines.append(f"| {repo} | {off_score} | {off_hits} | {on_score} | {on_hits} | {delta:+d} | {commit} |")
+    off_runs = max(1, int(off.get("run_count", 0) or 1))
+    on_runs = max(1, int(on.get("run_count", 0) or 1))
+    off_avg = (int(off.get("score_total", 0) or 0) / off_runs) if off else 0
+    on_avg = (int(on.get("score_total", 0) or 0) / on_runs) if on else 0
+    delta = on_avg - off_avg
+    on_hits_avg = (int(on.get("hit_total", 0) or 0) / on_runs) if on else 0
+    forbidden_avg = (int(on.get("forbidden_total", 0) or 0) / on_runs) if on else 0
+    on_success = f"{int(on.get('success_count', 0) or 0)}/{int(on.get('run_count', 0) or 0)}" if on else "0/0"
+    effects = on.get("effects", {}) if on else {}
+    effect_summary = ", ".join(f"{key}:{value}" for key, value in sorted(effects.items())) or "-"
+    commit = ((on.get("resolved_commit") or off.get("resolved_commit") or "")[:12]) if (on or off) else ""
+    runs_count = int(on.get("run_count", 0) or off.get("run_count", 0) or 0)
+    lines.append(f"| {repo} | {runs_count} | {off_avg:.1f} | {on_avg:.1f} | {delta:+.1f} | {on_hits_avg:.1f} | {forbidden_avg:.1f} | {on_success} | {effect_summary} | {commit} |")
 
 root.joinpath("summary.md").write_text("\n".join(lines) + "\n")
 PY
@@ -606,6 +633,8 @@ lines = [
     f"- Outcome: {data.get('status')}",
     f"- Initiative: {data.get('initiative_id', '')}",
     f"- Score: {data.get('score', 0)}",
+    f"- Memory Effect: {data.get('memory_effect', '-')}",
+    f"- Forbidden Hits: {data.get('forbidden_hit_count', 0)}",
     "",
     "## Memory Hits",
 ]
@@ -705,6 +734,7 @@ PY
   fi
 
   local workspace_root case_id repo_id repo_url repo_branch repo_profile case_goal strategy
+  local memory_expectation forbidden_match_types_json
   local run_meta
   run_meta="$(python3 - "$case_path" <<PY
 import json, sys
@@ -731,7 +761,9 @@ print(json.dumps({
     "default_branch": repo["default_branch"],
     "repo_profile": case.get("repo_profile") or repo.get("repo_profile"),
     "goal": case["goal"],
-    "strategy": case.get("benchmark_memory_strategy") or "$MEMORY_STRATEGY_DEFAULT"
+    "strategy": case.get("benchmark_memory_strategy") or "$MEMORY_STRATEGY_DEFAULT",
+    "memory_expectation": case.get("memory_expectation") or "helpful",
+    "forbidden_match_types": case.get("forbidden_match_types") or []
 }))
 PY
 )"
@@ -742,6 +774,8 @@ PY
   repo_profile="$(printf '%s' "$run_meta" | json_get repo_profile)"
   case_goal="$(printf '%s' "$run_meta" | json_get goal)"
   strategy="$(printf '%s' "$run_meta" | json_get strategy)"
+  memory_expectation="$(printf '%s' "$run_meta" | json_get memory_expectation)"
+  forbidden_match_types_json="$(printf '%s' "$run_meta" | json_get forbidden_match_types)"
 
   local scratch_root bridge_log bridge_id bridge_name bridge_pid resolved_head resolved_commit
   scratch_root="$(mktemp -d "${WORKDIR_ROOT%/}/lab-benchmark-${run_slug}-XXXXXX")"
@@ -983,6 +1017,8 @@ for chunk in ctx.get("chunks", []):
         "match_type": meta.get("memory_match_type", "unknown"),
         "repo_profile": meta.get("repo_profile"),
     })
+forbidden_types = set(json.loads('''$forbidden_match_types_json'''))
+forbidden_hits = [hit for hit in hits if hit.get("match_type") in forbidden_types]
 status = "success" if "${initiative_status}" == "completed" and reviewer.get("state") == "completed" else "failed"
 results = reviewer.get("results") or {}
 reviewer_ok = reviewer.get("state") == "completed" and results.get("status") == "success" and results.get("exit_code") == 0
@@ -1001,11 +1037,23 @@ if hits:
 negative = sum(1 for hit in hits if hit.get("match_type") == "semantic_related")
 if negative == 0:
     score += 5
+memory_effect = "baseline"
+if "$mode" == "memory_on":
+    if forbidden_hits:
+        memory_effect = "hurt"
+    elif "$memory_expectation" == "avoid_transfer":
+        memory_effect = "guarded" if not hits else "neutral"
+    elif hits:
+        memory_effect = "helped"
+    else:
+        memory_effect = "neutral"
 print(json.dumps({
     "case_id": "$case_id",
     "mode": "$mode",
+    "iteration": $iteration,
     "memory_mode": "$memory_mode",
     "memory_strategy": "$strategy",
+    "memory_expectation": "$memory_expectation",
     "repo_id": "$repo_id",
     "repo_url": "$repo_url",
     "branch": "$repo_branch",
@@ -1016,6 +1064,8 @@ print(json.dumps({
     "coder_task_id": "$coder_task_id",
     "reviewer_task_id": "$reviewer_task_id",
     "memory_hits": hits[:5],
+    "forbidden_hit_count": len(forbidden_hits),
+    "memory_effect": memory_effect,
     "artifact_count": len(artifacts),
     "score": score
 }, indent=2))
@@ -1027,8 +1077,8 @@ PY
 
 mode_list="${MODES//,/ }"
 for case_path in "${CASE_PATHS[@]}"; do
-  for mode in $mode_list; do
-    for ((i=1; i<=RUNS_PER_CASE; i++)); do
+  for ((i=1; i<=RUNS_PER_CASE; i++)); do
+    for mode in $mode_list; do
       run_case "$mode" "$case_path" "$i"
     done
   done

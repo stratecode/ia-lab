@@ -1,0 +1,38 @@
+{
+  "id": "httpie-cli-negative-review",
+  "repo_id": "httpie-cli",
+  "case_type": "negative_case",
+  "goal": "Run a deterministic benchmark workflow for HTTPie CLI and validate a narrow local test without borrowing unrelated CLI memory.",
+  "repo_profile": "python_cli_application",
+  "project_type": "existing_repo",
+  "runtime_or_stack": "python",
+  "project_root": ".",
+  "test_focus": "local CLI utility review",
+  "test_command": [
+    "docker",
+    "run",
+    "--rm",
+    "-v",
+    "{{ project_root_abs }}:/src",
+    "-w",
+    "/src",
+    "python:3.12",
+    "/bin/bash",
+    "-lc",
+    "python -m pip install -q -e .[test] pytest && pytest -q tests/test_cli_utils.py"
+  ],
+  "expected_files": [
+    "httpie/cli/utils.py",
+    "tests/test_cli_utils.py"
+  ],
+  "coder_tool": "write_file",
+  "patch_target": ".lab/repo-workflow-marker.txt",
+  "write_content": "httpie benchmark marker\n",
+  "coder_summary": "Write a deterministic benchmark marker file before repository review.",
+  "benchmark_memory_strategy": "semantic_only",
+  "memory_expectation": "avoid_transfer",
+  "forbidden_match_types": [
+    "pattern_similar",
+    "semantic_related"
+  ]
+}
