@@ -1,11 +1,8 @@
 {
   "repos_file": "benchmarks/repos.default.json",
-  "case_ids": [
-    "python-slugify-regex-cli",
-    "click-option-review",
-    "glow-render-review",
-    "httpie-cli-negative-review"
-  ],
+  "case_mode": "generated_catalog",
+  "case_ids": [],
+  "repo_ids": [],
   "modes": [
     "memory_off",
     "memory_on"

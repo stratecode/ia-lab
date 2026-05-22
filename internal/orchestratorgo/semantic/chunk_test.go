@@ -67,6 +67,36 @@ func TestEmbeddingClientRejectsDimensionMismatch(t *testing.T) {
 	}
 }
 
+func TestShouldSplitForEmbedding(t *testing.T) {
+	longContent := strings.Repeat("token dense content ", 30)
+	if !shouldSplitForEmbedding(&EmbeddingError{StatusCode: http.StatusInternalServerError}, longContent, 0) {
+		t.Fatal("expected 500 response on long content to trigger split")
+	}
+	if shouldSplitForEmbedding(&EmbeddingError{StatusCode: http.StatusBadRequest}, longContent, 0) {
+		t.Fatal("expected non-500 response to avoid split")
+	}
+	if shouldSplitForEmbedding(&EmbeddingError{StatusCode: http.StatusInternalServerError}, "tiny chunk", 0) {
+		t.Fatal("expected tiny chunk to avoid split")
+	}
+	if shouldSplitForEmbedding(&EmbeddingError{StatusCode: http.StatusInternalServerError}, longContent, 4) {
+		t.Fatal("expected depth guard to stop recursive split")
+	}
+}
+
+func TestSplitChunkForEmbedding(t *testing.T) {
+	content := "line one with enough text to split.\nline two keeps the chunk large enough.\nline three closes it."
+	left, right := splitChunkForEmbedding(content)
+	if left == "" || right == "" {
+		t.Fatal("expected both split chunks to contain content")
+	}
+	if left == content || right == content {
+		t.Fatal("expected split chunks to be smaller than original")
+	}
+	if strings.TrimSpace(left+" "+right) == "" {
+		t.Fatal("expected non-empty split output")
+	}
+}
+
 func TestSearchRequiresRetrievalScope(t *testing.T) {
 	service := &Service{cfg: config.Config{SemanticEnabled: true}}
 	_, err := service.Search(context.Background(), domain.SemanticSearchRequest{Query: "anything"})

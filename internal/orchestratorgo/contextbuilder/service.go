@@ -104,7 +104,7 @@ func (s *Service) Build(ctx context.Context, req domain.ContextBuildRequest) (*d
 		MaxChars:      maxChars,
 	}
 	applyRepoMemoryScope(&searchReq, enriched)
-	if enriched.WorkspaceRoot == nil {
+	if shouldScopeSearchToInitiative(enriched) {
 		searchReq.InitiativeID = enriched.InitiativeID
 	}
 	search, err := s.searchContext(ctx, searchReq, enriched)
@@ -270,6 +270,13 @@ func buildQuery(req domain.ContextBuildRequest) string {
 			b.WriteString("\nBenchmark case type: ")
 			b.WriteString(caseType)
 		}
+		appendMetadataLine(&b, req.Metadata, "Runtime", "runtime_or_stack")
+		appendMetadataLine(&b, req.Metadata, "Language", "language")
+		appendMetadataLine(&b, req.Metadata, "Framework", "framework")
+		appendMetadataLine(&b, req.Metadata, "Problem domain", "problem_domain")
+		appendMetadataLine(&b, req.Metadata, "Error class", "error_class")
+		appendMetadataLine(&b, req.Metadata, "Fix pattern", "fix_pattern")
+		appendMetadataLine(&b, req.Metadata, "Validation pattern", "validation_pattern")
 		if goal, ok := req.Metadata["goal"].(string); ok {
 			b.WriteString("\nGoal: ")
 			b.WriteString(goal)
@@ -283,11 +290,12 @@ func buildQuery(req domain.ContextBuildRequest) string {
 			b.WriteString(dod)
 		}
 		if request, ok := req.Metadata["project_request"].(map[string]any); ok {
-			b.WriteString("\nProject request: ")
-			b.WriteString(semantic.CompactMetadata(request))
+			appendMetadataLine(&b, request, "Project type", "project_type")
+			appendMetadataLine(&b, request, "Project root", "project_root")
+			appendMetadataLine(&b, request, "Test focus", "test_focus")
 		}
 	}
-	return b.String()
+	return semantic.TruncateChars(b.String(), 1200)
 }
 
 func allowedSources(input []string) []string {
@@ -309,20 +317,105 @@ func applyRepoMemoryScope(searchReq *domain.SemanticSearchRequest, req domain.Co
 	repoURL := strings.TrimSpace(metadataString(req.Metadata, "repository_url", "repo_url"))
 	repoProfile := strings.TrimSpace(metadataString(req.Metadata, "repo_profile"))
 	caseType := strings.TrimSpace(metadataString(req.Metadata, "benchmark_case_type"))
+	runtimeOrStack := strings.TrimSpace(metadataString(req.Metadata, "runtime_or_stack"))
+	language := strings.TrimSpace(metadataString(req.Metadata, "language"))
+	framework := strings.TrimSpace(metadataString(req.Metadata, "framework"))
+	problemDomain := strings.TrimSpace(metadataString(req.Metadata, "problem_domain"))
+	errorClass := strings.TrimSpace(metadataString(req.Metadata, "error_class"))
+	fixPattern := strings.TrimSpace(metadataString(req.Metadata, "fix_pattern"))
+	validationPattern := strings.TrimSpace(metadataString(req.Metadata, "validation_pattern"))
 	strategy := normalizeMemoryStrategy(req.MemoryStrategy)
-	if repoURL == "" && repoProfile == "" && caseType == "" {
+	if repoURL == "" && repoProfile == "" && caseType == "" &&
+		runtimeOrStack == "" && language == "" && framework == "" &&
+		problemDomain == "" && errorClass == "" && fixPattern == "" &&
+		validationPattern == "" {
 		return
 	}
-	if repoURL != "" {
-		searchReq.RepositoryURL = &repoURL
+	switch strategy {
+	case "repo_specific_first":
+		if repoURL != "" {
+			searchReq.RepositoryURL = &repoURL
+		}
+		if repoProfile != "" {
+			searchReq.RepoProfile = &repoProfile
+		}
+		if caseType != "" {
+			searchReq.CaseType = &caseType
+		}
+	case "pattern_first":
+		if caseType != "" {
+			searchReq.CaseType = &caseType
+		}
+		if problemDomain != "" {
+			searchReq.ProblemDomain = &problemDomain
+		}
+		if errorClass != "" {
+			searchReq.ErrorClass = &errorClass
+		}
+		if fixPattern != "" {
+			searchReq.FixPattern = &fixPattern
+		}
+		if validationPattern != "" {
+			searchReq.ValidationPattern = &validationPattern
+		}
+		if framework != "" {
+			searchReq.Framework = &framework
+		}
+	case "technology_first":
+		if runtimeOrStack != "" {
+			searchReq.RuntimeOrStack = &runtimeOrStack
+		}
+		if language != "" {
+			searchReq.Language = &language
+		}
+		if framework != "" {
+			searchReq.Framework = &framework
+		}
+		if caseType != "" {
+			searchReq.CaseType = &caseType
+		}
+		if errorClass != "" {
+			searchReq.ErrorClass = &errorClass
+		}
+		if fixPattern != "" {
+			searchReq.FixPattern = &fixPattern
+		}
+		if validationPattern != "" {
+			searchReq.ValidationPattern = &validationPattern
+		}
+	default:
+		if caseType != "" {
+			searchReq.CaseType = &caseType
+		}
+		if runtimeOrStack != "" {
+			searchReq.RuntimeOrStack = &runtimeOrStack
+		}
+		if language != "" {
+			searchReq.Language = &language
+		}
+		if framework != "" {
+			searchReq.Framework = &framework
+		}
+		if problemDomain != "" {
+			searchReq.ProblemDomain = &problemDomain
+		}
+		if errorClass != "" {
+			searchReq.ErrorClass = &errorClass
+		}
+		if fixPattern != "" {
+			searchReq.FixPattern = &fixPattern
+		}
+		if validationPattern != "" {
+			searchReq.ValidationPattern = &validationPattern
+		}
+		if repoProfile != "" {
+			searchReq.RepoProfile = &repoProfile
+		}
+		if repoURL != "" {
+			searchReq.RepositoryURL = &repoURL
+		}
 	}
-	if repoProfile != "" {
-		searchReq.RepoProfile = &repoProfile
-	}
-	if caseType != "" {
-		searchReq.CaseType = &caseType
-	}
-	if strategy == "repo_specific_first" || strategy == "pattern_first" {
+	if strategy == "repo_specific_first" || strategy == "pattern_first" || strategy == "technology_first" {
 		searchReq.WorkspaceRoot = nil
 	}
 }
@@ -330,7 +423,18 @@ func applyRepoMemoryScope(searchReq *domain.SemanticSearchRequest, req domain.Co
 func hasRepoMemoryScope(metadata map[string]any) bool {
 	return strings.TrimSpace(metadataString(metadata, "repository_url", "repo_url")) != "" ||
 		strings.TrimSpace(metadataString(metadata, "repo_profile")) != "" ||
-		strings.TrimSpace(metadataString(metadata, "benchmark_case_type")) != ""
+		strings.TrimSpace(metadataString(metadata, "benchmark_case_type")) != "" ||
+		strings.TrimSpace(metadataString(metadata, "runtime_or_stack")) != "" ||
+		strings.TrimSpace(metadataString(metadata, "language")) != "" ||
+		strings.TrimSpace(metadataString(metadata, "framework")) != "" ||
+		strings.TrimSpace(metadataString(metadata, "problem_domain")) != "" ||
+		strings.TrimSpace(metadataString(metadata, "error_class")) != "" ||
+		strings.TrimSpace(metadataString(metadata, "fix_pattern")) != "" ||
+		strings.TrimSpace(metadataString(metadata, "validation_pattern")) != ""
+}
+
+func shouldScopeSearchToInitiative(req domain.ContextBuildRequest) bool {
+	return req.WorkspaceRoot == nil && !hasRepoMemoryScope(req.Metadata)
 }
 
 func requestedOutcomes(req domain.ContextBuildRequest) []string {
@@ -383,6 +487,9 @@ func rankAndTrim(items []domain.SemanticChunkResponse, req domain.ContextBuildRe
 		if len(out) >= maxChunks || remaining <= 0 {
 			break
 		}
+		if shouldExcludeCurrentInitiativeMemory(item, req) {
+			continue
+		}
 		text := item.ContentText
 		if len([]rune(text)) > remaining {
 			text = semantic.TruncateChars(text, remaining)
@@ -411,6 +518,24 @@ func rankAndTrim(items []domain.SemanticChunkResponse, req domain.ContextBuildRe
 	return out
 }
 
+func shouldExcludeCurrentInitiativeMemory(item domain.SemanticChunkResponse, req domain.ContextBuildRequest) bool {
+	if metadataString(req.Metadata, "benchmark_case_id") == "" {
+		return false
+	}
+	if req.InitiativeID != nil && item.InitiativeID != nil && *req.InitiativeID == *item.InitiativeID {
+		return true
+	}
+	strategy := normalizeMemoryStrategy(req.MemoryStrategy)
+	if strategy == "pattern_first" || strategy == "technology_first" {
+		repoURL := metadataString(req.Metadata, "repository_url", "repo_url")
+		itemRepoURL := metadataString(item.Metadata, "repository_url", "repo_url")
+		if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
+			return true
+		}
+	}
+	return false
+}
+
 func adjustedScore(item domain.SemanticChunkResponse, req domain.ContextBuildRequest) float64 {
 	score := 0.0
 	if item.Score != nil {
@@ -436,31 +561,133 @@ func adjustedScore(item domain.SemanticChunkResponse, req domain.ContextBuildReq
 	itemRepoProfile := metadataString(item.Metadata, "repo_profile")
 	caseType := metadataString(req.Metadata, "benchmark_case_type")
 	itemCaseType := metadataString(item.Metadata, "benchmark_case_type")
+	runtimeOrStack := metadataString(req.Metadata, "runtime_or_stack")
+	itemRuntime := metadataString(item.Metadata, "runtime_or_stack")
+	language := metadataString(req.Metadata, "language")
+	itemLanguage := metadataString(item.Metadata, "language")
+	framework := metadataString(req.Metadata, "framework")
+	itemFramework := metadataString(item.Metadata, "framework")
+	problemDomain := metadataString(req.Metadata, "problem_domain")
+	itemProblemDomain := metadataString(item.Metadata, "problem_domain")
+	errorClass := metadataString(req.Metadata, "error_class")
+	itemErrorClass := metadataString(item.Metadata, "error_class")
+	fixPattern := metadataString(req.Metadata, "fix_pattern")
+	itemFixPattern := metadataString(item.Metadata, "fix_pattern")
+	validationPattern := metadataString(req.Metadata, "validation_pattern")
+	itemValidationPattern := metadataString(item.Metadata, "validation_pattern")
 	strategy := normalizeMemoryStrategy(req.MemoryStrategy)
 	switch strategy {
 	case "repo_specific_first":
-		if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
-			score += 0.45
+		if runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime {
+			score += 0.10
 		}
-		if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
-			score += 0.24
+		if language != "" && itemLanguage != "" && language == itemLanguage {
+			score += 0.08
 		}
-		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
+		if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
+			score += 0.16
+		}
+		if errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass {
 			score += 0.14
 		}
-	case "pattern_first":
-		if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
-			score += 0.34
+		if fixPattern != "" && itemFixPattern != "" && fixPattern == itemFixPattern {
+			score += 0.14
 		}
-		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
-			score += 0.24
+		if validationPattern != "" && itemValidationPattern != "" && validationPattern == itemValidationPattern {
+			score += 0.08
 		}
 		if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
+			score += 0.22
+		}
+		if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
+			score += 0.14
+		}
+		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
+			score += 0.08
+		}
+	case "pattern_first":
+		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
+			score += 0.16
+		}
+		if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
+			score += 0.24
+		}
+		if errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass {
 			score += 0.18
+		}
+		if fixPattern != "" && itemFixPattern != "" && fixPattern == itemFixPattern {
+			score += 0.18
+		}
+		if validationPattern != "" && itemValidationPattern != "" && validationPattern == itemValidationPattern {
+			score += 0.12
+		}
+		if framework != "" && itemFramework != "" && framework == itemFramework {
+			score += 0.12
+		}
+		if runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime {
+			score += 0.08
+		}
+		if language != "" && itemLanguage != "" && language == itemLanguage {
+			score += 0.06
+		}
+		if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
+			score += 0.04
+		}
+		if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
+			score += 0.02
+		}
+	case "technology_first":
+		if runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime {
+			score += 0.22
+		}
+		if language != "" && itemLanguage != "" && language == itemLanguage {
+			score += 0.18
+		}
+		if framework != "" && itemFramework != "" && framework == itemFramework {
+			score += 0.18
+		}
+		if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
+			score += 0.14
+		}
+		if errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass {
+			score += 0.10
+		}
+		if fixPattern != "" && itemFixPattern != "" && fixPattern == itemFixPattern {
+			score += 0.10
+		}
+		if validationPattern != "" && itemValidationPattern != "" && validationPattern == itemValidationPattern {
+			score += 0.08
+		}
+		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
+			score += 0.06
+		}
+		if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
+			score += 0.03
+		}
+		if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
+			score += 0.01
 		}
 	default:
 		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
 			score += 0.10
+		}
+		if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
+			score += 0.12
+		}
+		if errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass {
+			score += 0.10
+		}
+		if fixPattern != "" && itemFixPattern != "" && fixPattern == itemFixPattern {
+			score += 0.10
+		}
+		if runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime {
+			score += 0.08
+		}
+		if language != "" && itemLanguage != "" && language == itemLanguage {
+			score += 0.06
+		}
+		if framework != "" && itemFramework != "" && framework == itemFramework {
+			score += 0.06
 		}
 		if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
 			score += 0.08
@@ -507,6 +734,8 @@ func normalizeMemoryStrategy(value string) string {
 		return "repo_specific_first"
 	case "pattern_first":
 		return "pattern_first"
+	case "technology_first":
+		return "technology_first"
 	case "semantic_only":
 		return "semantic_only"
 	default:
@@ -520,15 +749,52 @@ func memoryMatchType(item domain.SemanticChunkResponse, req domain.ContextBuildR
 	if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
 		return "repo_specific"
 	}
+	runtimeOrStack := metadataString(req.Metadata, "runtime_or_stack")
+	itemRuntime := metadataString(item.Metadata, "runtime_or_stack")
+	language := metadataString(req.Metadata, "language")
+	itemLanguage := metadataString(item.Metadata, "language")
+	framework := metadataString(req.Metadata, "framework")
+	itemFramework := metadataString(item.Metadata, "framework")
+	problemDomain := metadataString(req.Metadata, "problem_domain")
+	itemProblemDomain := metadataString(item.Metadata, "problem_domain")
+	if (runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime) ||
+		(language != "" && itemLanguage != "" && language == itemLanguage) ||
+		(framework != "" && itemFramework != "" && framework == itemFramework) {
+		if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
+			return "technology_similar"
+		}
+		return "technology_similar"
+	}
 	repoProfile := metadataString(req.Metadata, "repo_profile")
 	itemRepoProfile := metadataString(item.Metadata, "repo_profile")
 	caseType := metadataString(req.Metadata, "benchmark_case_type")
 	itemCaseType := metadataString(item.Metadata, "benchmark_case_type")
+	errorClass := metadataString(req.Metadata, "error_class")
+	itemErrorClass := metadataString(item.Metadata, "error_class")
+	fixPattern := metadataString(req.Metadata, "fix_pattern")
+	itemFixPattern := metadataString(item.Metadata, "fix_pattern")
+	validationPattern := metadataString(req.Metadata, "validation_pattern")
+	itemValidationPattern := metadataString(item.Metadata, "validation_pattern")
 	if (repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile) ||
-		(caseType != "" && itemCaseType != "" && caseType == itemCaseType) {
+		(caseType != "" && itemCaseType != "" && caseType == itemCaseType) ||
+		(errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass) ||
+		(fixPattern != "" && itemFixPattern != "" && fixPattern == itemFixPattern) ||
+		(validationPattern != "" && itemValidationPattern != "" && validationPattern == itemValidationPattern) {
 		return "pattern_similar"
 	}
 	return "semantic_related"
+}
+
+func appendMetadataLine(b *strings.Builder, metadata map[string]any, label string, keys ...string) {
+	if b == nil {
+		return
+	}
+	if value, ok := firstStringFromMetadata(metadata, keys...); ok {
+		b.WriteString("\n")
+		b.WriteString(label)
+		b.WriteString(": ")
+		b.WriteString(value)
+	}
 }
 
 func metadataString(metadata map[string]any, keys ...string) string {

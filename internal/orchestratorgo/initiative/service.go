@@ -443,6 +443,12 @@ type repoWorkflowProfile struct {
 	projectFlow           string
 	projectType           string
 	stack                 string
+	language              string
+	framework             string
+	problemDomain         string
+	errorClass            string
+	fixPattern            string
+	validationPattern     string
 	repoName              string
 	projectRoot           string
 	repositoryURL         string
@@ -470,6 +476,12 @@ func fallbackRepoExecutionPlan(initiative *domain.InitiativeResponse, design map
 		"project_root":     profile.projectRoot,
 		"project_type":     profile.projectType,
 		"runtime_or_stack": profile.stack,
+		"language":         profile.language,
+		"framework":        profile.framework,
+		"problem_domain":   profile.problemDomain,
+		"error_class":      profile.errorClass,
+		"fix_pattern":      profile.fixPattern,
+		"validation_pattern": profile.validationPattern,
 		"repository_url":   profile.repositoryURL,
 		"default_branch":   profile.defaultBranch,
 		"goal":             goal,
@@ -658,6 +670,24 @@ func applyBenchmarkMetadata(metadata map[string]any, profile repoWorkflowProfile
 		metadata["benchmark_memory_strategy"] = profile.benchmarkMemoryPolicy
 		metadata["context_memory_strategy"] = profile.benchmarkMemoryPolicy
 	}
+	if profile.language != "" {
+		metadata["language"] = profile.language
+	}
+	if profile.framework != "" {
+		metadata["framework"] = profile.framework
+	}
+	if profile.problemDomain != "" {
+		metadata["problem_domain"] = profile.problemDomain
+	}
+	if profile.errorClass != "" {
+		metadata["error_class"] = profile.errorClass
+	}
+	if profile.fixPattern != "" {
+		metadata["fix_pattern"] = profile.fixPattern
+	}
+	if profile.validationPattern != "" {
+		metadata["validation_pattern"] = profile.validationPattern
+	}
 }
 
 func loadBenchmarkRepoWorkflowProfile(workspaceRoot string) (repoWorkflowProfile, bool) {
@@ -697,6 +727,12 @@ func decodeBenchmarkRepoWorkflowProfile(raw []byte, workspaceRoot string) (repoW
 		CoderSummary   string   `json:"coder_summary"`
 		MemoryMode     string   `json:"benchmark_memory_mode"`
 		MemoryStrategy string   `json:"benchmark_memory_strategy"`
+		Language       string   `json:"language"`
+		Framework      string   `json:"framework"`
+		ProblemDomain  string   `json:"problem_domain"`
+		ErrorClass     string   `json:"error_class"`
+		FixPattern     string   `json:"fix_pattern"`
+		ValidationPattern string `json:"validation_pattern"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return repoWorkflowProfile{}, false
@@ -705,6 +741,12 @@ func decodeBenchmarkRepoWorkflowProfile(raw []byte, workspaceRoot string) (repoW
 		projectFlow:           firstNonEmptyString(strings.TrimSpace(payload.RepoProfile), "benchmark_repo_workflow"),
 		projectType:           firstNonEmptyString(strings.TrimSpace(payload.ProjectType), "existing_repo"),
 		stack:                 firstNonEmptyString(strings.TrimSpace(payload.Runtime), "python"),
+		language:              firstNonEmptyString(strings.TrimSpace(payload.Language), strings.TrimSpace(payload.Runtime)),
+		framework:             strings.TrimSpace(payload.Framework),
+		problemDomain:         strings.TrimSpace(payload.ProblemDomain),
+		errorClass:            strings.TrimSpace(payload.ErrorClass),
+		fixPattern:            strings.TrimSpace(payload.FixPattern),
+		validationPattern:     strings.TrimSpace(payload.ValidationPattern),
 		repoName:              filepath.Base(strings.TrimSpace(workspaceRoot)),
 		projectRoot:           firstNonEmptyString(strings.TrimSpace(payload.ProjectRoot), "."),
 		repositoryURL:         strings.TrimSpace(payload.RepoURL),

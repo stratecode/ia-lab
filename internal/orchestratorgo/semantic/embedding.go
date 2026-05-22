@@ -10,6 +10,20 @@ import (
 	"time"
 )
 
+type EmbeddingError struct {
+	StatusCode int
+}
+
+func (e *EmbeddingError) Error() string {
+	if e == nil {
+		return "embedding request failed"
+	}
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("embedding endpoint returned status %d", e.StatusCode)
+	}
+	return "embedding request failed"
+}
+
 type EmbeddingClient struct {
 	baseURL    string
 	apiKey     string
@@ -60,7 +74,7 @@ func (c *EmbeddingClient) Embed(ctx context.Context, input string) ([]float32, e
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("embedding endpoint returned status %d", resp.StatusCode)
+		return nil, &EmbeddingError{StatusCode: resp.StatusCode}
 	}
 	var parsed struct {
 		Data []struct {

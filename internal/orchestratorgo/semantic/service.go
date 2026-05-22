@@ -3,6 +3,7 @@ package semantic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -156,29 +157,21 @@ func (s *Service) Index(ctx context.Context, req domain.SemanticIndexRequest) (*
 		semanticIndexTotal.WithLabelValues(sourceType, "error").Inc()
 		return nil, err
 	}
+	nextChunkIndex := 0
 	for _, chunk := range chunks {
-		embedding, err := s.embeddings.Embed(ctx, chunk.ContentText)
-		if err != nil {
-			semanticIndexTotal.WithLabelValues(sourceType, "error").Inc()
-			return nil, err
-		}
-		_, err = s.postgres.UpsertSemanticChunk(ctx, store.SemanticChunkParams{
+		if err := s.indexChunkWithFallback(ctx, store.SemanticChunkParams{
 			SourceType:    sourceType,
 			SourceID:      sourceID,
 			InitiativeID:  initiativeID,
 			TaskID:        taskID,
 			ArtifactID:    artifactID,
 			WorkspaceRoot: workspaceRoot,
-			ChunkIndex:    chunk.Index,
-			ContentText:   chunk.ContentText,
-			ContentHash:   chunk.ContentHash,
+			ContentHash:   sourceHash,
 			Metadata: mergeMetadata(SanitizeMap(metadata), map[string]any{
 				"semantic_content_hash": sourceHash,
 				"semantic_indexed_at":   time.Now().UTC().Format(time.RFC3339),
 			}),
-			Embedding: embedding,
-		})
-		if err != nil {
+		}, chunk.ContentText, 0, &nextChunkIndex); err != nil {
 			semanticIndexTotal.WithLabelValues(sourceType, "error").Inc()
 			return nil, err
 		}
@@ -187,9 +180,65 @@ func (s *Service) Index(ctx context.Context, req domain.SemanticIndexRequest) (*
 	return &domain.SemanticIndexResponse{
 		SourceType:  sourceType,
 		SourceID:    sourceID,
-		ChunkCount:  len(chunks),
+		ChunkCount:  nextChunkIndex,
 		ContentHash: sourceHash,
 	}, nil
+}
+
+func (s *Service) indexChunkWithFallback(ctx context.Context, base store.SemanticChunkParams, content string, depth int, nextChunkIndex *int) error {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+	embedding, err := s.embeddings.Embed(ctx, content)
+	if err != nil {
+		if shouldSplitForEmbedding(err, content, depth) {
+			left, right := splitChunkForEmbedding(content)
+			if left != "" && right != "" && left != content && right != content {
+				if err := s.indexChunkWithFallback(ctx, base, left, depth+1, nextChunkIndex); err != nil {
+					return err
+				}
+				return s.indexChunkWithFallback(ctx, base, right, depth+1, nextChunkIndex)
+			}
+		}
+		return err
+	}
+	params := base
+	params.ChunkIndex = *nextChunkIndex
+	params.ContentText = content
+	params.ContentHash = HashText(content)
+	params.Embedding = embedding
+	if _, err := s.postgres.UpsertSemanticChunk(ctx, params); err != nil {
+		return err
+	}
+	*nextChunkIndex = *nextChunkIndex + 1
+	return nil
+}
+
+func shouldSplitForEmbedding(err error, content string, depth int) bool {
+	if depth >= 4 {
+		return false
+	}
+	var embedErr *EmbeddingError
+	if !errors.As(err, &embedErr) || embedErr.StatusCode != 500 {
+		return false
+	}
+	return len([]rune(content)) > 240
+}
+
+func splitChunkForEmbedding(content string) (string, string) {
+	runes := []rune(strings.TrimSpace(content))
+	if len(runes) < 2 {
+		return "", ""
+	}
+	mid := len(runes) / 2
+	split := softBreak(runes, 0, mid)
+	if split <= 0 || split >= len(runes) {
+		split = mid
+	}
+	left := strings.TrimSpace(string(runes[:split]))
+	right := strings.TrimSpace(string(runes[split:]))
+	return left, right
 }
 
 func (s *Service) Search(ctx context.Context, req domain.SemanticSearchRequest) (*domain.SemanticSearchResponse, error) {
@@ -202,8 +251,10 @@ func (s *Service) Search(ctx context.Context, req domain.SemanticSearchRequest) 
 		return nil, fmt.Errorf("query is required")
 	}
 	if req.InitiativeID == nil && req.TaskID == nil && req.ArtifactID == nil && req.WorkspaceRoot == nil &&
-		req.RepositoryURL == nil && req.RepoProfile == nil && req.CaseType == nil {
-		return nil, fmt.Errorf("semantic search requires initiative_id, task_id, artifact_id, workspace_root, repository_url, repo_profile, or benchmark_case_type filter")
+		req.RepositoryURL == nil && req.RepoProfile == nil && req.CaseType == nil &&
+		req.RuntimeOrStack == nil && req.Language == nil && req.Framework == nil &&
+		req.ProblemDomain == nil && req.ErrorClass == nil && req.FixPattern == nil && req.ValidationPattern == nil {
+		return nil, fmt.Errorf("semantic search requires initiative_id, task_id, artifact_id, workspace_root, repository_url, repo_profile, benchmark_case_type, runtime_or_stack, language, framework, problem_domain, error_class, fix_pattern, or validation_pattern filter")
 	}
 	embedding, err := s.embeddings.Embed(ctx, query)
 	if err != nil {
@@ -223,6 +274,13 @@ func (s *Service) Search(ctx context.Context, req domain.SemanticSearchRequest) 
 		WorkspaceRoot: req.WorkspaceRoot,
 		RepositoryURL: req.RepositoryURL,
 		RepoProfile:   req.RepoProfile,
+		RuntimeOrStack: req.RuntimeOrStack,
+		Language:      req.Language,
+		Framework:     req.Framework,
+		ProblemDomain: req.ProblemDomain,
+		ErrorClass:    req.ErrorClass,
+		FixPattern:    req.FixPattern,
+		ValidationPattern: req.ValidationPattern,
 		CaseType:      req.CaseType,
 		Limit:         limit,
 	})

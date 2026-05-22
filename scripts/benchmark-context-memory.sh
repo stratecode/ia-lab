@@ -15,6 +15,7 @@ REPO_CATALOG_PATH="${ROOT_DIR}/benchmarks/repos.default.json"
 CONFIG_PATH="${ROOT_DIR}/benchmarks/benchmark.local.json"
 CASE_DIR="${ROOT_DIR}/benchmarks/cases"
 REPORT_ROOT="${ROOT_DIR}/benchmarks/runs/$(date -u +%Y%m%dT%H%M%SZ)"
+GENERATED_CASE_DIR="${REPORT_ROOT}/generated-cases"
 
 mkdir -p "$REPORT_ROOT"
 
@@ -528,6 +529,9 @@ for row in runs:
         slot["success_count"] += 1
     slot["score_total"] += int(row.get("score", 0) or 0)
     slot["hit_total"] += len(row.get("memory_hits") or [])
+    slot["repo_specific_hit_total"] = int(slot.get("repo_specific_hit_total", 0) or 0) + int(row.get("repo_specific_hit_count", 0) or 0)
+    slot["technology_hit_total"] = int(slot.get("technology_hit_total", 0) or 0) + int(row.get("technology_hit_count", 0) or 0)
+    slot["pattern_hit_total"] = int(slot.get("pattern_hit_total", 0) or 0) + int(row.get("pattern_hit_count", 0) or 0)
     slot["forbidden_total"] += int(row.get("forbidden_hit_count", 0) or 0)
     effect = row.get("memory_effect")
     if effect:
@@ -539,11 +543,34 @@ summary = {
 }
 (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 
+progression = {}
+for row in runs:
+    repo = row.get("repo_id") or row.get("case_id") or "unknown"
+    mode = row.get("mode") or "unknown"
+    iteration = int(row.get("iteration", 1) or 1)
+    slot = progression.setdefault(repo, {}).setdefault(str(iteration), {}).setdefault(mode, {
+        "score_total": 0,
+        "run_count": 0,
+        "hit_total": 0,
+        "effects": {},
+    })
+    slot["score_total"] += int(row.get("score", 0) or 0)
+    slot["run_count"] += 1
+    slot["hit_total"] += len(row.get("memory_hits") or [])
+    slot["repo_specific_hit_total"] = int(slot.get("repo_specific_hit_total", 0) or 0) + int(row.get("repo_specific_hit_count", 0) or 0)
+    slot["technology_hit_total"] = int(slot.get("technology_hit_total", 0) or 0) + int(row.get("technology_hit_count", 0) or 0)
+    slot["pattern_hit_total"] = int(slot.get("pattern_hit_total", 0) or 0) + int(row.get("pattern_hit_count", 0) or 0)
+    effect = row.get("memory_effect")
+    if effect:
+        slot["effects"][effect] = slot["effects"].get(effect, 0) + 1
+
+(root / "progression.json").write_text(json.dumps(progression, indent=2) + "\n")
+
 lines = [
     "# Benchmark Summary",
     "",
-    "| Repo | Runs | Off Avg | On Avg | Delta | On Hits Avg | Forbidden | On Success | Effect | Commit |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|---|---|",
+    "| Repo | Runs | Off Avg | On Avg | Delta | On Hits Avg | Repo Hits | Tech Hits | Pattern Hits | Forbidden | On Success | Effect | Commit |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
 ]
 for repo, modes in sorted(aggregates.items()):
     off = modes.get("memory_off", {})
@@ -554,15 +581,42 @@ for repo, modes in sorted(aggregates.items()):
     on_avg = (int(on.get("score_total", 0) or 0) / on_runs) if on else 0
     delta = on_avg - off_avg
     on_hits_avg = (int(on.get("hit_total", 0) or 0) / on_runs) if on else 0
+    repo_hits_avg = (int(on.get("repo_specific_hit_total", 0) or 0) / on_runs) if on else 0
+    tech_hits_avg = (int(on.get("technology_hit_total", 0) or 0) / on_runs) if on else 0
+    pattern_hits_avg = (int(on.get("pattern_hit_total", 0) or 0) / on_runs) if on else 0
     forbidden_avg = (int(on.get("forbidden_total", 0) or 0) / on_runs) if on else 0
     on_success = f"{int(on.get('success_count', 0) or 0)}/{int(on.get('run_count', 0) or 0)}" if on else "0/0"
     effects = on.get("effects", {}) if on else {}
     effect_summary = ", ".join(f"{key}:{value}" for key, value in sorted(effects.items())) or "-"
     commit = ((on.get("resolved_commit") or off.get("resolved_commit") or "")[:12]) if (on or off) else ""
     runs_count = int(on.get("run_count", 0) or off.get("run_count", 0) or 0)
-    lines.append(f"| {repo} | {runs_count} | {off_avg:.1f} | {on_avg:.1f} | {delta:+.1f} | {on_hits_avg:.1f} | {forbidden_avg:.1f} | {on_success} | {effect_summary} | {commit} |")
+    lines.append(f"| {repo} | {runs_count} | {off_avg:.1f} | {on_avg:.1f} | {delta:+.1f} | {on_hits_avg:.1f} | {repo_hits_avg:.1f} | {tech_hits_avg:.1f} | {pattern_hits_avg:.1f} | {forbidden_avg:.1f} | {on_success} | {effect_summary} | {commit} |")
 
 root.joinpath("summary.md").write_text("\n".join(lines) + "\n")
+
+progress_lines = [
+    "# Benchmark Progression",
+    "",
+    "| Repo | Iteration | Off Avg | On Avg | Delta | On Hits Avg | Repo Hits | Tech Hits | Pattern Hits | Effect |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+]
+for repo, iterations in sorted(progression.items()):
+    for iteration, modes in sorted(iterations.items(), key=lambda item: int(item[0])):
+        off = modes.get("memory_off", {})
+        on = modes.get("memory_on", {})
+        off_runs = max(1, int(off.get("run_count", 0) or 1))
+        on_runs = max(1, int(on.get("run_count", 0) or 1))
+        off_avg = (int(off.get("score_total", 0) or 0) / off_runs) if off else 0
+        on_avg = (int(on.get("score_total", 0) or 0) / on_runs) if on else 0
+        on_hits_avg = (int(on.get("hit_total", 0) or 0) / on_runs) if on else 0
+        repo_hits_avg = (int(on.get("repo_specific_hit_total", 0) or 0) / on_runs) if on else 0
+        tech_hits_avg = (int(on.get("technology_hit_total", 0) or 0) / on_runs) if on else 0
+        pattern_hits_avg = (int(on.get("pattern_hit_total", 0) or 0) / on_runs) if on else 0
+        effects = on.get("effects", {}) if on else {}
+        effect_summary = ", ".join(f"{key}:{value}" for key, value in sorted(effects.items())) or "-"
+        progress_lines.append(f"| {repo} | {iteration} | {off_avg:.1f} | {on_avg:.1f} | {on_avg - off_avg:+.1f} | {on_hits_avg:.1f} | {repo_hits_avg:.1f} | {tech_hits_avg:.1f} | {pattern_hits_avg:.1f} | {effect_summary} |")
+
+root.joinpath("progression.md").write_text("\n".join(progress_lines) + "\n")
 PY
 }
 
@@ -601,12 +655,39 @@ load_repos_json() {
 }
 
 load_case_paths() {
-  python3 - "$CONFIG_PATH" "$CASE_DIR" <<'PY'
+  local config_repos_file
+  config_repos_file="$(config_get repos_file)"
+  if [[ -z "$config_repos_file" ]]; then
+    config_repos_file="benchmarks/repos.default.json"
+  fi
+  python3 - "$CONFIG_PATH" "$CASE_DIR" "${ROOT_DIR}/${config_repos_file}" "$GENERATED_CASE_DIR" "$ROOT_DIR/scripts/generate-benchmark-cases.py" <<'PY'
 import json, pathlib, sys
 config = json.loads(pathlib.Path(sys.argv[1]).read_text())
 case_dir = pathlib.Path(sys.argv[2])
+repo_catalog = pathlib.Path(sys.argv[3])
+generated_dir = pathlib.Path(sys.argv[4])
+generator = pathlib.Path(sys.argv[5])
+case_mode = config.get("case_mode") or "static"
 case_ids = config.get("case_ids") or []
-if case_ids:
+
+if case_mode == "generated_catalog":
+    generated_dir.mkdir(parents=True, exist_ok=True)
+    repo_ids_list = config.get("repo_ids") or []
+    repo_ids = ",".join(repo_ids_list)
+    import subprocess
+    cmd = [sys.executable, str(generator), "--repos", str(repo_catalog), "--outdir", str(generated_dir)]
+    if repo_ids:
+        cmd.extend(["--repo-ids", repo_ids])
+    subprocess.run(cmd, check=True)
+    if repo_ids_list:
+        for repo_id in repo_ids_list:
+            path = generated_dir / f"{repo_id}-experience-review.json"
+            if path.exists():
+                print(path)
+    else:
+        for path in sorted(generated_dir.glob("*.json")):
+            print(path)
+elif case_ids:
     for case_id in case_ids:
         print(case_dir / f"{case_id}.json")
 else:
@@ -1019,6 +1100,9 @@ for chunk in ctx.get("chunks", []):
     })
 forbidden_types = set(json.loads('''$forbidden_match_types_json'''))
 forbidden_hits = [hit for hit in hits if hit.get("match_type") in forbidden_types]
+repo_specific_hits = [hit for hit in hits if hit.get("match_type") == "repo_specific"]
+technology_hits = [hit for hit in hits if hit.get("match_type") == "technology_similar"]
+pattern_hits = [hit for hit in hits if hit.get("match_type") == "pattern_similar"]
 status = "success" if "${initiative_status}" == "completed" and reviewer.get("state") == "completed" else "failed"
 results = reviewer.get("results") or {}
 reviewer_ok = reviewer.get("state") == "completed" and results.get("status") == "success" and results.get("exit_code") == 0
@@ -1064,6 +1148,9 @@ print(json.dumps({
     "coder_task_id": "$coder_task_id",
     "reviewer_task_id": "$reviewer_task_id",
     "memory_hits": hits[:5],
+    "repo_specific_hit_count": len(repo_specific_hits),
+    "technology_hit_count": len(technology_hits),
+    "pattern_hit_count": len(pattern_hits),
     "forbidden_hit_count": len(forbidden_hits),
     "memory_effect": memory_effect,
     "artifact_count": len(artifacts),

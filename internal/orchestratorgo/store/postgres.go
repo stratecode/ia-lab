@@ -808,6 +808,13 @@ type SemanticSearchFilter struct {
 	WorkspaceRoot *string
 	RepositoryURL *string
 	RepoProfile   *string
+	RuntimeOrStack *string
+	Language      *string
+	Framework     *string
+	ProblemDomain *string
+	ErrorClass    *string
+	FixPattern    *string
+	ValidationPattern *string
 	CaseType      *string
 	Limit         int
 }
@@ -1174,11 +1181,21 @@ func (s *PostgresStore) SearchSemanticChunks(ctx context.Context, filter Semanti
 		  AND ($7::text IS NULL OR COALESCE(metadata->>'repository_url', metadata->'project_request'->>'repository_url', '') = $7)
 		  AND ($8::text IS NULL OR COALESCE(metadata->>'repo_profile', metadata->'project_request'->>'repo_profile', '') = $8)
 		  AND ($9::text IS NULL OR COALESCE(metadata->>'benchmark_case_type', metadata->'project_request'->>'benchmark_case_type', '') = $9)
+		  AND ($10::text IS NULL OR COALESCE(metadata->>'runtime_or_stack', metadata->'project_request'->>'runtime_or_stack', '') = $10)
+		  AND ($11::text IS NULL OR COALESCE(metadata->>'language', metadata->'project_request'->>'language', '') = $11)
+		  AND ($12::text IS NULL OR COALESCE(metadata->>'framework', metadata->'project_request'->>'framework', '') = $12)
+		  AND ($13::text IS NULL OR COALESCE(metadata->>'problem_domain', metadata->'project_request'->>'problem_domain', '') = $13)
+		  AND ($14::text IS NULL OR COALESCE(metadata->>'error_class', metadata->'project_request'->>'error_class', '') = $14)
+		  AND ($15::text IS NULL OR COALESCE(metadata->>'fix_pattern', metadata->'project_request'->>'fix_pattern', '') = $15)
+		  AND ($16::text IS NULL OR COALESCE(metadata->>'validation_pattern', metadata->'project_request'->>'validation_pattern', '') = $16)
 		ORDER BY embedding <=> $1::vector, updated_at DESC
-		LIMIT $10
+		LIMIT $17
 	`, vectorLiteral(filter.Embedding), nullableStringSlice(filter.SourceTypes), nullableUUID(filter.InitiativeID),
 		nullableUUID(filter.TaskID), nullableUUID(filter.ArtifactID), nullableString(filter.WorkspaceRoot),
-		nullableString(filter.RepositoryURL), nullableString(filter.RepoProfile), nullableString(filter.CaseType), limit)
+		nullableString(filter.RepositoryURL), nullableString(filter.RepoProfile), nullableString(filter.CaseType),
+		nullableString(filter.RuntimeOrStack), nullableString(filter.Language), nullableString(filter.Framework),
+		nullableString(filter.ProblemDomain), nullableString(filter.ErrorClass), nullableString(filter.FixPattern),
+		nullableString(filter.ValidationPattern), limit)
 	if err != nil {
 		return nil, err
 	}

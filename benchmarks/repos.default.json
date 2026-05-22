@@ -1,44 +1,107 @@
 [
   {
-    "id": "python-slugify",
-    "repo_url": "https://github.com/un33k/python-slugify",
+    "id": "httpx",
+    "repo_url": "https://github.com/encode/httpx",
     "default_branch": "master",
-    "repo_profile": "python_cli_library",
+    "repo_profile": "python_http_client_library",
     "runtime_or_stack": "python"
   },
   {
-    "id": "click",
-    "repo_url": "https://github.com/pallets/click",
+    "id": "pydantic",
+    "repo_url": "https://github.com/pydantic/pydantic",
     "default_branch": "main",
+    "repo_profile": "python_data_validation_library",
+    "runtime_or_stack": "python"
+  },
+  {
+    "id": "typer",
+    "repo_url": "https://github.com/fastapi/typer",
+    "default_branch": "master",
     "repo_profile": "python_cli_framework",
     "runtime_or_stack": "python"
   },
   {
-    "id": "flask",
-    "repo_url": "https://github.com/pallets/flask",
+    "id": "vitest",
+    "repo_url": "https://github.com/vitest-dev/vitest",
     "default_branch": "main",
-    "repo_profile": "python_web_framework",
-    "runtime_or_stack": "python"
+    "repo_profile": "typescript_test_framework",
+    "runtime_or_stack": "typescript"
   },
   {
-    "id": "httpie-cli",
-    "repo_url": "https://github.com/httpie/cli",
-    "default_branch": "master",
-    "repo_profile": "python_cli_application",
-    "runtime_or_stack": "python"
+    "id": "fastify",
+    "repo_url": "https://github.com/fastify/fastify",
+    "default_branch": "main",
+    "repo_profile": "javascript_web_framework",
+    "runtime_or_stack": "javascript"
   },
   {
-    "id": "glow",
-    "repo_url": "https://github.com/charmbracelet/glow",
+    "id": "axios",
+    "repo_url": "https://github.com/axios/axios",
+    "default_branch": "v1.x",
+    "repo_profile": "javascript_http_client_library",
+    "runtime_or_stack": "javascript"
+  },
+  {
+    "id": "math-php",
+    "repo_url": "https://github.com/markrogoyski/math-php",
     "default_branch": "master",
-    "repo_profile": "go_cli_tui",
+    "repo_profile": "php_math_library",
+    "runtime_or_stack": "php"
+  },
+  {
+    "id": "monolog",
+    "repo_url": "https://github.com/Seldaek/monolog",
+    "default_branch": "main",
+    "repo_profile": "php_logging_library",
+    "runtime_or_stack": "php"
+  },
+  {
+    "id": "slim",
+    "repo_url": "https://github.com/slimphp/Slim",
+    "default_branch": "4.x",
+    "repo_profile": "php_micro_web_framework",
+    "runtime_or_stack": "php"
+  },
+  {
+    "id": "cobra",
+    "repo_url": "https://github.com/spf13/cobra",
+    "default_branch": "main",
+    "repo_profile": "go_cli_framework",
     "runtime_or_stack": "go"
   },
   {
-    "id": "ripgrep",
-    "repo_url": "https://github.com/BurntSushi/ripgrep",
+    "id": "auth-go",
+    "repo_url": "https://github.com/supabase-community/auth-go",
+    "default_branch": "main",
+    "repo_profile": "go_auth_sdk",
+    "runtime_or_stack": "go"
+  },
+  {
+    "id": "bubbletea",
+    "repo_url": "https://github.com/charmbracelet/bubbletea",
+    "default_branch": "main",
+    "repo_profile": "go_tui_framework",
+    "runtime_or_stack": "go"
+  },
+  {
+    "id": "jq",
+    "repo_url": "https://github.com/jqlang/jq",
     "default_branch": "master",
-    "repo_profile": "rust_cli_workspace",
+    "repo_profile": "c_json_cli_processor",
+    "runtime_or_stack": "c"
+  },
+  {
+    "id": "cjson",
+    "repo_url": "https://github.com/DaveGamble/cJSON",
+    "default_branch": "master",
+    "repo_profile": "c_embeddable_json_parser",
+    "runtime_or_stack": "c"
+  },
+  {
+    "id": "serde",
+    "repo_url": "https://github.com/serde-rs/serde",
+    "default_branch": "master",
+    "repo_profile": "rust_serialization_framework",
     "runtime_or_stack": "rust"
   }
 ]

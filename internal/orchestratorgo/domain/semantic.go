@@ -49,6 +49,13 @@ type SemanticSearchRequest struct {
 	WorkspaceRoot *string  `json:"workspace_root,omitempty"`
 	RepositoryURL *string  `json:"repository_url,omitempty"`
 	RepoProfile   *string  `json:"repo_profile,omitempty"`
+	RuntimeOrStack *string `json:"runtime_or_stack,omitempty"`
+	Language       *string `json:"language,omitempty"`
+	Framework      *string `json:"framework,omitempty"`
+	ProblemDomain  *string `json:"problem_domain,omitempty"`
+	ErrorClass     *string `json:"error_class,omitempty"`
+	FixPattern     *string `json:"fix_pattern,omitempty"`
+	ValidationPattern *string `json:"validation_pattern,omitempty"`
 	CaseType      *string  `json:"benchmark_case_type,omitempty"`
 	Outcomes      []string `json:"outcomes,omitempty"`
 	MinConfidence *float64 `json:"min_confidence,omitempty"`
