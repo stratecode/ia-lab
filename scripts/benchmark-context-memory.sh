@@ -378,6 +378,167 @@ wait_for_initiative_terminal() {
   done
 }
 
+bool_json() {
+  local value="${1:-false}"
+  if [[ "$value" == "1" || "$value" == "true" || "$value" == "True" ]]; then
+    printf 'true'
+  else
+    printf 'false'
+  fi
+}
+
+render_case_for_workspace() {
+  local case_path="$1"
+  local output_path="$2"
+  local workspace_root="$3"
+  local repo_url="$4"
+  local repo_branch="$5"
+  local repo_profile="$6"
+  local memory_mode="$7"
+  local strategy="$8"
+  python3 - "$case_path" "$output_path" "$workspace_root" "$repo_url" "$repo_branch" "$repo_profile" "$memory_mode" "$strategy" <<'PY'
+import json, pathlib, sys
+
+case_path, output_path, workspace_root, repo_url, repo_branch, repo_profile, memory_mode, strategy = sys.argv[1:9]
+case = json.loads(pathlib.Path(case_path).read_text())
+
+replacements = {
+    "{{ project_root_abs }}": workspace_root,
+    "{{ workspace_root }}": workspace_root,
+}
+
+def render(value):
+    if isinstance(value, str):
+        for source, target in replacements.items():
+            value = value.replace(source, target)
+        return value
+    if isinstance(value, list):
+        return [render(item) for item in value]
+    if isinstance(value, dict):
+        return {key: render(item) for key, item in value.items()}
+    return value
+
+case = render(case)
+case["repo_url"] = repo_url
+case["default_branch"] = repo_branch
+case["repo_profile"] = repo_profile
+case["benchmark_memory_mode"] = memory_mode
+case["benchmark_memory_strategy"] = strategy
+
+pathlib.Path(output_path).write_text(json.dumps(case, indent=2) + "\n")
+PY
+}
+
+verify_remote_workspace_hint() {
+  local workspace_root="$1"
+  local ssh_host ssh_user ssh_key
+  ssh_host="$(benchmark_ssh_host)"
+  ssh_user="$(benchmark_ssh_user)"
+  ssh_key="$(benchmark_ssh_key)"
+  [[ -n "$ssh_host" && -n "$ssh_user" && -f "$ssh_key" ]] || return 0
+  ssh -i "$ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "${ssh_user}@${ssh_host}" \
+    "test -d '${workspace_root}/.git' && test -f '${workspace_root}/.lab/benchmark-case.json' && sudo -u orchestrator test -r '${workspace_root}/.lab/benchmark-case.json'"
+}
+
+validate_materialized_plan() {
+  local tasks_json="$1"
+  local case_json_path="$2"
+  local run_dir="$3"
+  JSON_INPUT="$tasks_json" python3 - "$case_json_path" "$run_dir" <<'PY'
+import json, pathlib, sys
+
+tasks = json.loads(__import__("os").environ["JSON_INPUT"]).get("items", [])
+case = json.loads(pathlib.Path(sys.argv[1]).read_text())
+run_dir = pathlib.Path(sys.argv[2])
+
+required_agents = {"researcher", "coder", "reviewer"}
+seen_agents = {}
+for item in tasks:
+    task = item.get("task") or {}
+    agent = task.get("assigned_agent") or ""
+    if agent and agent not in seen_agents:
+        seen_agents[agent] = task
+
+missing = sorted(required_agents - set(seen_agents))
+if missing:
+    raise SystemExit(f"missing benchmark tasks for agents: {', '.join(missing)}")
+
+coder = seen_agents["coder"]
+coder_meta = coder.get("metadata") or {}
+project_request = coder_meta.get("project_request") or {}
+tool_request = coder_meta.get("tool_request") or {}
+
+problems = []
+if coder_meta.get("repo_workflow") != "repo_workflow_v1":
+    problems.append("coder task is not tagged as repo_workflow_v1")
+if (coder_meta.get("benchmark_case_id") or "") != case.get("id", ""):
+    problems.append("benchmark_case_id missing or mismatched")
+if (project_request.get("repository_url") or "") != case.get("repo_url", ""):
+    problems.append("repository_url missing or mismatched")
+if (project_request.get("repo_profile") or "") != case.get("repo_profile", ""):
+    problems.append("repo_profile missing or mismatched")
+if (tool_request.get("tool") or "") != case.get("coder_tool", ""):
+    problems.append("coder tool_request does not match case")
+if case.get("patch") and (tool_request.get("patch") or "") != case.get("patch", ""):
+    problems.append("coder patch does not match case")
+if case.get("patch_target") and (tool_request.get("path") or "") != case.get("patch_target", ""):
+    problems.append("coder patch target does not match case")
+if project_request.get("repo_profile") == "existing_repo_generic" and case.get("repo_profile") != "existing_repo_generic":
+    problems.append("materialized plan fell back to existing_repo_generic")
+
+details = {
+    "case_id": case.get("id"),
+    "coder_task_id": coder.get("id"),
+    "coder_repo_profile": project_request.get("repo_profile"),
+    "coder_repository_url": project_request.get("repository_url"),
+    "coder_tool": tool_request.get("tool"),
+}
+run_dir.joinpath("materialized_plan_check.json").write_text(json.dumps(details, indent=2) + "\n")
+
+if problems:
+    raise SystemExit("; ".join(problems))
+PY
+}
+
+build_summary_reports() {
+  local report_root="$1"
+  python3 - "$report_root" <<'PY'
+import json, pathlib, sys
+
+root = pathlib.Path(sys.argv[1])
+runs = []
+for path in sorted(root.glob("*/benchmark_run.json")):
+    runs.append(json.loads(path.read_text()))
+
+summary_path = root / "summary.json"
+summary_path.write_text(json.dumps(runs, indent=2) + "\n")
+
+by_repo = {}
+for row in runs:
+    repo = row.get("repo_id") or row.get("case_id") or "unknown"
+    by_repo.setdefault(repo, {})[row.get("mode")] = row
+
+lines = [
+    "# Benchmark Summary",
+    "",
+    "| Repo | Mode Off | Hits Off | Mode On | Hits On | Delta | Commit |",
+    "|---|---:|---:|---:|---:|---:|---|",
+]
+for repo, modes in sorted(by_repo.items()):
+    off = modes.get("memory_off", {})
+    on = modes.get("memory_on", {})
+    off_score = int(off.get("score", 0) or 0)
+    on_score = int(on.get("score", 0) or 0)
+    off_hits = len(off.get("memory_hits") or [])
+    on_hits = len(on.get("memory_hits") or [])
+    delta = on_score - off_score
+    commit = (off.get("resolved_commit") or on.get("resolved_commit") or "")[:12]
+    lines.append(f"| {repo} | {off_score} | {off_hits} | {on_score} | {on_hits} | {delta:+d} | {commit} |")
+
+root.joinpath("summary.md").write_text("\n".join(lines) + "\n")
+PY
+}
+
 config_json() {
   python3 - "$CONFIG_PATH" <<'PY'
 import json, pathlib, sys
@@ -543,7 +704,7 @@ PY
     memory_mode="off"
   fi
 
-  local workspace_root case_id repo_url repo_branch repo_profile case_goal strategy
+  local workspace_root case_id repo_id repo_url repo_branch repo_profile case_goal strategy
   local run_meta
   run_meta="$(python3 - "$case_path" <<PY
 import json, sys
@@ -565,6 +726,7 @@ if repo is None:
     raise SystemExit("no matching repo found for case")
 print(json.dumps({
     "case_id": case["id"],
+    "repo_id": case.get("repo_id") or repo.get("id") or "",
     "repo_url": repo["repo_url"],
     "default_branch": repo["default_branch"],
     "repo_profile": case.get("repo_profile") or repo.get("repo_profile"),
@@ -574,6 +736,7 @@ print(json.dumps({
 PY
 )"
   case_id="$(printf '%s' "$run_meta" | json_get case_id)"
+  repo_id="$(printf '%s' "$run_meta" | json_get repo_id)"
   repo_url="$(printf '%s' "$run_meta" | json_get repo_url)"
   repo_branch="$(printf '%s' "$run_meta" | json_get default_branch)"
   repo_profile="$(printf '%s' "$run_meta" | json_get repo_profile)"
@@ -645,19 +808,28 @@ PY
   resolved_commit="$(git -C "$workspace_root" rev-parse HEAD)"
 
   mkdir -p "${workspace_root}/.lab"
-  python3 - "$case_path" "$workspace_root/.lab/benchmark-case.json" <<PY
-import json, pathlib, sys
-case = json.loads(pathlib.Path(sys.argv[1]).read_text())
-case["repo_url"] = "$repo_url"
-case["default_branch"] = "$repo_branch"
-case["repo_profile"] = "${repo_profile}"
-case["benchmark_memory_mode"] = "$memory_mode"
-case["benchmark_memory_strategy"] = "$strategy"
-pathlib.Path(sys.argv[2]).write_text(json.dumps(case, indent=2) + "\n")
-PY
+  render_case_for_workspace "$case_path" "$workspace_root/.lab/benchmark-case.json" "$workspace_root" "$repo_url" "$repo_branch" "$repo_profile" "$memory_mode" "$strategy"
   mirror_workspace_hint_to_remote "$workspace_root" "$workspace_root/.lab/benchmark-case.json"
+  if ! verify_remote_workspace_hint "$workspace_root"; then
+    write_run_report "$run_dir" "$(python3 - <<PY
+import json
+print(json.dumps({
+  "case_id": "$case_id",
+  "mode": "$mode",
+  "repo_id": "$repo_id",
+  "repo_url": "$repo_url",
+  "branch": "$repo_branch",
+  "resolved_commit": "$resolved_commit",
+  "status": "failed",
+  "score": 0,
+  "reason": "remote workspace shadow is missing or unreadable by orchestrator user"
+}, indent=2))
+PY
+)"
+    return 1
+  fi
 
-  if [[ "$(python3 - "$case_path" <<'PY'
+  if [[ "$(python3 - "$workspace_root/.lab/benchmark-case.json" <<'PY'
 import json, sys
 case = json.load(open(sys.argv[1]))
 print("yes" if case.get("patch") else "no")
@@ -724,11 +896,15 @@ PY
   fi
 
   local initiative_payload initiative_json initiative_id tasks_json researcher_task_id coder_task_id reviewer_task_id approval_id
-  initiative_payload="$(python3 - <<PY
+  initiative_payload="$(python3 - "$workspace_root/.lab/benchmark-case.json" "$case_goal" <<PY
 import json
+import pathlib
+import sys
+case_payload = pathlib.Path(sys.argv[1]).read_text()
+goal = sys.argv[2] + "\n\n[BENCHMARK_CASE_JSON]\n" + case_payload + "\n[/BENCHMARK_CASE_JSON]"
 print(json.dumps({
     "title": "Benchmark ${case_id}",
-    "goal": "${case_goal}",
+    "goal": goal,
     "workspace_root": "${workspace_root}",
     "created_by": "${OPERATOR}",
     "execution_mode": "selective"
@@ -742,27 +918,48 @@ PY
   request POST "/initiatives/${initiative_id}/advance" "{}" >/dev/null
   request POST "/initiatives/${initiative_id}/approve/design" "{\"operator\":\"${OPERATOR}\",\"feedback\":\"benchmark\"}" >/dev/null
   request POST "/initiatives/${initiative_id}/tasks/generate" "{}" >/dev/null
-  request POST "/initiatives/${initiative_id}/approve/plan" "{\"operator\":\"${OPERATOR}\",\"feedback\":\"benchmark\"}" >/dev/null
 
   tasks_json="$(request GET "/initiatives/${initiative_id}/tasks")"
+  printf '%s\n' "$tasks_json" > "${run_dir}/initiative_tasks.json"
+  if ! validate_materialized_plan "$tasks_json" "$workspace_root/.lab/benchmark-case.json" "$run_dir"; then
+    write_run_report "$run_dir" "$(python3 - <<PY
+import json
+print(json.dumps({
+  "case_id": "$case_id",
+  "mode": "$mode",
+  "repo_url": "$repo_url",
+  "branch": "$repo_branch",
+  "resolved_commit": "$resolved_commit",
+  "initiative_id": "$initiative_id",
+  "status": "failed",
+  "score": 0,
+  "reason": "materialized plan did not match benchmark case expectations"
+}, indent=2))
+PY
+)"
+    return 1
+  fi
+  request POST "/initiatives/${initiative_id}/approve/plan" "{\"operator\":\"${OPERATOR}\",\"feedback\":\"benchmark\"}" >/dev/null
   researcher_task_id="$(printf '%s' "$tasks_json" | initiative_task_id_by_agent researcher)"
   coder_task_id="$(printf '%s' "$tasks_json" | initiative_task_id_by_agent coder)"
   reviewer_task_id="$(printf '%s' "$tasks_json" | initiative_task_id_by_agent reviewer)"
 
   request POST "/initiatives/${initiative_id}/tasks/launch" "{\"task_ids\":[\"${researcher_task_id}\"],\"mode_overrides\":{}}" >/dev/null
-  wait_for_task_state "$researcher_task_id" "completed" >/dev/null || true
+  local researcher_json
+  researcher_json="$(wait_for_task_state "$researcher_task_id" "completed" || request GET "/tasks/${researcher_task_id}")"
+  printf '%s\n' "$researcher_json" > "${run_dir}/researcher_task.json"
 
   request POST "/initiatives/${initiative_id}/tasks/launch" "{\"task_ids\":[\"${coder_task_id}\"],\"mode_overrides\":{}}" >/dev/null
   approval_id="$(wait_for_pending_approval "$coder_task_id")"
   request POST "/approvals/${approval_id}/approve" "{\"operator\":\"${OPERATOR}\"}" >/dev/null
   local coder_json reviewer_json initiative_final initiative_status artifacts_json reviewer_task_json
   coder_json="$(wait_for_task_state "$coder_task_id" "completed" || request GET "/tasks/${coder_task_id}")"
+  printf '%s\n' "$coder_json" > "${run_dir}/coder_task.json"
 
   request POST "/initiatives/${initiative_id}/tasks/launch" "{\"task_ids\":[\"${reviewer_task_id}\"],\"mode_overrides\":{}}" >/dev/null
   reviewer_json="$(wait_for_task_state "$reviewer_task_id" "completed" || request GET "/tasks/${reviewer_task_id}")"
   reviewer_task_json="$(request GET "/tasks/${reviewer_task_id}")"
-  sleep "$POLL_INTERVAL"
-  initiative_final="$(request GET "/initiatives/${initiative_id}")"
+  initiative_final="$(wait_for_initiative_terminal "$initiative_id" || request GET "/initiatives/${initiative_id}")"
   initiative_status="$(printf '%s' "$initiative_final" | json_get initiative.status)"
   artifacts_json="$(request GET "/initiatives/${initiative_id}/artifacts")"
 
@@ -786,12 +983,16 @@ for chunk in ctx.get("chunks", []):
         "match_type": meta.get("memory_match_type", "unknown"),
         "repo_profile": meta.get("repo_profile"),
     })
-status = "success" if "${initiative_status}" in ("completed", "executing") and reviewer.get("state") == "completed" else "failed"
+status = "success" if "${initiative_status}" == "completed" and reviewer.get("state") == "completed" else "failed"
+results = reviewer.get("results") or {}
+reviewer_ok = reviewer.get("state") == "completed" and results.get("status") == "success" and results.get("exit_code") == 0
+if not reviewer_ok:
+    status = "failed"
 score = 0
 if status == "success":
     score += 40
-test_status = (((reviewer.get("results") or {}).get("test_results") or {}).get("status") or "")
-if test_status == "passed":
+test_status = ((results.get("test_results") or {}).get("status") or "")
+if reviewer_ok:
     score += 20
 if pathlib.Path("${run_dir}/git.diff").read_text().strip():
     score += 15
@@ -805,6 +1006,7 @@ print(json.dumps({
     "mode": "$mode",
     "memory_mode": "$memory_mode",
     "memory_strategy": "$strategy",
+    "repo_id": "$repo_id",
     "repo_url": "$repo_url",
     "branch": "$repo_branch",
     "resolved_commit": "$resolved_commit",
@@ -832,4 +1034,5 @@ for case_path in "${CASE_PATHS[@]}"; do
   done
 done
 
+build_summary_reports "$REPORT_ROOT"
 log "benchmark reports written to ${REPORT_ROOT}"

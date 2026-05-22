@@ -290,6 +290,59 @@ func TestGenerateExecutionPlanUsesRepoWorkflowForBenchmarkTitleWithoutGitVisibil
 	}
 }
 
+func TestGenerateExecutionPlanUsesEmbeddedBenchmarkCaseWhenWorkspaceFileIsInvisible(t *testing.T) {
+	svc := New(config.Config{}, nil)
+	workspaceRoot := "/tmp/private-benchmark-workspace/repo"
+	casePayload := map[string]any{
+		"id":                        "bench-case-inline",
+		"case_type":                 "review_only",
+		"repo_profile":              "go_cli_tui",
+		"repo_url":                  "https://github.com/charmbracelet/glow",
+		"default_branch":            "main",
+		"project_type":              "existing_repo",
+		"runtime_or_stack":          "go",
+		"project_root":              ".",
+		"test_focus":                "rendering review",
+		"test_command":              []string{"docker", "run", "--rm", "golang:1.25"},
+		"expected_files":            []string{"main.go", "glow_test.go"},
+		"coder_tool":                "write_file",
+		"patch_target":              ".lab/repo-workflow-marker.txt",
+		"write_content":             "benchmark marker\n",
+		"coder_summary":             "Write a deterministic benchmark marker file before repository review.",
+		"benchmark_memory_mode":     "on",
+		"benchmark_memory_strategy": "pattern_first",
+	}
+	raw, _ := json.Marshal(casePayload)
+	item := &domain.InitiativeResponse{
+		ID:            "initiative-6",
+		Title:         "Benchmark glow-render-review",
+		WorkspaceRoot: workspaceRoot,
+		Goal:          "Run deterministic benchmark workflow.\n\n[BENCHMARK_CASE_JSON]\n" + string(raw) + "\n[/BENCHMARK_CASE_JSON]",
+	}
+	artifacts, err := svc.GenerateExecutionPlan(context.Background(), item, map[string]any{
+		"architecture": "Go orchestrator plus local bridge",
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := asString(artifacts.JSON["project_flow"]); got != "repo_workflow_v1" {
+		t.Fatalf("expected repo_workflow_v1 for embedded benchmark case, got %q", got)
+	}
+	epics := artifacts.JSON["epics"].([]map[string]any)
+	coderTask := epics[1]["tasks"].([]map[string]any)[0]
+	metadata := coderTask["metadata"].(map[string]any)
+	projectRequest := metadata["project_request"].(map[string]any)
+	if got := asString(projectRequest["repo_profile"]); got != "go_cli_tui" {
+		t.Fatalf("expected repo_profile from embedded benchmark case, got %q", got)
+	}
+	if got := asString(projectRequest["repository_url"]); got != "https://github.com/charmbracelet/glow" {
+		t.Fatalf("expected repository_url from embedded benchmark case, got %q", got)
+	}
+	if got := asString(metadata["context_memory_strategy"]); got != "pattern_first" {
+		t.Fatalf("expected memory strategy from embedded benchmark case, got %q", got)
+	}
+}
+
 func TestValidateContracts(t *testing.T) {
 	if err := ValidateRequirementsPayload(map[string]any{
 		"objective":           "Ship something",

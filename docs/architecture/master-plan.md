@@ -74,9 +74,11 @@ Objective: one coherent story, one vocabulary, one source of truth.
 Objective: prove the full governed workflow works end to end.
 
 - define a reproducible E2E scenario for the official golden path
-- add a smoke test or guided integration check for that scenario
-- verify initiative advancement, backlog generation, selective launch, local execution, and final reconciliation
+- make the official benchmark harness `scripts/benchmark-context-memory.sh` the canonical execution path for repo workflow validation
+- run that harness through `initiative -> plan -> tasks -> selective launch -> review -> reconciliation`, not through side runners or manual shortcuts
+- verify initiative advancement, backlog generation, selective launch, local execution, review, memory retrieval, and final reconciliation
 - expose enough observability to understand failure point, duration, and operator interventions
+- produce benchmark artifacts and aggregate summaries that show whether `memory_on` equals or improves on `memory_off` for prepared repo cases
 
 ### Iteration 3: Real Repository Utility
 

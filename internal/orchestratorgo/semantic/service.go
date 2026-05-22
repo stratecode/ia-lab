@@ -361,6 +361,22 @@ func classifyArtifactMetadata(artifact domain.ArtifactResponse) map[string]any {
 		"confidence": 0.5,
 		"validated":  false,
 	}
+	if artifact.Metadata != nil {
+		if outcome, ok := artifact.Metadata["outcome"].(string); ok && strings.TrimSpace(outcome) != "" {
+			out["outcome"] = strings.ToLower(strings.TrimSpace(outcome))
+		}
+		switch value := artifact.Metadata["confidence"].(type) {
+		case float64:
+			out["confidence"] = value
+		case float32:
+			out["confidence"] = float64(value)
+		case int:
+			out["confidence"] = float64(value)
+		}
+		if validated, ok := artifact.Metadata["validated"].(bool); ok {
+			out["validated"] = validated
+		}
+	}
 	artifactType := strings.ToLower(strings.TrimSpace(artifact.ArtifactType))
 	if strings.Contains(artifactType, "requirements") || strings.Contains(artifactType, "design") || strings.Contains(artifactType, "plan") {
 		out["outcome"] = "trusted"

@@ -53,3 +53,24 @@ func TestIsUsefulArtifactRequiresContentOrURI(t *testing.T) {
 		t.Fatal("empty artifact should not be useful")
 	}
 }
+
+func TestClassifyArtifactMetadataPreservesExplicitOutcome(t *testing.T) {
+	artifact := domain.ArtifactResponse{
+		ArtifactType: "repo_workflow_case",
+		Metadata: map[string]any{
+			"outcome":    "trusted",
+			"confidence": 0.91,
+			"validated":  true,
+		},
+	}
+	meta := classifyArtifactMetadata(artifact)
+	if got := meta["outcome"]; got != "trusted" {
+		t.Fatalf("expected explicit trusted outcome to be preserved, got %#v", got)
+	}
+	if got := meta["validated"]; got != true {
+		t.Fatalf("expected explicit validated flag to be preserved, got %#v", got)
+	}
+	if got := meta["confidence"]; got != 0.91 {
+		t.Fatalf("expected explicit confidence to be preserved, got %#v", got)
+	}
+}

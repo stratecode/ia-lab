@@ -42,14 +42,15 @@ func New(cfg config.Config, researchService *research.Service) *Service {
 }
 
 func (s *Service) GenerateRequirements(ctx context.Context, initiative *domain.InitiativeResponse, feedback string) (PhaseArtifacts, error) {
-	researchNotes := s.researchNotes(ctx, initiative.Goal)
+	goal := sanitizedInitiativeGoal(initiative.Goal)
+	researchNotes := s.researchNotes(ctx, goal)
 	prompt := strings.Join([]string{
 		"Eres un analyst técnico. Convierte una idea en requisitos técnicos ampliados para un workspace concreto.",
 		`Devuelve SOLO JSON valido con estas claves: title, objective, scope, out_of_scope, constraints, risks, acceptance_criteria, open_questions, assumptions.`,
 		"Contexto:",
 		fmt.Sprintf("Title: %s", initiative.Title),
 		fmt.Sprintf("Workspace: %s", initiative.WorkspaceRoot),
-		fmt.Sprintf("Goal: %s", initiative.Goal),
+		fmt.Sprintf("Goal: %s", goal),
 		feedbackBlock(feedback),
 		researchNotes,
 	}, "\n")
@@ -67,13 +68,14 @@ func (s *Service) GenerateRequirements(ctx context.Context, initiative *domain.I
 
 func (s *Service) GenerateDesign(ctx context.Context, initiative *domain.InitiativeResponse, requirements map[string]any, feedback string) (PhaseArtifacts, error) {
 	reqJSON, _ := json.Marshal(requirements)
+	goal := sanitizedInitiativeGoal(initiative.Goal)
 	prompt := strings.Join([]string{
 		"Eres un architect técnico. Convierte requisitos aprobados en un diseño técnico ejecutable.",
 		`Devuelve SOLO JSON valido con estas claves: title, architecture, components, interfaces, data_model, testing_strategy, technical_risks, pending_decisions.`,
 		"Contexto:",
 		fmt.Sprintf("Title: %s", initiative.Title),
 		fmt.Sprintf("Workspace: %s", initiative.WorkspaceRoot),
-		fmt.Sprintf("Goal: %s", initiative.Goal),
+		fmt.Sprintf("Goal: %s", goal),
 		"Requirements JSON:",
 		string(reqJSON),
 		feedbackBlock(feedback),
@@ -132,6 +134,9 @@ func shouldUseDeterministicRepoPlan(initiative *domain.InitiativeResponse) bool 
 		return false
 	}
 	if strings.HasPrefix(strings.TrimSpace(initiative.Title), "Benchmark ") {
+		return true
+	}
+	if _, ok := loadBenchmarkRepoWorkflowProfileFromGoal(initiative.Goal, initiative.WorkspaceRoot); ok {
 		return true
 	}
 	root := strings.TrimSpace(initiative.WorkspaceRoot)
@@ -238,9 +243,10 @@ func (s *Service) researchNotes(ctx context.Context, goal string) string {
 }
 
 func fallbackRequirements(initiative *domain.InitiativeResponse, feedback, researchNotes string) map[string]any {
+	goal := sanitizedInitiativeGoal(initiative.Goal)
 	return map[string]any{
 		"title":     initiative.Title,
-		"objective": initiative.Goal,
+		"objective": goal,
 		"scope": []string{
 			"Convert the idea into a validated, executable initiative for a single workspace",
 			"Keep operator approvals between major phases",
@@ -274,8 +280,10 @@ func fallbackRequirements(initiative *domain.InitiativeResponse, feedback, resea
 }
 
 func fallbackDesign(initiative *domain.InitiativeResponse, requirements map[string]any, feedback string) map[string]any {
+	goal := sanitizedInitiativeGoal(initiative.Goal)
 	return map[string]any{
 		"title":        initiative.Title,
+		"objective":    goal,
 		"architecture": "Go orchestrator runtime remains the control plane. Initiative lifecycle sits above tasks and persists versioned phase artifacts. TUI is the authoring and approval surface, Telegram is remote control.",
 		"components": []map[string]any{
 			{"name": "initiative API", "responsibility": "create, advance, approve, reject, generate and launch"},
@@ -318,7 +326,7 @@ func fallbackExecutionPlan(initiative *domain.InitiativeResponse, design map[str
 	}
 	projectName := sanitizeProjectName(initiative.Title)
 	parentDir := initiative.WorkspaceRoot
-	goal := firstNonEmptyString(initiative.Goal, initiative.Title)
+	goal := firstNonEmptyString(sanitizedInitiativeGoal(initiative.Goal), initiative.Title)
 	projectType := "cli_simple"
 	stack := "python"
 	testCommand := defaultInitiativeTestCommand(projectType, stack)
@@ -454,8 +462,8 @@ type repoWorkflowProfile struct {
 }
 
 func fallbackRepoExecutionPlan(initiative *domain.InitiativeResponse, design map[string]any) map[string]any {
-	goal := firstNonEmptyString(initiative.Goal, initiative.Title)
-	profile := detectRepoWorkflowProfile(initiative.WorkspaceRoot)
+	goal := firstNonEmptyString(sanitizedInitiativeGoal(initiative.Goal), initiative.Title)
+	profile := detectRepoWorkflowProfile(initiative.WorkspaceRoot, initiative.Goal)
 	projectRequest := map[string]any{
 		"project_name":     profile.repoName,
 		"parent_directory": ".",
@@ -590,7 +598,7 @@ func fallbackRepoExecutionPlan(initiative *domain.InitiativeResponse, design map
 	}
 }
 
-func detectRepoWorkflowProfile(workspaceRoot string) repoWorkflowProfile {
+func detectRepoWorkflowProfile(workspaceRoot, initiativeGoal string) repoWorkflowProfile {
 	profile := repoWorkflowProfile{
 		projectFlow:   "existing_repo_generic",
 		projectType:   "existing_repo",
@@ -606,6 +614,9 @@ func detectRepoWorkflowProfile(workspaceRoot string) repoWorkflowProfile {
 		patchTarget:   ".lab/repo-workflow-marker.txt",
 		writeContent:  "repo workflow marker\n",
 		coderSummary:  "Write a deterministic marker file inside the repository workspace.",
+	}
+	if benchmarkProfile, ok := loadBenchmarkRepoWorkflowProfileFromGoal(initiativeGoal, workspaceRoot); ok {
+		return benchmarkProfile
 	}
 	if benchmarkProfile, ok := loadBenchmarkRepoWorkflowProfile(workspaceRoot); ok {
 		return benchmarkProfile
@@ -655,6 +666,18 @@ func loadBenchmarkRepoWorkflowProfile(workspaceRoot string) (repoWorkflowProfile
 	if err != nil {
 		return repoWorkflowProfile{}, false
 	}
+	return decodeBenchmarkRepoWorkflowProfile(raw, workspaceRoot)
+}
+
+func loadBenchmarkRepoWorkflowProfileFromGoal(goal, workspaceRoot string) (repoWorkflowProfile, bool) {
+	matches := benchmarkCaseBlockPattern.FindStringSubmatch(goal)
+	if len(matches) != 2 {
+		return repoWorkflowProfile{}, false
+	}
+	return decodeBenchmarkRepoWorkflowProfile([]byte(matches[1]), workspaceRoot)
+}
+
+func decodeBenchmarkRepoWorkflowProfile(raw []byte, workspaceRoot string) (repoWorkflowProfile, bool) {
 	var payload struct {
 		ID             string   `json:"id"`
 		CaseType       string   `json:"case_type"`
@@ -706,6 +729,14 @@ func loadBenchmarkRepoWorkflowProfile(workspaceRoot string) (repoWorkflowProfile
 		profile.expected = []string{"README.md"}
 	}
 	return profile, true
+}
+
+func sanitizedInitiativeGoal(goal string) string {
+	goal = strings.TrimSpace(goal)
+	if goal == "" {
+		return ""
+	}
+	return strings.TrimSpace(benchmarkCaseBlockPattern.ReplaceAllString(goal, ""))
 }
 
 func cloneStrings(input []string) []string {
@@ -854,6 +885,7 @@ func truncate(value string, max int) string {
 
 var nonSlugChars = regexp.MustCompile(`[^a-z0-9\-]+`)
 var multiDash = regexp.MustCompile(`\-+`)
+var benchmarkCaseBlockPattern = regexp.MustCompile(`(?s)\[BENCHMARK_CASE_JSON\]\s*(\{.*?\})\s*\[/BENCHMARK_CASE_JSON\]`)
 
 func sanitizeProjectName(input string) string {
 	value := strings.ToLower(strings.TrimSpace(input))

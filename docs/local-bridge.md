@@ -214,6 +214,26 @@ The validated local project flow under that initiative is:
 
 It is a cockpit, not a shrine to terminal aesthetics.
 
+## Official benchmark path
+
+The canonical benchmark path is:
+
+- [scripts/benchmark-context-memory.sh](/Users/fran.lopez/Development/StrateCode/lab/scripts/benchmark-context-memory.sh)
+
+That harness is expected to:
+
+1. create an initiative against a real repository workspace
+2. advance `requirements`, `design`, and `plan` through approvals
+3. generate tasks through the orchestrator
+4. selectively launch local work
+5. approve the `coder` gate when required
+6. wait for `reviewer` completion and initiative reconciliation
+7. persist `benchmark_run.json`, task artifacts, diffs, bridge logs, and aggregate summaries
+
+This is the supported benchmark route. It is the path that proves the governed workflow is real.
+
+The older manual benchmark runner remains useful as a diagnostic fallback when the harness itself is broken or when you need to isolate a runtime regression from a harness regression. It is not the product path and should not be treated as equivalent evidence when the official harness can run.
+
 ### TUI keybindings
 
 The current TUI uses `Ctrl+...` shortcuts for actions and keeps plain typing for forms and chat.
