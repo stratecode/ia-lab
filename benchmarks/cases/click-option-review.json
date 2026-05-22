@@ -26,5 +26,8 @@
   "patch_target": ".lab/repo-workflow-marker.txt",
   "write_content": "click benchmark marker\n",
   "coder_summary": "Write a deterministic benchmark marker file before repository review.",
-  "benchmark_memory_strategy": "pattern_first"
+  "benchmark_memory_strategy": "pattern_first",
+  "benchmark_league": "repo_recall",
+  "sequence_id": "repo_recall_click",
+  "sequence_position": 1
 }

@@ -79,6 +79,7 @@ Objective: prove the full governed workflow works end to end.
 - verify initiative advancement, backlog generation, selective launch, local execution, review, memory retrieval, and final reconciliation
 - expose enough observability to understand failure point, duration, and operator interventions
 - produce benchmark artifacts and aggregate summaries that show whether `memory_on` equals or improves on `memory_off` for prepared repo cases
+- treat the official harness as the only canonical evidence path for benchmark claims; manual runners remain diagnostic only
 
 ### Iteration 3: Real Repository Utility
 
@@ -89,6 +90,11 @@ Objective: move from controlled workflow to useful engineering work on existing 
 - improve reviewer usefulness on repo-shaped work
 - tighten bridge behavior, result reporting, and version compatibility
 - use semantic memory to improve context quality, traceability, and recovery
+- measure repo utility through three benchmark leagues:
+  - `repo_recall` for local continuity on the same repository
+  - `technology_transfer` for reuse across repositories that share stack and framework traits
+  - `pattern_transfer` for reuse across repositories that share error, fix, or validation patterns
+- treat reusable technology/pattern memory as an evidence-backed hypothesis with early signal, not as a universal mature capability yet
 
 ### Cross-Cutting: Resilience and Resume
 

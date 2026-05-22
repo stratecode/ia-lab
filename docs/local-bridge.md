@@ -234,6 +234,38 @@ This is the supported benchmark route. It is the path that proves the governed w
 
 The older manual benchmark runner remains useful as a diagnostic fallback when the harness itself is broken or when you need to isolate a runtime regression from a harness regression. It is not the product path and should not be treated as equivalent evidence when the official harness can run.
 
+### Memory layers
+
+When the benchmark talks about "memory", it is not all one thing:
+
+- `repo_recall`
+  local continuity memory for the same repository
+- `technology_transfer`
+  reusable memory across repositories that share stack, language, or framework shape
+- `pattern_transfer`
+  reusable memory across repositories that share problem domain, failure class, fix pattern, or validation pattern
+- `negative_transfer`
+  cases where memory should stay quiet and avoid contaminating the run
+
+Local continuity is useful. It is not the same claim as reusable experience. Mixing both would produce flattering numbers and weak science, which is a popular combination for demos and a terrible one for engineering.
+
+### Valid vs contaminated benchmark signal
+
+A benchmark result is valid when:
+
+- it runs through the official initiative-driven harness
+- the materialized plan matches the benchmark case and league
+- same-initiative memory is excluded
+- same-repo memory is excluded for `technology_transfer`, `pattern_transfer`, and `negative_transfer`
+- the summary separates `repo_specific`, `technology_similar`, `pattern_similar`, and forbidden hits
+
+A result is contaminated when:
+
+- the harness silently falls back to a generic flow
+- a transfer league improves because it reused same-repo memory
+- a negative-transfer case improves because unrelated semantic hits leaked in
+- the run is only reproducible through a side runner or one-off script
+
 ### TUI keybindings
 
 The current TUI uses `Ctrl+...` shortcuts for actions and keeps plain typing for forms and chat.

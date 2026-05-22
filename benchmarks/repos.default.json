@@ -7,6 +7,13 @@
     "runtime_or_stack": "python"
   },
   {
+    "id": "httpie-cli",
+    "repo_url": "https://github.com/httpie/cli",
+    "default_branch": "master",
+    "repo_profile": "python_cli_application",
+    "runtime_or_stack": "python"
+  },
+  {
     "id": "pydantic",
     "repo_url": "https://github.com/pydantic/pydantic",
     "default_branch": "main",

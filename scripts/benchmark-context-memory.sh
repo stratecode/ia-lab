@@ -480,6 +480,8 @@ if (project_request.get("repo_profile") or "") != case.get("repo_profile", ""):
     problems.append("repo_profile missing or mismatched")
 if (tool_request.get("tool") or "") != case.get("coder_tool", ""):
     problems.append("coder tool_request does not match case")
+if (coder_meta.get("benchmark_league") or "") != case.get("benchmark_league", ""):
+    problems.append("benchmark_league missing or mismatched")
 if case.get("patch") and (tool_request.get("patch") or "") != case.get("patch", ""):
     problems.append("coder patch does not match case")
 if case.get("patch_target") and (tool_request.get("path") or "") != case.get("patch_target", ""):
@@ -493,6 +495,7 @@ details = {
     "coder_repo_profile": project_request.get("repo_profile"),
     "coder_repository_url": project_request.get("repository_url"),
     "coder_tool": tool_request.get("tool"),
+    "benchmark_league": coder_meta.get("benchmark_league"),
 }
 run_dir.joinpath("materialized_plan_check.json").write_text(json.dumps(details, indent=2) + "\n")
 
@@ -509,112 +512,235 @@ import json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
 runs = []
 for path in sorted(root.glob("*/benchmark_run.json")):
-    runs.append(json.loads(path.read_text()))
+    row = json.loads(path.read_text())
+    row["_path"] = path
+    runs.append(row)
+
+def sort_key(row):
+    return (
+        row.get("benchmark_league") or "",
+        row.get("sequence_id") or "",
+        int(row.get("sequence_position", 1) or 1),
+        row.get("repo_id") or row.get("case_id") or "",
+        row.get("mode") or "",
+        int(row.get("iteration", 1) or 1),
+    )
+
+runs.sort(key=sort_key)
+
+baseline_scores = {}
+first_sequence_scores = {}
+previous_sequence_scores = {}
+for row in runs:
+    league = row.get("benchmark_league") or "repo_recall"
+    case_id = row.get("case_id") or "unknown"
+    mode = row.get("mode") or "unknown"
+    iteration = int(row.get("iteration", 1) or 1)
+    sequence_id = row.get("sequence_id") or case_id
+    sequence_position = int(row.get("sequence_position", 1) or 1)
+    base_score = int(row.get("score", 0) or 0)
+    score = base_score
+
+    baseline_key = (case_id, iteration)
+    baseline_score = baseline_scores.get(baseline_key)
+    if mode == "memory_off":
+        baseline_scores[baseline_key] = base_score
+        score_delta_vs_first_run = 0
+        score_delta_vs_previous_run = 0
+    else:
+        score_delta_vs_first_run = base_score - baseline_score if baseline_score is not None else 0
+        score_delta_vs_previous_run = 0
+        if baseline_score is not None and base_score > baseline_score:
+            score += 10
+
+    seq_key = (sequence_id, mode, iteration)
+    if seq_key not in first_sequence_scores or sequence_position < first_sequence_scores[seq_key][0]:
+        first_sequence_scores[seq_key] = (sequence_position, base_score)
+    first_pos, first_score = first_sequence_scores[seq_key]
+    prev_key = (sequence_id, mode, iteration)
+    prev_score = previous_sequence_scores.get(prev_key)
+    if prev_score is None:
+        score_delta_vs_previous_run = 0
+    else:
+        score_delta_vs_previous_run = base_score - prev_score
+    previous_sequence_scores[prev_key] = base_score
+    score_delta_vs_first_run = base_score - first_score
+
+    if mode == "memory_on" and league in {"technology_transfer", "pattern_transfer"} and sequence_position > first_pos and base_score >= first_score:
+        score += 10
+
+    row["score"] = score
+    row["score_delta_vs_first_run"] = score_delta_vs_first_run
+    row["score_delta_vs_previous_run"] = score_delta_vs_previous_run
+    row["retrieval_precision_label"] = row.get("retrieval_precision_label") or row.get("memory_effect") or "-"
+    row["_path"].write_text(json.dumps({k: v for k, v in row.items() if k != "_path"}, indent=2) + "\n")
 
 aggregates = {}
+league_aggregates = {}
+sequence_aggregates = {}
+progression = {}
+
 for row in runs:
     repo = row.get("repo_id") or row.get("case_id") or "unknown"
     mode = row.get("mode") or "unknown"
-    slot = aggregates.setdefault(repo, {}).setdefault(mode, {
+    league = row.get("benchmark_league") or "repo_recall"
+    sequence_id = row.get("sequence_id") or row.get("case_id") or "unknown"
+    iteration = int(row.get("iteration", 1) or 1)
+
+    def update_slot(slot):
+        slot["run_count"] += 1
+        if row.get("status") == "success":
+            slot["success_count"] += 1
+        slot["score_total"] += int(row.get("score", 0) or 0)
+        slot["hit_total"] += len(row.get("memory_hits") or [])
+        slot["experience_source_total"] += int(row.get("experience_source_count", 0) or 0)
+        slot["repo_specific_hit_total"] += int(row.get("repo_specific_hit_count", 0) or 0)
+        slot["technology_hit_total"] += int(row.get("technology_hit_count", 0) or 0)
+        slot["pattern_hit_total"] += int(row.get("pattern_hit_count", 0) or 0)
+        slot["forbidden_total"] += int(row.get("forbidden_hit_count", 0) or 0)
+        slot["score_delta_vs_first_total"] += int(row.get("score_delta_vs_first_run", 0) or 0)
+        slot["score_delta_vs_previous_total"] += int(row.get("score_delta_vs_previous_run", 0) or 0)
+        effect = row.get("retrieval_precision_label")
+        if effect:
+            slot["effects"][effect] = slot["effects"].get(effect, 0) + 1
+        if not slot.get("resolved_commit"):
+            slot["resolved_commit"] = row.get("resolved_commit") or ""
+
+    default_slot = lambda: {
         "run_count": 0,
         "success_count": 0,
         "score_total": 0,
         "hit_total": 0,
+        "experience_source_total": 0,
+        "repo_specific_hit_total": 0,
+        "technology_hit_total": 0,
+        "pattern_hit_total": 0,
         "forbidden_total": 0,
+        "score_delta_vs_first_total": 0,
+        "score_delta_vs_previous_total": 0,
         "effects": {},
-        "resolved_commit": row.get("resolved_commit") or "",
-    })
-    slot["run_count"] += 1
-    if row.get("status") == "success":
-        slot["success_count"] += 1
-    slot["score_total"] += int(row.get("score", 0) or 0)
-    slot["hit_total"] += len(row.get("memory_hits") or [])
-    slot["repo_specific_hit_total"] = int(slot.get("repo_specific_hit_total", 0) or 0) + int(row.get("repo_specific_hit_count", 0) or 0)
-    slot["technology_hit_total"] = int(slot.get("technology_hit_total", 0) or 0) + int(row.get("technology_hit_count", 0) or 0)
-    slot["pattern_hit_total"] = int(slot.get("pattern_hit_total", 0) or 0) + int(row.get("pattern_hit_count", 0) or 0)
-    slot["forbidden_total"] += int(row.get("forbidden_hit_count", 0) or 0)
-    effect = row.get("memory_effect")
-    if effect:
-        slot["effects"][effect] = slot["effects"].get(effect, 0) + 1
+        "resolved_commit": "",
+    }
+
+    repo_slot = aggregates.setdefault(repo, {}).setdefault(mode, default_slot())
+    update_slot(repo_slot)
+
+    league_slot = league_aggregates.setdefault(league, {}).setdefault(mode, default_slot())
+    update_slot(league_slot)
+
+    seq_slot = sequence_aggregates.setdefault(sequence_id, {}).setdefault(mode, default_slot())
+    seq_slot.setdefault("benchmark_league", league)
+    update_slot(seq_slot)
+
+    prog_slot = progression.setdefault(sequence_id, {}).setdefault(str(iteration), {}).setdefault(mode, default_slot())
+    prog_slot.setdefault("benchmark_league", league)
+    update_slot(prog_slot)
 
 summary = {
-    "runs": runs,
+    "runs": [{k: v for k, v in row.items() if k != "_path"} for row in runs],
     "aggregates": aggregates,
+    "league_aggregates": league_aggregates,
+    "sequence_aggregates": sequence_aggregates,
 }
 (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-
-progression = {}
-for row in runs:
-    repo = row.get("repo_id") or row.get("case_id") or "unknown"
-    mode = row.get("mode") or "unknown"
-    iteration = int(row.get("iteration", 1) or 1)
-    slot = progression.setdefault(repo, {}).setdefault(str(iteration), {}).setdefault(mode, {
-        "score_total": 0,
-        "run_count": 0,
-        "hit_total": 0,
-        "effects": {},
-    })
-    slot["score_total"] += int(row.get("score", 0) or 0)
-    slot["run_count"] += 1
-    slot["hit_total"] += len(row.get("memory_hits") or [])
-    slot["repo_specific_hit_total"] = int(slot.get("repo_specific_hit_total", 0) or 0) + int(row.get("repo_specific_hit_count", 0) or 0)
-    slot["technology_hit_total"] = int(slot.get("technology_hit_total", 0) or 0) + int(row.get("technology_hit_count", 0) or 0)
-    slot["pattern_hit_total"] = int(slot.get("pattern_hit_total", 0) or 0) + int(row.get("pattern_hit_count", 0) or 0)
-    effect = row.get("memory_effect")
-    if effect:
-        slot["effects"][effect] = slot["effects"].get(effect, 0) + 1
-
 (root / "progression.json").write_text(json.dumps(progression, indent=2) + "\n")
 
-lines = [
+def avg(slot, field):
+    runs = max(1, int(slot.get("run_count", 0) or 1))
+    return (int(slot.get(field, 0) or 0) / runs) if slot else 0.0
+
+repo_lines = [
     "# Benchmark Summary",
     "",
-    "| Repo | Runs | Off Avg | On Avg | Delta | On Hits Avg | Repo Hits | Tech Hits | Pattern Hits | Forbidden | On Success | Effect | Commit |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
+    "## By Repo",
+    "",
+    "| Repo | League | Runs | Off Avg | On Avg | Delta | On Hits Avg | Experience | Repo Hits | Tech Hits | Pattern Hits | Forbidden | On Success | Effect | Commit |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
 ]
 for repo, modes in sorted(aggregates.items()):
     off = modes.get("memory_off", {})
     on = modes.get("memory_on", {})
-    off_runs = max(1, int(off.get("run_count", 0) or 1))
-    on_runs = max(1, int(on.get("run_count", 0) or 1))
-    off_avg = (int(off.get("score_total", 0) or 0) / off_runs) if off else 0
-    on_avg = (int(on.get("score_total", 0) or 0) / on_runs) if on else 0
+    any_mode = on or off
+    league = "-"
+    for row in runs:
+        if (row.get("repo_id") or row.get("case_id")) == repo:
+            league = row.get("benchmark_league") or "-"
+            break
+    off_avg = avg(off, "score_total") if off else 0
+    on_avg = avg(on, "score_total") if on else 0
     delta = on_avg - off_avg
-    on_hits_avg = (int(on.get("hit_total", 0) or 0) / on_runs) if on else 0
-    repo_hits_avg = (int(on.get("repo_specific_hit_total", 0) or 0) / on_runs) if on else 0
-    tech_hits_avg = (int(on.get("technology_hit_total", 0) or 0) / on_runs) if on else 0
-    pattern_hits_avg = (int(on.get("pattern_hit_total", 0) or 0) / on_runs) if on else 0
-    forbidden_avg = (int(on.get("forbidden_total", 0) or 0) / on_runs) if on else 0
-    on_success = f"{int(on.get('success_count', 0) or 0)}/{int(on.get('run_count', 0) or 0)}" if on else "0/0"
-    effects = on.get("effects", {}) if on else {}
-    effect_summary = ", ".join(f"{key}:{value}" for key, value in sorted(effects.items())) or "-"
-    commit = ((on.get("resolved_commit") or off.get("resolved_commit") or "")[:12]) if (on or off) else ""
     runs_count = int(on.get("run_count", 0) or off.get("run_count", 0) or 0)
-    lines.append(f"| {repo} | {runs_count} | {off_avg:.1f} | {on_avg:.1f} | {delta:+.1f} | {on_hits_avg:.1f} | {repo_hits_avg:.1f} | {tech_hits_avg:.1f} | {pattern_hits_avg:.1f} | {forbidden_avg:.1f} | {on_success} | {effect_summary} | {commit} |")
+    effect_summary = ", ".join(f"{k}:{v}" for k, v in sorted((on.get("effects") or {}).items())) or "-"
+    commit = ((on.get("resolved_commit") or off.get("resolved_commit") or "")[:12]) if any_mode else ""
+    repo_lines.append(
+        f"| {repo} | {league} | {runs_count} | {off_avg:.1f} | {on_avg:.1f} | {delta:+.1f} | "
+        f"{avg(on, 'hit_total') if on else 0:.1f} | {avg(on, 'experience_source_total') if on else 0:.1f} | "
+        f"{avg(on, 'repo_specific_hit_total') if on else 0:.1f} | {avg(on, 'technology_hit_total') if on else 0:.1f} | "
+        f"{avg(on, 'pattern_hit_total') if on else 0:.1f} | {avg(on, 'forbidden_total') if on else 0:.1f} | "
+        f"{int(on.get('success_count', 0) or 0)}/{int(on.get('run_count', 0) or 0) if on else 0} | {effect_summary} | {commit} |"
+    )
 
-root.joinpath("summary.md").write_text("\n".join(lines) + "\n")
+league_lines = [
+    "",
+    "## By League",
+    "",
+    "| League | Runs | Off Avg | On Avg | Delta | On Hits Avg | Repo Hits | Tech Hits | Pattern Hits | Forbidden | Effect |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+]
+for league, modes in sorted(league_aggregates.items()):
+    off = modes.get("memory_off", {})
+    on = modes.get("memory_on", {})
+    off_avg = avg(off, "score_total") if off else 0
+    on_avg = avg(on, "score_total") if on else 0
+    effect_summary = ", ".join(f"{k}:{v}" for k, v in sorted((on.get("effects") or {}).items())) or "-"
+    league_lines.append(
+        f"| {league} | {int(on.get('run_count', 0) or off.get('run_count', 0) or 0)} | {off_avg:.1f} | {on_avg:.1f} | {on_avg - off_avg:+.1f} | "
+        f"{avg(on, 'hit_total') if on else 0:.1f} | {avg(on, 'repo_specific_hit_total') if on else 0:.1f} | "
+        f"{avg(on, 'technology_hit_total') if on else 0:.1f} | {avg(on, 'pattern_hit_total') if on else 0:.1f} | "
+        f"{avg(on, 'forbidden_total') if on else 0:.1f} | {effect_summary} |"
+    )
+
+sequence_lines = [
+    "",
+    "## By Sequence",
+    "",
+    "| Sequence | League | Runs | Off Avg | On Avg | Delta | On Delta vs First | On Delta vs Previous | Repo Hits | Tech Hits | Pattern Hits | Forbidden |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+]
+for sequence_id, modes in sorted(sequence_aggregates.items()):
+    off = modes.get("memory_off", {})
+    on = modes.get("memory_on", {})
+    league = (on or off).get("benchmark_league", "-") if (on or off) else "-"
+    sequence_lines.append(
+        f"| {sequence_id} | {league} | {int(on.get('run_count', 0) or off.get('run_count', 0) or 0)} | "
+        f"{avg(off, 'score_total') if off else 0:.1f} | {avg(on, 'score_total') if on else 0:.1f} | "
+        f"{(avg(on, 'score_total') if on else 0) - (avg(off, 'score_total') if off else 0):+.1f} | "
+        f"{avg(on, 'score_delta_vs_first_total') if on else 0:.1f} | {avg(on, 'score_delta_vs_previous_total') if on else 0:.1f} | "
+        f"{avg(on, 'repo_specific_hit_total') if on else 0:.1f} | {avg(on, 'technology_hit_total') if on else 0:.1f} | "
+        f"{avg(on, 'pattern_hit_total') if on else 0:.1f} | {avg(on, 'forbidden_total') if on else 0:.1f} |"
+    )
+
+root.joinpath("summary.md").write_text("\n".join(repo_lines + league_lines + sequence_lines) + "\n")
 
 progress_lines = [
     "# Benchmark Progression",
     "",
-    "| Repo | Iteration | Off Avg | On Avg | Delta | On Hits Avg | Repo Hits | Tech Hits | Pattern Hits | Effect |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+    "| Sequence | League | Iteration | Off Avg | On Avg | Delta | On Delta vs First | On Delta vs Previous | Repo Hits | Tech Hits | Pattern Hits | Effect |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
 ]
-for repo, iterations in sorted(progression.items()):
+for sequence_id, iterations in sorted(progression.items()):
     for iteration, modes in sorted(iterations.items(), key=lambda item: int(item[0])):
         off = modes.get("memory_off", {})
         on = modes.get("memory_on", {})
-        off_runs = max(1, int(off.get("run_count", 0) or 1))
-        on_runs = max(1, int(on.get("run_count", 0) or 1))
-        off_avg = (int(off.get("score_total", 0) or 0) / off_runs) if off else 0
-        on_avg = (int(on.get("score_total", 0) or 0) / on_runs) if on else 0
-        on_hits_avg = (int(on.get("hit_total", 0) or 0) / on_runs) if on else 0
-        repo_hits_avg = (int(on.get("repo_specific_hit_total", 0) or 0) / on_runs) if on else 0
-        tech_hits_avg = (int(on.get("technology_hit_total", 0) or 0) / on_runs) if on else 0
-        pattern_hits_avg = (int(on.get("pattern_hit_total", 0) or 0) / on_runs) if on else 0
-        effects = on.get("effects", {}) if on else {}
-        effect_summary = ", ".join(f"{key}:{value}" for key, value in sorted(effects.items())) or "-"
-        progress_lines.append(f"| {repo} | {iteration} | {off_avg:.1f} | {on_avg:.1f} | {on_avg - off_avg:+.1f} | {on_hits_avg:.1f} | {repo_hits_avg:.1f} | {tech_hits_avg:.1f} | {pattern_hits_avg:.1f} | {effect_summary} |")
+        league = (on or off).get("benchmark_league", "-") if (on or off) else "-"
+        effect_summary = ", ".join(f"{k}:{v}" for k, v in sorted((on.get("effects") or {}).items())) or "-"
+        progress_lines.append(
+            f"| {sequence_id} | {league} | {iteration} | {avg(off, 'score_total') if off else 0:.1f} | "
+            f"{avg(on, 'score_total') if on else 0:.1f} | {((avg(on, 'score_total') if on else 0) - (avg(off, 'score_total') if off else 0)):+.1f} | "
+            f"{avg(on, 'score_delta_vs_first_total') if on else 0:.1f} | {avg(on, 'score_delta_vs_previous_total') if on else 0:.1f} | "
+            f"{avg(on, 'repo_specific_hit_total') if on else 0:.1f} | {avg(on, 'technology_hit_total') if on else 0:.1f} | "
+            f"{avg(on, 'pattern_hit_total') if on else 0:.1f} | {effect_summary} |"
+        )
 
 root.joinpath("progression.md").write_text("\n".join(progress_lines) + "\n")
 PY
@@ -708,14 +834,21 @@ lines = [
     f"# Benchmark Run: {data.get('case_id', 'unknown')}",
     "",
     f"- Mode: {data.get('mode')}",
+    f"- League: {data.get('benchmark_league', '-')}",
+    f"- Sequence: {data.get('sequence_id', '-')}",
+    f"- Sequence Position: {data.get('sequence_position', '-')}",
     f"- Repository: {data.get('repo_url')}",
     f"- Branch: {data.get('branch')}",
     f"- Commit: {data.get('resolved_commit')}",
     f"- Outcome: {data.get('status')}",
     f"- Initiative: {data.get('initiative_id', '')}",
     f"- Score: {data.get('score', 0)}",
+    f"- Score Delta vs First Run: {data.get('score_delta_vs_first_run', 0)}",
+    f"- Score Delta vs Previous Run: {data.get('score_delta_vs_previous_run', 0)}",
     f"- Memory Effect: {data.get('memory_effect', '-')}",
+    f"- Retrieval Precision: {data.get('retrieval_precision_label', '-')}",
     f"- Forbidden Hits: {data.get('forbidden_hit_count', 0)}",
+    f"- Experience Sources: {data.get('experience_source_count', 0)}",
     "",
     "## Memory Hits",
 ]
@@ -814,7 +947,7 @@ PY
     memory_mode="off"
   fi
 
-  local workspace_root case_id repo_id repo_url repo_branch repo_profile case_goal strategy
+  local workspace_root case_id repo_id repo_url repo_branch repo_profile case_goal strategy benchmark_league sequence_id sequence_position
   local memory_expectation forbidden_match_types_json
   local run_meta
   run_meta="$(python3 - "$case_path" <<PY
@@ -842,6 +975,9 @@ print(json.dumps({
     "default_branch": repo["default_branch"],
     "repo_profile": case.get("repo_profile") or repo.get("repo_profile"),
     "goal": case["goal"],
+    "benchmark_league": case.get("benchmark_league") or "",
+    "sequence_id": case.get("sequence_id") or case["id"],
+    "sequence_position": case.get("sequence_position") or 1,
     "strategy": case.get("benchmark_memory_strategy") or "$MEMORY_STRATEGY_DEFAULT",
     "memory_expectation": case.get("memory_expectation") or "helpful",
     "forbidden_match_types": case.get("forbidden_match_types") or []
@@ -854,6 +990,9 @@ PY
   repo_branch="$(printf '%s' "$run_meta" | json_get default_branch)"
   repo_profile="$(printf '%s' "$run_meta" | json_get repo_profile)"
   case_goal="$(printf '%s' "$run_meta" | json_get goal)"
+  benchmark_league="$(printf '%s' "$run_meta" | json_get benchmark_league)"
+  sequence_id="$(printf '%s' "$run_meta" | json_get sequence_id)"
+  sequence_position="$(printf '%s' "$run_meta" | json_get sequence_position)"
   strategy="$(printf '%s' "$run_meta" | json_get strategy)"
   memory_expectation="$(printf '%s' "$run_meta" | json_get memory_expectation)"
   forbidden_match_types_json="$(printf '%s' "$run_meta" | json_get forbidden_match_types)"
@@ -1085,24 +1224,38 @@ PY
   tail -n 80 "$bridge_log" > "${run_dir}/bridge.log.tail" || true
 
   local report_json
-  report_json="$(python3 - "${run_dir}/reviewer_task.json" "${run_dir}/initiative_artifacts.json" <<PY
+report_json="$(python3 - "${run_dir}/researcher_task.json" "${run_dir}/coder_task.json" "${run_dir}/reviewer_task.json" "${run_dir}/initiative_artifacts.json" <<PY
 import json, pathlib, sys
-reviewer = json.loads(pathlib.Path(sys.argv[1]).read_text())
-artifacts = json.loads(pathlib.Path(sys.argv[2]).read_text()).get("items", [])
-hits = []
-ctx = (reviewer.get("metadata") or {}).get("context_package") or {}
-for chunk in ctx.get("chunks", []):
-    meta = chunk.get("metadata") or {}
-    hits.append({
-        "source_ref": chunk.get("source_ref"),
-        "match_type": meta.get("memory_match_type", "unknown"),
-        "repo_profile": meta.get("repo_profile"),
-    })
+researcher = json.loads(pathlib.Path(sys.argv[1]).read_text())
+coder = json.loads(pathlib.Path(sys.argv[2]).read_text())
+reviewer = json.loads(pathlib.Path(sys.argv[3]).read_text())
+artifacts = json.loads(pathlib.Path(sys.argv[4]).read_text()).get("items", [])
+hit_map = {}
+for stage_name, task in (("researcher", researcher), ("coder", coder), ("reviewer", reviewer)):
+    ctx = (task.get("metadata") or {}).get("context_package") or {}
+    for chunk in ctx.get("chunks", []):
+        meta = chunk.get("metadata") or {}
+        key = (
+            chunk.get("source_ref") or "",
+            meta.get("memory_match_type", "unknown"),
+            meta.get("repo_profile"),
+        )
+        if key not in hit_map:
+            hit_map[key] = {
+                "source_ref": chunk.get("source_ref"),
+                "match_type": meta.get("memory_match_type", "unknown"),
+                "repo_profile": meta.get("repo_profile"),
+                "stages": [],
+            }
+        if stage_name not in hit_map[key]["stages"]:
+            hit_map[key]["stages"].append(stage_name)
+hits = list(hit_map.values())
 forbidden_types = set(json.loads('''$forbidden_match_types_json'''))
 forbidden_hits = [hit for hit in hits if hit.get("match_type") in forbidden_types]
 repo_specific_hits = [hit for hit in hits if hit.get("match_type") == "repo_specific"]
 technology_hits = [hit for hit in hits if hit.get("match_type") == "technology_similar"]
 pattern_hits = [hit for hit in hits if hit.get("match_type") == "pattern_similar"]
+unique_sources = sorted({hit.get("source_ref", "") for hit in hits if hit.get("source_ref")})
 status = "success" if "${initiative_status}" == "completed" and reviewer.get("state") == "completed" else "failed"
 results = reviewer.get("results") or {}
 reviewer_ok = reviewer.get("state") == "completed" and results.get("status") == "success" and results.get("exit_code") == 0
@@ -1113,14 +1266,21 @@ if status == "success":
     score += 40
 test_status = ((results.get("test_results") or {}).get("status") or "")
 if reviewer_ok:
-    score += 20
-if pathlib.Path("${run_dir}/git.diff").read_text().strip():
     score += 15
-if hits:
+if pathlib.Path("${run_dir}/git.diff").read_text().strip():
     score += 10
-negative = sum(1 for hit in hits if hit.get("match_type") == "semantic_related")
-if negative == 0:
-    score += 5
+league = "$benchmark_league"
+if league == "repo_recall" and repo_specific_hits:
+    score += 15
+elif league == "technology_transfer" and technology_hits and not repo_specific_hits:
+    score += 15
+elif league == "pattern_transfer":
+    if pattern_hits and not repo_specific_hits:
+        score += 15
+    elif technology_hits and not repo_specific_hits:
+        score += 8
+if forbidden_hits:
+    score -= 15
 memory_effect = "baseline"
 if "$mode" == "memory_on":
     if forbidden_hits:
@@ -1135,6 +1295,9 @@ print(json.dumps({
     "case_id": "$case_id",
     "mode": "$mode",
     "iteration": $iteration,
+    "benchmark_league": "$benchmark_league",
+    "sequence_id": "$sequence_id",
+    "sequence_position": int("$sequence_position"),
     "memory_mode": "$memory_mode",
     "memory_strategy": "$strategy",
     "memory_expectation": "$memory_expectation",
@@ -1147,12 +1310,14 @@ print(json.dumps({
     "researcher_task_id": "$researcher_task_id",
     "coder_task_id": "$coder_task_id",
     "reviewer_task_id": "$reviewer_task_id",
-    "memory_hits": hits[:5],
+    "memory_hits": hits,
+    "experience_source_count": len(unique_sources),
     "repo_specific_hit_count": len(repo_specific_hits),
     "technology_hit_count": len(technology_hits),
     "pattern_hit_count": len(pattern_hits),
     "forbidden_hit_count": len(forbidden_hits),
     "memory_effect": memory_effect,
+    "retrieval_precision_label": memory_effect,
     "artifact_count": len(artifacts),
     "score": score
 }, indent=2))

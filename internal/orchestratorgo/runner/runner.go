@@ -554,6 +554,15 @@ func buildRepoWorkflowPlan(metadata map[string]any) (Result, bool) {
 	if profile.benchmarkCaseType != "" {
 		projectRequest["benchmark_case_type"] = profile.benchmarkCaseType
 	}
+	if profile.benchmarkLeague != "" {
+		projectRequest["benchmark_league"] = profile.benchmarkLeague
+	}
+	if profile.sequenceID != "" {
+		projectRequest["sequence_id"] = profile.sequenceID
+	}
+	if profile.sequencePosition != "" {
+		projectRequest["sequence_position"] = profile.sequencePosition
+	}
 	if profile.benchmarkMemoryMode != "" {
 		projectRequest["benchmark_memory_mode"] = profile.benchmarkMemoryMode
 	}
@@ -914,6 +923,9 @@ type runnerRepoWorkflowProfile struct {
 	coderSummary          string
 	benchmarkCaseID       string
 	benchmarkCaseType     string
+	benchmarkLeague       string
+	sequenceID            string
+	sequencePosition      string
 	benchmarkMemoryMode   string
 	benchmarkMemoryPolicy string
 }
@@ -1004,6 +1016,15 @@ func applyRunnerBenchmarkMetadata(metadata map[string]any, profile runnerRepoWor
 	if profile.benchmarkCaseType != "" {
 		metadata["benchmark_case_type"] = profile.benchmarkCaseType
 	}
+	if profile.benchmarkLeague != "" {
+		metadata["benchmark_league"] = profile.benchmarkLeague
+	}
+	if profile.sequenceID != "" {
+		metadata["sequence_id"] = profile.sequenceID
+	}
+	if profile.sequencePosition != "" {
+		metadata["sequence_position"] = profile.sequencePosition
+	}
 	if profile.benchmarkMemoryMode != "" {
 		metadata["benchmark_memory_mode"] = profile.benchmarkMemoryMode
 		metadata["context_memory_mode"] = profile.benchmarkMemoryMode
@@ -1055,6 +1076,9 @@ func loadRunnerBenchmarkRepoWorkflowProfile(workspaceRoot string) (runnerRepoWor
 		Patch          string   `json:"patch"`
 		WriteContent   string   `json:"write_content"`
 		CoderSummary   string   `json:"coder_summary"`
+		BenchmarkLeague string  `json:"benchmark_league"`
+		SequenceID     string   `json:"sequence_id"`
+		SequencePosition any    `json:"sequence_position"`
 		MemoryMode     string   `json:"benchmark_memory_mode"`
 		MemoryStrategy string   `json:"benchmark_memory_strategy"`
 		Language       string   `json:"language"`
@@ -1091,6 +1115,9 @@ func loadRunnerBenchmarkRepoWorkflowProfile(workspaceRoot string) (runnerRepoWor
 		coderSummary:          firstNonEmptyString(strings.TrimSpace(payload.CoderSummary), "Apply benchmark-defined repository change."),
 		benchmarkCaseID:       strings.TrimSpace(payload.ID),
 		benchmarkCaseType:     strings.TrimSpace(payload.CaseType),
+		benchmarkLeague:       strings.TrimSpace(payload.BenchmarkLeague),
+		sequenceID:            strings.TrimSpace(payload.SequenceID),
+		sequencePosition:      strings.TrimSpace(fmt.Sprintf("%v", payload.SequencePosition)),
 		benchmarkMemoryMode:   firstNonEmptyString(strings.TrimSpace(payload.MemoryMode), "on"),
 		benchmarkMemoryPolicy: firstNonEmptyString(strings.TrimSpace(payload.MemoryStrategy), "repo_specific_first"),
 	}

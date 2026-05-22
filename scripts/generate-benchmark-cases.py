@@ -136,6 +136,31 @@ def runtime_defaults(runtime: str) -> dict:
 
 REPO_OVERRIDES = {}
 
+SEQUENCE_OVERRIDES = {
+    "monolog": {"benchmark_league": "technology_transfer", "sequence_id": "technology_transfer_php", "sequence_position": 1},
+    "math-php": {"benchmark_league": "technology_transfer", "sequence_id": "technology_transfer_php", "sequence_position": 2},
+    "slim": {"benchmark_league": "technology_transfer", "sequence_id": "technology_transfer_php", "sequence_position": 3},
+    "cobra": {"benchmark_league": "technology_transfer", "sequence_id": "technology_transfer_go", "sequence_position": 1},
+    "bubbletea": {"benchmark_league": "technology_transfer", "sequence_id": "technology_transfer_go", "sequence_position": 2},
+    "auth-go": {"benchmark_league": "technology_transfer", "sequence_id": "technology_transfer_go", "sequence_position": 3},
+    "axios": {"benchmark_league": "pattern_transfer", "sequence_id": "pattern_transfer_http_clients", "sequence_position": 1},
+    "httpx": {"benchmark_league": "pattern_transfer", "sequence_id": "pattern_transfer_http_clients", "sequence_position": 2},
+    "jq": {"benchmark_league": "pattern_transfer", "sequence_id": "pattern_transfer_json", "sequence_position": 1},
+    "cjson": {"benchmark_league": "pattern_transfer", "sequence_id": "pattern_transfer_json", "sequence_position": 2},
+    "pydantic": {"benchmark_league": "repo_recall", "sequence_id": "repo_recall_python", "sequence_position": 1},
+    "typer": {"benchmark_league": "repo_recall", "sequence_id": "repo_recall_python", "sequence_position": 1},
+    "vitest": {"benchmark_league": "repo_recall", "sequence_id": "repo_recall_typescript", "sequence_position": 1},
+    "fastify": {"benchmark_league": "repo_recall", "sequence_id": "repo_recall_javascript", "sequence_position": 1},
+    "serde": {"benchmark_league": "repo_recall", "sequence_id": "repo_recall_rust", "sequence_position": 1},
+}
+
+LEAGUE_STRATEGIES = {
+    "repo_recall": "repo_specific_first",
+    "technology_transfer": "technology_first",
+    "pattern_transfer": "pattern_first",
+    "negative_transfer": "semantic_only",
+}
+
 
 def analyze_profile(repo_profile: str, runtime: str) -> dict:
     tokens = [token for token in (repo_profile or "").strip().lower().split("_") if token]
@@ -150,9 +175,6 @@ def analyze_profile(repo_profile: str, runtime: str) -> dict:
             problem_domain = PROBLEM_DOMAIN_ALIASES[token]
             break
     language = runtime
-    strategy = "technology_first"
-    if problem_domain in {"http_client", "cli", "json"}:
-        strategy = "pattern_first"
     return {
         "language": language,
         "framework": framework,
@@ -160,6 +182,29 @@ def analyze_profile(repo_profile: str, runtime: str) -> dict:
         "error_class": "repository_structure_validation",
         "fix_pattern": "deterministic_marker_before_review",
         "validation_pattern": "containerized_manifest_smoke",
+    }
+
+
+def sequence_metadata(repo_id: str, repo_profile: str, runtime: str, memory_shape: dict) -> dict:
+    override = SEQUENCE_OVERRIDES.get(repo_id)
+    if override:
+        league = override["benchmark_league"]
+        sequence_id = override["sequence_id"]
+        sequence_position = override["sequence_position"]
+    else:
+        league = "repo_recall"
+        sequence_id = f"repo_recall_{runtime}_{repo_id}"
+        sequence_position = 1
+    strategy = LEAGUE_STRATEGIES[league]
+    if league == "pattern_transfer" and memory_shape["problem_domain"] not in {"http_client", "cli", "json", "data_validation"}:
+        league = "technology_transfer"
+        sequence_id = f"technology_transfer_{runtime}_{repo_id}"
+        sequence_position = 1
+        strategy = LEAGUE_STRATEGIES[league]
+    return {
+        "benchmark_league": league,
+        "sequence_id": sequence_id,
+        "sequence_position": sequence_position,
         "benchmark_memory_strategy": strategy,
     }
 
@@ -170,6 +215,7 @@ def build_case(repo: dict) -> dict:
     defaults = runtime_defaults(runtime)
     overrides = REPO_OVERRIDES.get(repo_id, {})
     memory_shape = analyze_profile(repo["repo_profile"], runtime)
+    sequence_shape = sequence_metadata(repo_id, repo["repo_profile"], runtime, memory_shape)
     expected_files = overrides.get("expected_files", defaults["expected_files"])
     test_command = overrides.get("test_command", defaults["test_command"])
     case = {
@@ -191,6 +237,7 @@ def build_case(repo: dict) -> dict:
         "memory_expectation": "helpful",
     }
     case.update(memory_shape)
+    case.update(sequence_shape)
     return case
 
 

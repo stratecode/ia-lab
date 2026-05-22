@@ -230,7 +230,7 @@
             DECLARE
               current_dims INTEGER;
             BEGIN
-              SELECT atttypmod - 4 INTO current_dims
+              SELECT atttypmod INTO current_dims
               FROM pg_attribute
               WHERE attrelid = 'semantic_chunks'::regclass
                 AND attname = 'embedding'

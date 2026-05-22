@@ -1,0 +1,41 @@
+{
+  "id": "pydantic-negative-transfer-review",
+  "repo_id": "pydantic",
+  "case_type": "negative_case",
+  "goal": "Run a deterministic benchmark workflow for Pydantic and validate a narrow repository smoke review without reusing unrelated memory.",
+  "repo_profile": "python_data_validation_library",
+  "project_type": "existing_repo",
+  "runtime_or_stack": "python",
+  "project_root": ".",
+  "test_focus": "validation library smoke review",
+  "test_command": [
+    "docker",
+    "run",
+    "--rm",
+    "-v",
+    "{{ project_root_abs }}:/src",
+    "-w",
+    "/src",
+    "python:3.12",
+    "/bin/bash",
+    "-lc",
+    "python - <<'PY'\nfrom pathlib import Path\nimport tomllib\nmanifest = Path('pyproject.toml')\nif not manifest.exists():\n    raise SystemExit(1)\ndata = tomllib.loads(manifest.read_text())\nproject = data.get('project') or {}\nname = project.get('name') or ''\nif 'pydantic' not in name.lower():\n    raise SystemExit(1)\nprint(name)\nPY"
+  ],
+  "expected_files": [
+    "pyproject.toml"
+  ],
+  "coder_tool": "write_file",
+  "patch_target": ".lab/repo-workflow-marker.txt",
+  "write_content": "pydantic benchmark marker\n",
+  "coder_summary": "Write a deterministic benchmark marker file before repository review.",
+  "benchmark_memory_strategy": "semantic_only",
+  "benchmark_league": "negative_transfer",
+  "sequence_id": "negative_transfer_pydantic",
+  "sequence_position": 1,
+  "memory_expectation": "avoid_transfer",
+  "forbidden_match_types": [
+    "technology_similar",
+    "pattern_similar",
+    "semantic_related"
+  ]
+}

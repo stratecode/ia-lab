@@ -186,6 +186,31 @@ func (s *Service) BuildForTask(ctx context.Context, task *domain.TaskResponse) (
 }
 
 func (s *Service) searchContext(ctx context.Context, req domain.SemanticSearchRequest, buildReq domain.ContextBuildRequest) (*domain.SemanticSearchResponse, error) {
+	variants := searchVariants(req, buildReq)
+	if len(variants) == 0 {
+		variants = []domain.SemanticSearchRequest{req}
+	}
+	merged := []domain.SemanticChunkResponse{}
+	seen := map[string]bool{}
+	for _, variant := range variants {
+		resp, err := s.searchSingleContext(ctx, variant, buildReq)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range resp.Items {
+			if !seen[item.ID] {
+				merged = append(merged, item)
+				seen[item.ID] = true
+			}
+		}
+	}
+	if len(merged) == 0 && len(variants) > 1 {
+		return s.searchSingleContext(ctx, req, buildReq)
+	}
+	return &domain.SemanticSearchResponse{Items: merged, Total: len(merged)}, nil
+}
+
+func (s *Service) searchSingleContext(ctx context.Context, req domain.SemanticSearchRequest, buildReq domain.ContextBuildRequest) (*domain.SemanticSearchResponse, error) {
 	if !wantsBalancedOutcomes(buildReq) {
 		return s.semantic.Search(ctx, req)
 	}
@@ -211,6 +236,119 @@ func (s *Service) searchContext(ctx context.Context, req domain.SemanticSearchRe
 		return s.semantic.Search(ctx, req)
 	}
 	return &domain.SemanticSearchResponse{Items: merged, Total: len(merged)}, nil
+}
+
+func searchVariants(req domain.SemanticSearchRequest, buildReq domain.ContextBuildRequest) []domain.SemanticSearchRequest {
+	switch benchmarkLeague(buildReq) {
+	case "technology_transfer":
+		return uniqueSearchVariants(
+			req,
+			searchVariant(req, "runtime_or_stack", "language", "framework"),
+			searchVariant(req, "runtime_or_stack", "language"),
+			searchVariant(req, "framework", "problem_domain"),
+			searchVariant(req, "language", "problem_domain", "error_class"),
+		)
+	case "pattern_transfer":
+		return uniqueSearchVariants(
+			req,
+			searchVariant(req, "problem_domain", "error_class", "fix_pattern", "validation_pattern"),
+			searchVariant(req, "problem_domain", "fix_pattern", "validation_pattern"),
+			searchVariant(req, "problem_domain", "error_class"),
+			searchVariant(req, "case_type", "problem_domain"),
+			searchVariant(req, "framework", "problem_domain", "validation_pattern"),
+		)
+	default:
+		return []domain.SemanticSearchRequest{req}
+	}
+}
+
+func uniqueSearchVariants(variants ...domain.SemanticSearchRequest) []domain.SemanticSearchRequest {
+	out := make([]domain.SemanticSearchRequest, 0, len(variants))
+	seen := map[string]bool{}
+	for _, variant := range variants {
+		sig := searchVariantSignature(variant)
+		if sig == "" || seen[sig] {
+			continue
+		}
+		seen[sig] = true
+		out = append(out, variant)
+	}
+	return out
+}
+
+func searchVariant(req domain.SemanticSearchRequest, fields ...string) domain.SemanticSearchRequest {
+	variant := req
+	variant.RepositoryURL = nil
+	variant.RepoProfile = nil
+	variant.CaseType = nil
+	variant.RuntimeOrStack = nil
+	variant.Language = nil
+	variant.Framework = nil
+	variant.ProblemDomain = nil
+	variant.ErrorClass = nil
+	variant.FixPattern = nil
+	variant.ValidationPattern = nil
+	allowed := map[string]bool{}
+	for _, field := range fields {
+		allowed[strings.TrimSpace(strings.ToLower(field))] = true
+	}
+	if allowed["repository_url"] {
+		variant.RepositoryURL = req.RepositoryURL
+	}
+	if allowed["repo_profile"] {
+		variant.RepoProfile = req.RepoProfile
+	}
+	if allowed["case_type"] {
+		variant.CaseType = req.CaseType
+	}
+	if allowed["runtime_or_stack"] {
+		variant.RuntimeOrStack = req.RuntimeOrStack
+	}
+	if allowed["language"] {
+		variant.Language = req.Language
+	}
+	if allowed["framework"] {
+		variant.Framework = req.Framework
+	}
+	if allowed["problem_domain"] {
+		variant.ProblemDomain = req.ProblemDomain
+	}
+	if allowed["error_class"] {
+		variant.ErrorClass = req.ErrorClass
+	}
+	if allowed["fix_pattern"] {
+		variant.FixPattern = req.FixPattern
+	}
+	if allowed["validation_pattern"] {
+		variant.ValidationPattern = req.ValidationPattern
+	}
+	return variant
+}
+
+func searchVariantSignature(req domain.SemanticSearchRequest) string {
+	parts := []string{
+		derefString(req.RepositoryURL),
+		derefString(req.RepoProfile),
+		derefString(req.CaseType),
+		derefString(req.RuntimeOrStack),
+		derefString(req.Language),
+		derefString(req.Framework),
+		derefString(req.ProblemDomain),
+		derefString(req.ErrorClass),
+		derefString(req.FixPattern),
+		derefString(req.ValidationPattern),
+	}
+	if strings.TrimSpace(strings.Join(parts, "")) == "" {
+		return ""
+	}
+	return strings.Join(parts, "|")
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(*value)
 }
 
 func wantsBalancedOutcomes(req domain.ContextBuildRequest) bool {
@@ -252,7 +390,15 @@ func emptyPackage(req domain.ContextBuildRequest, agentType string) *domain.Cont
 
 func buildQuery(req domain.ContextBuildRequest) string {
 	var b strings.Builder
-	b.WriteString(req.TaskDescription)
+	if goal, ok := firstStringFromMetadata(req.Metadata, "goal", "initiative_goal"); ok {
+		b.WriteString(goal)
+		if strings.TrimSpace(req.TaskDescription) != "" {
+			b.WriteString("\nTask: ")
+			b.WriteString(req.TaskDescription)
+		}
+	} else {
+		b.WriteString(req.TaskDescription)
+	}
 	if len(req.Metadata) > 0 {
 		if repoURL, ok := firstStringFromMetadata(req.Metadata, "repository_url", "repo_url"); ok {
 			b.WriteString("\nRepository URL: ")
@@ -277,15 +423,15 @@ func buildQuery(req domain.ContextBuildRequest) string {
 		appendMetadataLine(&b, req.Metadata, "Error class", "error_class")
 		appendMetadataLine(&b, req.Metadata, "Fix pattern", "fix_pattern")
 		appendMetadataLine(&b, req.Metadata, "Validation pattern", "validation_pattern")
-		if goal, ok := req.Metadata["goal"].(string); ok {
+		if goal, ok := firstStringFromMetadata(req.Metadata, "goal"); ok {
 			b.WriteString("\nGoal: ")
 			b.WriteString(goal)
 		}
-		if title, ok := req.Metadata["title"].(string); ok {
+		if title, ok := firstStringFromMetadata(req.Metadata, "title"); ok {
 			b.WriteString("\nTitle: ")
 			b.WriteString(title)
 		}
-		if dod, ok := req.Metadata["definition_of_done"].(string); ok {
+		if dod, ok := firstStringFromMetadata(req.Metadata, "definition_of_done"); ok {
 			b.WriteString("\nDefinition of done: ")
 			b.WriteString(dod)
 		}
@@ -293,6 +439,8 @@ func buildQuery(req domain.ContextBuildRequest) string {
 			appendMetadataLine(&b, request, "Project type", "project_type")
 			appendMetadataLine(&b, request, "Project root", "project_root")
 			appendMetadataLine(&b, request, "Test focus", "test_focus")
+			appendMetadataLine(&b, request, "Sequence", "sequence_id")
+			appendMetadataLine(&b, request, "Sequence position", "sequence_position")
 		}
 	}
 	return semantic.TruncateChars(b.String(), 1200)
@@ -324,7 +472,7 @@ func applyRepoMemoryScope(searchReq *domain.SemanticSearchRequest, req domain.Co
 	errorClass := strings.TrimSpace(metadataString(req.Metadata, "error_class"))
 	fixPattern := strings.TrimSpace(metadataString(req.Metadata, "fix_pattern"))
 	validationPattern := strings.TrimSpace(metadataString(req.Metadata, "validation_pattern"))
-	strategy := normalizeMemoryStrategy(req.MemoryStrategy)
+	strategy := effectiveMemoryStrategy(req)
 	if repoURL == "" && repoProfile == "" && caseType == "" &&
 		runtimeOrStack == "" && language == "" && framework == "" &&
 		problemDomain == "" && errorClass == "" && fixPattern == "" &&
@@ -525,8 +673,13 @@ func shouldExcludeCurrentInitiativeMemory(item domain.SemanticChunkResponse, req
 	if req.InitiativeID != nil && item.InitiativeID != nil && *req.InitiativeID == *item.InitiativeID {
 		return true
 	}
-	strategy := normalizeMemoryStrategy(req.MemoryStrategy)
-	if strategy == "pattern_first" || strategy == "technology_first" {
+	league := benchmarkLeague(req)
+	if league == "technology_transfer" || league == "pattern_transfer" || league == "negative_transfer" {
+		caseID := metadataString(req.Metadata, "benchmark_case_id")
+		itemCaseID := metadataString(item.Metadata, "benchmark_case_id")
+		if caseID != "" && itemCaseID != "" && caseID == itemCaseID {
+			return true
+		}
 		repoURL := metadataString(req.Metadata, "repository_url", "repo_url")
 		itemRepoURL := metadataString(item.Metadata, "repository_url", "repo_url")
 		if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
@@ -575,9 +728,8 @@ func adjustedScore(item domain.SemanticChunkResponse, req domain.ContextBuildReq
 	itemFixPattern := metadataString(item.Metadata, "fix_pattern")
 	validationPattern := metadataString(req.Metadata, "validation_pattern")
 	itemValidationPattern := metadataString(item.Metadata, "validation_pattern")
-	strategy := normalizeMemoryStrategy(req.MemoryStrategy)
-	switch strategy {
-	case "repo_specific_first":
+	switch benchmarkLeague(req) {
+	case "repo_recall":
 		if runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime {
 			score += 0.10
 		}
@@ -605,12 +757,12 @@ func adjustedScore(item domain.SemanticChunkResponse, req domain.ContextBuildReq
 		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
 			score += 0.08
 		}
-	case "pattern_first":
+	case "pattern_transfer":
 		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
 			score += 0.16
 		}
 		if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
-			score += 0.24
+			score += 0.28
 		}
 		if errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass {
 			score += 0.18
@@ -619,35 +771,29 @@ func adjustedScore(item domain.SemanticChunkResponse, req domain.ContextBuildReq
 			score += 0.18
 		}
 		if validationPattern != "" && itemValidationPattern != "" && validationPattern == itemValidationPattern {
-			score += 0.12
+			score += 0.14
 		}
 		if framework != "" && itemFramework != "" && framework == itemFramework {
-			score += 0.12
+			score += 0.10
 		}
 		if runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime {
-			score += 0.08
-		}
-		if language != "" && itemLanguage != "" && language == itemLanguage {
-			score += 0.06
-		}
-		if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
 			score += 0.04
 		}
-		if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
-			score += 0.02
+		if language != "" && itemLanguage != "" && language == itemLanguage {
+			score += 0.04
 		}
-	case "technology_first":
+	case "technology_transfer":
 		if runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime {
-			score += 0.22
+			score += 0.24
 		}
 		if language != "" && itemLanguage != "" && language == itemLanguage {
-			score += 0.18
+			score += 0.20
 		}
 		if framework != "" && itemFramework != "" && framework == itemFramework {
 			score += 0.18
 		}
 		if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
-			score += 0.14
+			score += 0.10
 		}
 		if errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass {
 			score += 0.10
@@ -661,39 +807,137 @@ func adjustedScore(item domain.SemanticChunkResponse, req domain.ContextBuildReq
 		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
 			score += 0.06
 		}
-		if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
-			score += 0.03
-		}
+	case "negative_transfer":
 		if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
-			score += 0.01
-		}
-	default:
-		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
-			score += 0.10
+			score -= 0.10
 		}
 		if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
-			score += 0.12
+			score -= 0.06
 		}
-		if errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass {
-			score += 0.10
+		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
+			score -= 0.04
 		}
-		if fixPattern != "" && itemFixPattern != "" && fixPattern == itemFixPattern {
-			score += 0.10
-		}
-		if runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime {
-			score += 0.08
-		}
-		if language != "" && itemLanguage != "" && language == itemLanguage {
-			score += 0.06
-		}
-		if framework != "" && itemFramework != "" && framework == itemFramework {
-			score += 0.06
-		}
-		if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
-			score += 0.08
-		}
-		if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
-			score += 0.06
+	default:
+		strategy := effectiveMemoryStrategy(req)
+		switch strategy {
+		case "repo_specific_first":
+			if runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime {
+				score += 0.10
+			}
+			if language != "" && itemLanguage != "" && language == itemLanguage {
+				score += 0.08
+			}
+			if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
+				score += 0.16
+			}
+			if errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass {
+				score += 0.14
+			}
+			if fixPattern != "" && itemFixPattern != "" && fixPattern == itemFixPattern {
+				score += 0.14
+			}
+			if validationPattern != "" && itemValidationPattern != "" && validationPattern == itemValidationPattern {
+				score += 0.08
+			}
+			if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
+				score += 0.22
+			}
+			if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
+				score += 0.14
+			}
+			if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
+				score += 0.08
+			}
+		case "pattern_first":
+			if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
+				score += 0.16
+			}
+			if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
+				score += 0.24
+			}
+			if errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass {
+				score += 0.18
+			}
+			if fixPattern != "" && itemFixPattern != "" && fixPattern == itemFixPattern {
+				score += 0.18
+			}
+			if validationPattern != "" && itemValidationPattern != "" && validationPattern == itemValidationPattern {
+				score += 0.12
+			}
+			if framework != "" && itemFramework != "" && framework == itemFramework {
+				score += 0.12
+			}
+			if runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime {
+				score += 0.08
+			}
+			if language != "" && itemLanguage != "" && language == itemLanguage {
+				score += 0.06
+			}
+			if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
+				score += 0.04
+			}
+			if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
+				score += 0.02
+			}
+		case "technology_first":
+			if runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime {
+				score += 0.22
+			}
+			if language != "" && itemLanguage != "" && language == itemLanguage {
+				score += 0.18
+			}
+			if framework != "" && itemFramework != "" && framework == itemFramework {
+				score += 0.18
+			}
+			if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
+				score += 0.14
+			}
+			if errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass {
+				score += 0.10
+			}
+			if fixPattern != "" && itemFixPattern != "" && fixPattern == itemFixPattern {
+				score += 0.10
+			}
+			if validationPattern != "" && itemValidationPattern != "" && validationPattern == itemValidationPattern {
+				score += 0.08
+			}
+			if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
+				score += 0.06
+			}
+			if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
+				score += 0.03
+			}
+			if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
+				score += 0.01
+			}
+		default:
+			if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
+				score += 0.10
+			}
+			if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
+				score += 0.12
+			}
+			if errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass {
+				score += 0.10
+			}
+			if fixPattern != "" && itemFixPattern != "" && fixPattern == itemFixPattern {
+				score += 0.10
+			}
+			if runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime {
+				score += 0.08
+			}
+			if language != "" && itemLanguage != "" && language == itemLanguage {
+				score += 0.06
+			}
+			if framework != "" && itemFramework != "" && framework == itemFramework {
+				score += 0.06
+			}
+			if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
+				score += 0.08
+			}
+			if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
+				score += 0.06
+			}
 		}
 	}
 	return score
@@ -707,7 +951,7 @@ func resolveMemorySettings(req domain.ContextBuildRequest) (string, string) {
 	if mode == "" {
 		mode = "on"
 	}
-	strategy := normalizeMemoryStrategy(req.MemoryStrategy)
+	strategy := effectiveMemoryStrategy(req)
 	if strategy == "" {
 		strategy = normalizeMemoryStrategy(metadataString(req.Metadata, "context_memory_strategy", "benchmark_memory_strategy", "memory_strategy"))
 	}
@@ -715,6 +959,29 @@ func resolveMemorySettings(req domain.ContextBuildRequest) (string, string) {
 		strategy = "repo_specific_first"
 	}
 	return mode, strategy
+}
+
+func effectiveMemoryStrategy(req domain.ContextBuildRequest) string {
+	if league := benchmarkLeague(req); league != "" {
+		switch league {
+		case "repo_recall":
+			return "repo_specific_first"
+		case "technology_transfer":
+			return "technology_first"
+		case "pattern_transfer":
+			return "pattern_first"
+		case "negative_transfer":
+			return "semantic_only"
+		}
+	}
+	return normalizeMemoryStrategy(req.MemoryStrategy)
+}
+
+func benchmarkLeague(req domain.ContextBuildRequest) string {
+	if req.Metadata == nil {
+		return ""
+	}
+	return normalizeBenchmarkLeague(metadataString(req.Metadata, "benchmark_league"))
 }
 
 func normalizeMemoryMode(value string) string {
@@ -743,12 +1010,31 @@ func normalizeMemoryStrategy(value string) string {
 	}
 }
 
+func normalizeBenchmarkLeague(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "repo_recall":
+		return "repo_recall"
+	case "technology_transfer":
+		return "technology_transfer"
+	case "pattern_transfer":
+		return "pattern_transfer"
+	case "negative_transfer":
+		return "negative_transfer"
+	default:
+		return ""
+	}
+}
+
 func memoryMatchType(item domain.SemanticChunkResponse, req domain.ContextBuildRequest) string {
 	repoURL := metadataString(req.Metadata, "repository_url", "repo_url")
 	itemRepoURL := metadataString(item.Metadata, "repository_url", "repo_url")
 	if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
 		return "repo_specific"
 	}
+	repoProfile := metadataString(req.Metadata, "repo_profile")
+	itemRepoProfile := metadataString(item.Metadata, "repo_profile")
+	caseType := metadataString(req.Metadata, "benchmark_case_type")
+	itemCaseType := metadataString(item.Metadata, "benchmark_case_type")
 	runtimeOrStack := metadataString(req.Metadata, "runtime_or_stack")
 	itemRuntime := metadataString(item.Metadata, "runtime_or_stack")
 	language := metadataString(req.Metadata, "language")
@@ -757,29 +1043,28 @@ func memoryMatchType(item domain.SemanticChunkResponse, req domain.ContextBuildR
 	itemFramework := metadataString(item.Metadata, "framework")
 	problemDomain := metadataString(req.Metadata, "problem_domain")
 	itemProblemDomain := metadataString(item.Metadata, "problem_domain")
-	if (runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime) ||
-		(language != "" && itemLanguage != "" && language == itemLanguage) ||
-		(framework != "" && itemFramework != "" && framework == itemFramework) {
-		if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
-			return "technology_similar"
-		}
-		return "technology_similar"
-	}
-	repoProfile := metadataString(req.Metadata, "repo_profile")
-	itemRepoProfile := metadataString(item.Metadata, "repo_profile")
-	caseType := metadataString(req.Metadata, "benchmark_case_type")
-	itemCaseType := metadataString(item.Metadata, "benchmark_case_type")
 	errorClass := metadataString(req.Metadata, "error_class")
 	itemErrorClass := metadataString(item.Metadata, "error_class")
 	fixPattern := metadataString(req.Metadata, "fix_pattern")
 	itemFixPattern := metadataString(item.Metadata, "fix_pattern")
 	validationPattern := metadataString(req.Metadata, "validation_pattern")
 	itemValidationPattern := metadataString(item.Metadata, "validation_pattern")
-	if (repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile) ||
+	patternMatch := (repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile) ||
 		(caseType != "" && itemCaseType != "" && caseType == itemCaseType) ||
+		(problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain) ||
 		(errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass) ||
 		(fixPattern != "" && itemFixPattern != "" && fixPattern == itemFixPattern) ||
-		(validationPattern != "" && itemValidationPattern != "" && validationPattern == itemValidationPattern) {
+		(validationPattern != "" && itemValidationPattern != "" && validationPattern == itemValidationPattern)
+	technologyMatch := (runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime) ||
+		(language != "" && itemLanguage != "" && language == itemLanguage) ||
+		(framework != "" && itemFramework != "" && framework == itemFramework)
+	if benchmarkLeague(req) == "pattern_transfer" && patternMatch {
+		return "pattern_similar"
+	}
+	if technologyMatch {
+		return "technology_similar"
+	}
+	if patternMatch {
 		return "pattern_similar"
 	}
 	return "semantic_related"

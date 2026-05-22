@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 )
@@ -20,20 +21,35 @@ func writeDetail(w http.ResponseWriter, statusCode int, detail string) {
 
 func (s *Server) indexTask(ctx context.Context, taskID string) {
 	if s != nil && s.SemanticIndexer != nil {
-		s.SemanticIndexer.IndexTask(ctx, taskID)
+		go s.runSemanticIndex(func(runCtx context.Context) {
+			s.SemanticIndexer.IndexTask(runCtx, taskID)
+		})
 	}
 }
 
 func (s *Server) indexArtifact(ctx context.Context, artifactID string) {
 	if s != nil && s.SemanticIndexer != nil {
-		s.SemanticIndexer.IndexArtifact(ctx, artifactID)
+		go s.runSemanticIndex(func(runCtx context.Context) {
+			s.SemanticIndexer.IndexArtifact(runCtx, artifactID)
+		})
 	}
 }
 
 func (s *Server) indexReview(ctx context.Context, reviewID string) {
 	if s != nil && s.SemanticIndexer != nil {
-		s.SemanticIndexer.IndexReview(ctx, reviewID)
+		go s.runSemanticIndex(func(runCtx context.Context) {
+			s.SemanticIndexer.IndexReview(runCtx, reviewID)
+		})
 	}
+}
+
+func (s *Server) runSemanticIndex(fn func(context.Context)) {
+	if s == nil || s.SemanticIndexer == nil || fn == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	fn(ctx)
 }
 
 func writeTaskStateConflict(w http.ResponseWriter, currentState, requestedState domain.TaskState, taskID string) {
