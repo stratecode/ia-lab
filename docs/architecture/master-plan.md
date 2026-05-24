@@ -96,6 +96,32 @@ Objective: move from controlled workflow to useful engineering work on existing 
   - `pattern_transfer` for reuse across repositories that share error, fix, or validation patterns
 - treat reusable technology/pattern memory as an evidence-backed hypothesis with early signal, not as a universal mature capability yet
 
+Current evidence snapshot from the official benchmark harness on May 24, 2026:
+
+- `repo_recall`
+  stable and repeatable
+  `memory_on` averaged `80` vs `55` baseline across `pydantic`, `typer`, and `fastify`
+  signal came from `repo_specific` memory as expected
+- `technology_transfer`
+  useful but still noisier
+  the PHP sequence `monolog -> math-php -> slim` averaged `81.1` vs `55`
+  signal came from `technology_similar` memory with no `repo_specific` hits
+  variability is still materially higher than `repo_recall`
+- `pattern_transfer`
+  now validated on the official initiative-driven harness
+  the HTTP client sequence `axios -> httpx` averaged `85` vs `55`
+  signal came from `pattern_similar` memory with no `repo_specific` hits
+- `negative_transfer`
+  guarded behavior is working on current curated cases
+  `httpie-cli` and `vitest` stayed at `55` vs `55`, with zero forbidden hits and `guarded` effect labels
+
+Interpretation:
+
+- the system clearly remembers local repo history
+- the system now shows reusable transfer by technology and pattern
+- technology and pattern transfer are not equally mature; transfer works, but stability is lower than repo-local recall
+- negative transfer control is part of the validated story now, not a future aspiration
+
 ### Cross-Cutting: Resilience and Resume
 
 Objective: keep the system useful when the host, bridge, or long-running execution is interrupted.

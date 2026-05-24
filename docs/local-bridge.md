@@ -234,6 +234,17 @@ This is the supported benchmark route. It is the path that proves the governed w
 
 The older manual benchmark runner remains useful as a diagnostic fallback when the harness itself is broken or when you need to isolate a runtime regression from a harness regression. It is not the product path and should not be treated as equivalent evidence when the official harness can run.
 
+Current benchmark reading, based on the official harness:
+
+- `repo_recall` should look boring in the good way:
+  stable score uplift, stable hits, almost no spread
+- `technology_transfer` should improve without `repo_specific` hits:
+  if it helps only through same-repo memory, the league is being cheated
+- `pattern_transfer` should improve through `pattern_similar` hits:
+  if the query is overfitted to one repo or one language, this league will lie to you quickly
+- `negative_transfer` should usually stay flat and `guarded`:
+  a charming `+10` here is often contamination wearing a tie
+
 ### Memory layers
 
 When the benchmark talks about "memory", it is not all one thing:

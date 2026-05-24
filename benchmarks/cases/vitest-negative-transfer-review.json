@@ -1,0 +1,41 @@
+{
+  "id": "vitest-negative-transfer-review",
+  "repo_id": "vitest",
+  "case_type": "negative_case",
+  "goal": "Run a deterministic benchmark workflow for Vitest and validate a repository smoke review without borrowing unrelated memory from HTTP, CLI, or validation cases.",
+  "repo_profile": "typescript_test_framework",
+  "project_type": "existing_repo",
+  "runtime_or_stack": "typescript",
+  "project_root": ".",
+  "test_focus": "test framework smoke review",
+  "test_command": [
+    "docker",
+    "run",
+    "--rm",
+    "-v",
+    "{{ project_root_abs }}:/src",
+    "-w",
+    "/src",
+    "node:22",
+    "/bin/bash",
+    "-lc",
+    "node -e \"const fs=require('fs'); const pkg=JSON.parse(fs.readFileSync('package.json','utf8')); if(!pkg.name || !pkg.name.toLowerCase().includes('vitest')) process.exit(1); console.log(pkg.name)\""
+  ],
+  "expected_files": [
+    "package.json"
+  ],
+  "coder_tool": "write_file",
+  "patch_target": ".lab/repo-workflow-marker.txt",
+  "write_content": "vitest benchmark marker\n",
+  "coder_summary": "Write a deterministic benchmark marker file before repository review.",
+  "benchmark_memory_strategy": "semantic_only",
+  "benchmark_league": "negative_transfer",
+  "sequence_id": "negative_transfer_vitest",
+  "sequence_position": 1,
+  "memory_expectation": "avoid_transfer",
+  "forbidden_match_types": [
+    "technology_similar",
+    "pattern_similar",
+    "semantic_related"
+  ]
+}

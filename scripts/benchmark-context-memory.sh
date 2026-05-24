@@ -508,6 +508,7 @@ build_summary_reports() {
   local report_root="$1"
   python3 - "$report_root" <<'PY'
 import json, pathlib, sys
+import math
 
 root = pathlib.Path(sys.argv[1])
 runs = []
@@ -636,12 +637,62 @@ for row in runs:
     prog_slot.setdefault("benchmark_league", league)
     update_slot(prog_slot)
 
+def score_series(sequence_id, mode):
+    values = []
+    for row in runs:
+        if (row.get("sequence_id") or row.get("case_id") or "unknown") != sequence_id:
+            continue
+        if (row.get("mode") or "unknown") != mode:
+            continue
+        values.append(float(row.get("score", 0) or 0))
+    return values
+
+def calc_stddev(values):
+    if len(values) <= 1:
+        return 0.0
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    return math.sqrt(variance)
+
+def progression_label(values):
+    if not values:
+        return "unknown"
+    if len(values) == 1:
+        return "single_run"
+    diffs = [values[i] - values[i - 1] for i in range(1, len(values))]
+    if all(diff == 0 for diff in diffs):
+        return "flat"
+    if all(diff > 0 for diff in diffs):
+        return "improving"
+    if all(diff >= 0 for diff in diffs):
+        return "non_decreasing"
+    if all(diff <= 0 for diff in diffs):
+        return "degrading"
+    return "mixed"
+
+def stability_label(stddev):
+    if stddev <= 1:
+        return "stable"
+    if stddev <= 4:
+        return "moderate"
+    return "volatile"
+
 summary = {
     "runs": [{k: v for k, v in row.items() if k != "_path"} for row in runs],
     "aggregates": aggregates,
     "league_aggregates": league_aggregates,
     "sequence_aggregates": sequence_aggregates,
 }
+for sequence_id, modes in sequence_aggregates.items():
+    for mode_name in ("memory_off", "memory_on"):
+        slot = modes.get(mode_name)
+        if not slot:
+            continue
+        series = score_series(sequence_id, mode_name)
+        slot["score_series"] = series
+        slot["score_stddev"] = calc_stddev(series)
+        slot["progression_label"] = progression_label(series)
+        slot["stability_label"] = stability_label(slot["score_stddev"])
 (root / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 (root / "progression.json").write_text(json.dumps(progression, indent=2) + "\n")
 
@@ -704,8 +755,8 @@ sequence_lines = [
     "",
     "## By Sequence",
     "",
-    "| Sequence | League | Runs | Off Avg | On Avg | Delta | On Delta vs First | On Delta vs Previous | Repo Hits | Tech Hits | Pattern Hits | Forbidden |",
-    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| Sequence | League | Runs | Off Avg | On Avg | Delta | On Delta vs First | On Delta vs Previous | On Trend | On Stability | On Spread | Repo Hits | Tech Hits | Pattern Hits | Forbidden |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---|---|---:|---:|---:|---:|---:|",
 ]
 for sequence_id, modes in sorted(sequence_aggregates.items()):
     off = modes.get("memory_off", {})
@@ -716,6 +767,7 @@ for sequence_id, modes in sorted(sequence_aggregates.items()):
         f"{avg(off, 'score_total') if off else 0:.1f} | {avg(on, 'score_total') if on else 0:.1f} | "
         f"{(avg(on, 'score_total') if on else 0) - (avg(off, 'score_total') if off else 0):+.1f} | "
         f"{avg(on, 'score_delta_vs_first_total') if on else 0:.1f} | {avg(on, 'score_delta_vs_previous_total') if on else 0:.1f} | "
+        f"{on.get('progression_label', '-') if on else '-'} | {on.get('stability_label', '-') if on else '-'} | {float(on.get('score_stddev', 0) or 0):.2f} | "
         f"{avg(on, 'repo_specific_hit_total') if on else 0:.1f} | {avg(on, 'technology_hit_total') if on else 0:.1f} | "
         f"{avg(on, 'pattern_hit_total') if on else 0:.1f} | {avg(on, 'forbidden_total') if on else 0:.1f} |"
     )
