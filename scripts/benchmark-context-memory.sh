@@ -1249,6 +1249,20 @@ for stage_name, task in (("researcher", researcher), ("coder", coder), ("reviewe
             }
         if stage_name not in hit_map[key]["stages"]:
             hit_map[key]["stages"].append(stage_name)
+    for hit in (task.get("results") or {}).get("semantic_context_hits", []):
+        match_type = hit.get("match_type", "unknown")
+        repo_profile = hit.get("repo_profile")
+        source_ref = hit.get("source_ref")
+        key = (source_ref or "", match_type, repo_profile)
+        if key not in hit_map:
+            hit_map[key] = {
+                "source_ref": source_ref,
+                "match_type": match_type,
+                "repo_profile": repo_profile,
+                "stages": [],
+            }
+        if stage_name not in hit_map[key]["stages"]:
+            hit_map[key]["stages"].append(stage_name)
 hits = list(hit_map.values())
 forbidden_types = set(json.loads('''$forbidden_match_types_json'''))
 forbidden_hits = [hit for hit in hits if hit.get("match_type") in forbidden_types]

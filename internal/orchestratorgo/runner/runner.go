@@ -112,6 +112,23 @@ func attachContextRefs(result Result, task *domain.TaskResponse) Result {
 	}
 	result.Results["semantic_context_sources"] = pkg.SourceRefs
 	result.Results["semantic_context_chunk_count"] = len(pkg.Chunks)
+	hits := make([]map[string]any, 0, len(pkg.Chunks))
+	for _, chunk := range pkg.Chunks {
+		matchType := strings.TrimSpace(asStringRunner(chunk.Metadata["memory_match_type"]))
+		hit := map[string]any{
+			"source_ref": chunk.SourceRef,
+		}
+		if matchType != "" {
+			hit["match_type"] = matchType
+		}
+		if repoProfile := strings.TrimSpace(asStringRunner(chunk.Metadata["repo_profile"])); repoProfile != "" {
+			hit["repo_profile"] = repoProfile
+		}
+		hits = append(hits, hit)
+	}
+	if len(hits) > 0 {
+		result.Results["semantic_context_hits"] = hits
+	}
 	return result
 }
 
@@ -129,6 +146,16 @@ func reviewerSemanticMemory(metadata map[string]any) ([]string, []string, []stri
 		checks = append(checks, fmt.Sprintf("%s: %s", item.SourceRef, item.FailureReason))
 	}
 	return append([]string{}, pkg.SourceRefs...), rules, checks
+}
+
+func asStringRunner(value any) string {
+	if value == nil {
+		return ""
+	}
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return fmt.Sprint(value)
 }
 
 func (r *TaskRunner) executePlanner(task *domain.TaskResponse) Result {
@@ -1060,33 +1087,33 @@ func loadRunnerBenchmarkRepoWorkflowProfile(workspaceRoot string) (runnerRepoWor
 		return runnerRepoWorkflowProfile{}, false
 	}
 	var payload struct {
-		ID             string   `json:"id"`
-		CaseType       string   `json:"case_type"`
-		RepoProfile    string   `json:"repo_profile"`
-		RepoURL        string   `json:"repo_url"`
-		DefaultBranch  string   `json:"default_branch"`
-		ProjectType    string   `json:"project_type"`
-		Runtime        string   `json:"runtime_or_stack"`
-		ProjectRoot    string   `json:"project_root"`
-		TestFocus      string   `json:"test_focus"`
-		TestCommand    []string `json:"test_command"`
-		ExpectedFiles  []string `json:"expected_files"`
-		CoderTool      string   `json:"coder_tool"`
-		PatchTarget    string   `json:"patch_target"`
-		Patch          string   `json:"patch"`
-		WriteContent   string   `json:"write_content"`
-		CoderSummary   string   `json:"coder_summary"`
-		BenchmarkLeague string  `json:"benchmark_league"`
-		SequenceID     string   `json:"sequence_id"`
-		SequencePosition any    `json:"sequence_position"`
-		MemoryMode     string   `json:"benchmark_memory_mode"`
-		MemoryStrategy string   `json:"benchmark_memory_strategy"`
-		Language       string   `json:"language"`
-		Framework      string   `json:"framework"`
-		ProblemDomain  string   `json:"problem_domain"`
-		ErrorClass     string   `json:"error_class"`
-		FixPattern     string   `json:"fix_pattern"`
-		ValidationPattern string `json:"validation_pattern"`
+		ID                string   `json:"id"`
+		CaseType          string   `json:"case_type"`
+		RepoProfile       string   `json:"repo_profile"`
+		RepoURL           string   `json:"repo_url"`
+		DefaultBranch     string   `json:"default_branch"`
+		ProjectType       string   `json:"project_type"`
+		Runtime           string   `json:"runtime_or_stack"`
+		ProjectRoot       string   `json:"project_root"`
+		TestFocus         string   `json:"test_focus"`
+		TestCommand       []string `json:"test_command"`
+		ExpectedFiles     []string `json:"expected_files"`
+		CoderTool         string   `json:"coder_tool"`
+		PatchTarget       string   `json:"patch_target"`
+		Patch             string   `json:"patch"`
+		WriteContent      string   `json:"write_content"`
+		CoderSummary      string   `json:"coder_summary"`
+		BenchmarkLeague   string   `json:"benchmark_league"`
+		SequenceID        string   `json:"sequence_id"`
+		SequencePosition  any      `json:"sequence_position"`
+		MemoryMode        string   `json:"benchmark_memory_mode"`
+		MemoryStrategy    string   `json:"benchmark_memory_strategy"`
+		Language          string   `json:"language"`
+		Framework         string   `json:"framework"`
+		ProblemDomain     string   `json:"problem_domain"`
+		ErrorClass        string   `json:"error_class"`
+		FixPattern        string   `json:"fix_pattern"`
+		ValidationPattern string   `json:"validation_pattern"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return runnerRepoWorkflowProfile{}, false

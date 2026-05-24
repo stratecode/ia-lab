@@ -800,23 +800,23 @@ type SemanticChunkParams struct {
 }
 
 type SemanticSearchFilter struct {
-	Embedding     []float32
-	SourceTypes   []string
-	InitiativeID  *string
-	TaskID        *string
-	ArtifactID    *string
-	WorkspaceRoot *string
-	RepositoryURL *string
-	RepoProfile   *string
-	RuntimeOrStack *string
-	Language      *string
-	Framework     *string
-	ProblemDomain *string
-	ErrorClass    *string
-	FixPattern    *string
+	Embedding         []float32
+	SourceTypes       []string
+	InitiativeID      *string
+	TaskID            *string
+	ArtifactID        *string
+	WorkspaceRoot     *string
+	RepositoryURL     *string
+	RepoProfile       *string
+	RuntimeOrStack    *string
+	Language          *string
+	Framework         *string
+	ProblemDomain     *string
+	ErrorClass        *string
+	FixPattern        *string
 	ValidationPattern *string
-	CaseType      *string
-	Limit         int
+	CaseType          *string
+	Limit             int
 }
 
 type CreateEvaluationRunParams struct {
@@ -1165,8 +1165,10 @@ func (s *PostgresStore) UpsertSemanticChunk(ctx context.Context, params Semantic
 
 func (s *PostgresStore) SearchSemanticChunks(ctx context.Context, filter SemanticSearchFilter) ([]domain.SemanticChunkResponse, error) {
 	limit := filter.Limit
-	if limit <= 0 || limit > 50 {
+	if limit <= 0 {
 		limit = 8
+	} else if limit > 200 {
+		limit = 200
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, source_type, source_id::text, initiative_id::text, task_id::text, artifact_id::text,

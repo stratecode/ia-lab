@@ -1,6 +1,7 @@
 package contextbuilder
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
@@ -241,5 +242,120 @@ func TestSearchVariantsForPatternTransfer(t *testing.T) {
 	}
 	if !foundRelaxed {
 		t.Fatal("expected at least one relaxed pattern variant focused on problem/fix signal")
+	}
+}
+
+func TestRankAndTrimKeepsCrossRepoPatternMatchesAfterExcludingSameCase(t *testing.T) {
+	req := domain.ContextBuildRequest{
+		Metadata: map[string]any{
+			"benchmark_case_id":  "httpx-experience-review",
+			"benchmark_league":   "pattern_transfer",
+			"repository_url":     "https://github.com/encode/httpx",
+			"repo_profile":       "python_http_client_library",
+			"framework":          "library",
+			"problem_domain":     "http_client",
+			"error_class":        "repository_structure_validation",
+			"fix_pattern":        "deterministic_marker_before_review",
+			"validation_pattern": "containerized_manifest_smoke",
+		},
+	}
+	scoreSelfHigh := 0.84
+	scoreSelfLow := 0.79
+	scoreAxios := 0.78
+	items := []domain.SemanticChunkResponse{
+		{ID: "self-1", SourceType: "task", SourceID: "self-1", ChunkIndex: 0, ContentText: "self 1", Metadata: map[string]any{"benchmark_case_id": "httpx-experience-review", "problem_domain": "http_client", "fix_pattern": "deterministic_marker_before_review"}, Score: &scoreSelfHigh},
+		{ID: "self-2", SourceType: "task", SourceID: "self-2", ChunkIndex: 0, ContentText: "self 2", Metadata: map[string]any{"benchmark_case_id": "httpx-experience-review", "problem_domain": "http_client", "fix_pattern": "deterministic_marker_before_review"}, Score: &scoreSelfHigh},
+		{ID: "self-3", SourceType: "task", SourceID: "self-3", ChunkIndex: 0, ContentText: "self 3", Metadata: map[string]any{"benchmark_case_id": "httpx-experience-review", "problem_domain": "http_client", "fix_pattern": "deterministic_marker_before_review"}, Score: &scoreSelfLow},
+		{ID: "axios-1", SourceType: "task", SourceID: "axios-1", ChunkIndex: 0, ContentText: "axios 1", Metadata: map[string]any{"benchmark_case_id": "axios-experience-review", "problem_domain": "http_client", "fix_pattern": "deterministic_marker_before_review"}, Score: &scoreAxios},
+		{ID: "axios-2", SourceType: "task", SourceID: "axios-2", ChunkIndex: 0, ContentText: "axios 2", Metadata: map[string]any{"benchmark_case_id": "axios-experience-review", "problem_domain": "http_client", "fix_pattern": "deterministic_marker_before_review"}, Score: &scoreAxios},
+	}
+	chunks := rankAndTrim(items, req, 8, 2000)
+	if len(chunks) == 0 {
+		t.Fatal("expected cross-repo chunks to survive exclusion of same-case memory")
+	}
+	for _, chunk := range chunks {
+		if got := chunk.Metadata["memory_match_type"]; got != "pattern_similar" {
+			t.Fatalf("expected pattern_similar match type, got %#v", got)
+		}
+		if chunk.Metadata["benchmark_case_id"] == "httpx-experience-review" {
+			t.Fatalf("expected self-case chunks to be excluded, got %#v", chunk.Metadata)
+		}
+	}
+}
+
+func TestDiversifyTransferCandidatesCapsSameCaseDominance(t *testing.T) {
+	req := domain.ContextBuildRequest{Metadata: map[string]any{"benchmark_league": "pattern_transfer"}}
+	score := 0.8
+	items := []domain.SemanticChunkResponse{
+		{ID: "self-1", SourceType: "task", SourceID: "self-1", Metadata: map[string]any{"benchmark_case_id": "httpx"}, Score: &score},
+		{ID: "self-2", SourceType: "task", SourceID: "self-2", Metadata: map[string]any{"benchmark_case_id": "httpx"}, Score: &score},
+		{ID: "self-3", SourceType: "task", SourceID: "self-3", Metadata: map[string]any{"benchmark_case_id": "httpx"}, Score: &score},
+		{ID: "cross-1", SourceType: "task", SourceID: "cross-1", Metadata: map[string]any{"benchmark_case_id": "axios"}, Score: &score},
+		{ID: "cross-2", SourceType: "task", SourceID: "cross-2", Metadata: map[string]any{"benchmark_case_id": "axios"}, Score: &score},
+	}
+	got := diversifyTransferCandidates(items, req)
+	if len(got) != 4 {
+		t.Fatalf("expected transfer diversification to trim same-case dominance to 4 items, got %d", len(got))
+	}
+	selfCount := 0
+	for _, item := range got {
+		if metadataString(item.Metadata, "benchmark_case_id") == "httpx" {
+			selfCount++
+		}
+	}
+	if selfCount != 2 {
+		t.Fatalf("expected at most 2 items from same benchmark case, got %d", selfCount)
+	}
+}
+
+func TestInitialSearchSettingsOverfetchTransferLeagues(t *testing.T) {
+	if got := initialSearchLimit(2, "pattern_transfer"); got < 24 {
+		t.Fatalf("expected pattern transfer limit overfetch, got %d", got)
+	}
+	if got := initialSearchMaxChars(400, "pattern_transfer"); got != 3200 {
+		t.Fatalf("expected expanded search max chars for transfer, got %d", got)
+	}
+	if got := initialSearchLimit(2, "repo_recall"); got != 8 {
+		t.Fatalf("expected default repo recall overfetch of 8, got %d", got)
+	}
+}
+
+func TestBuildQueryOmitsRepoSpecificMarkersForPatternTransfer(t *testing.T) {
+	req := domain.ContextBuildRequest{
+		TaskDescription: "Run a deterministic experience benchmark workflow for httpx and validate the repository smoke review command.",
+		Metadata: map[string]any{
+			"benchmark_case_id":   "httpx-experience-review",
+			"benchmark_case_type": "review_only",
+			"benchmark_league":    "pattern_transfer",
+			"repository_url":      "https://github.com/encode/httpx",
+			"repo_profile":        "python_http_client_library",
+			"runtime_or_stack":    "python",
+			"language":            "python",
+			"framework":           "library",
+			"problem_domain":      "http_client",
+			"error_class":         "repository_structure_validation",
+			"fix_pattern":         "deterministic_marker_before_review",
+			"validation_pattern":  "containerized_manifest_smoke",
+			"initiative_goal":     "Run a deterministic experience benchmark workflow for httpx and validate the repository smoke review command.",
+		},
+	}
+	query := buildQuery(req)
+	if !strings.Contains(query, "Cross-repo pattern transfer benchmark.") {
+		t.Fatalf("expected generic transfer preamble, got %q", query)
+	}
+	for _, forbidden := range []string{
+		"https://github.com/encode/httpx",
+		"python_http_client_library",
+		"httpx-experience-review",
+		"Runtime: python",
+		"Language: python",
+		"Framework: library",
+	} {
+		if strings.Contains(query, forbidden) {
+			t.Fatalf("expected transfer query to omit repo-specific token %q, got %q", forbidden, query)
+		}
+	}
+	if !strings.Contains(query, "Problem domain: http_client") {
+		t.Fatalf("expected pattern metadata to remain in query, got %q", query)
 	}
 }

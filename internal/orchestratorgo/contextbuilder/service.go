@@ -94,14 +94,16 @@ func (s *Service) Build(ctx context.Context, req domain.ContextBuildRequest) (*d
 	if maxChars <= 0 {
 		maxChars = s.cfg.SemanticContextMaxChars
 	}
+	searchLimit := initialSearchLimit(maxChunks, benchmarkLeague(enriched))
+	searchMaxChars := initialSearchMaxChars(maxChars, benchmarkLeague(enriched))
 	searchReq := domain.SemanticSearchRequest{
 		Query:         query,
 		SourceTypes:   allowedSources(enriched.AllowedSources),
 		Outcomes:      requestedOutcomes(enriched),
 		MinConfidence: enriched.MinConfidence,
 		WorkspaceRoot: enriched.WorkspaceRoot,
-		Limit:         maxChunks * 3,
-		MaxChars:      maxChars,
+		Limit:         searchLimit,
+		MaxChars:      searchMaxChars,
 	}
 	applyRepoMemoryScope(&searchReq, enriched)
 	if shouldScopeSearchToInitiative(enriched) {
@@ -203,6 +205,9 @@ func (s *Service) searchContext(ctx context.Context, req domain.SemanticSearchRe
 				seen[item.ID] = true
 			}
 		}
+	}
+	if isTransferLeague(benchmarkLeague(buildReq)) {
+		merged = diversifyTransferCandidates(merged, buildReq)
 	}
 	if len(merged) == 0 && len(variants) > 1 {
 		return s.searchSingleContext(ctx, req, buildReq)
@@ -372,6 +377,73 @@ func maxInt(a, b int) int {
 	return b
 }
 
+func initialSearchLimit(maxChunks int, league string) int {
+	base := maxInt(8, maxChunks*3)
+	if isTransferLeague(league) {
+		return maxInt(24, maxChunks*12)
+	}
+	return base
+}
+
+func initialSearchMaxChars(maxChars int, league string) int {
+	if maxChars <= 0 {
+		return 0
+	}
+	if isTransferLeague(league) {
+		return maxChars * 8
+	}
+	return maxChars * 2
+}
+
+func isTransferLeague(league string) bool {
+	switch strings.TrimSpace(strings.ToLower(league)) {
+	case "technology_transfer", "pattern_transfer", "negative_transfer":
+		return true
+	default:
+		return false
+	}
+}
+
+func diversifyTransferCandidates(items []domain.SemanticChunkResponse, req domain.ContextBuildRequest) []domain.SemanticChunkResponse {
+	if len(items) == 0 {
+		return items
+	}
+	caseCap := 2
+	sourceCap := 1
+	league := benchmarkLeague(req)
+	if league == "technology_transfer" {
+		caseCap = 3
+		sourceCap = 2
+	}
+	seenByCase := map[string]int{}
+	seenBySource := map[string]int{}
+	out := make([]domain.SemanticChunkResponse, 0, len(items))
+	for _, item := range items {
+		caseKey := strings.TrimSpace(metadataString(item.Metadata, "benchmark_case_id"))
+		if caseKey == "" {
+			caseKey = strings.TrimSpace(item.SourceID)
+		}
+		sourceKey := strings.TrimSpace(item.SourceType) + ":" + strings.TrimSpace(item.SourceID)
+		if caseKey != "" && seenByCase[caseKey] >= caseCap {
+			continue
+		}
+		if sourceKey != ":" && seenBySource[sourceKey] >= sourceCap {
+			continue
+		}
+		out = append(out, item)
+		if caseKey != "" {
+			seenByCase[caseKey]++
+		}
+		if sourceKey != ":" {
+			seenBySource[sourceKey]++
+		}
+	}
+	if len(out) == 0 {
+		return items
+	}
+	return out
+}
+
 func emptyPackage(req domain.ContextBuildRequest, agentType string) *domain.ContextPackage {
 	return &domain.ContextPackage{
 		AgentType:      agentType,
@@ -390,7 +462,22 @@ func emptyPackage(req domain.ContextBuildRequest, agentType string) *domain.Cont
 
 func buildQuery(req domain.ContextBuildRequest) string {
 	var b strings.Builder
-	if goal, ok := firstStringFromMetadata(req.Metadata, "goal", "initiative_goal"); ok {
+	league := benchmarkLeague(req)
+	transferLeague := league == "technology_transfer" || league == "pattern_transfer" || league == "negative_transfer"
+	if transferLeague {
+		switch league {
+		case "technology_transfer":
+			b.WriteString("Cross-repo technology transfer benchmark.")
+		case "pattern_transfer":
+			b.WriteString("Cross-repo pattern transfer benchmark.")
+		case "negative_transfer":
+			b.WriteString("Cross-repo negative transfer benchmark.")
+		}
+		if caseType, ok := firstStringFromMetadata(req.Metadata, "benchmark_case_type"); ok {
+			b.WriteString("\nBenchmark case type: ")
+			b.WriteString(caseType)
+		}
+	} else if goal, ok := firstStringFromMetadata(req.Metadata, "goal", "initiative_goal"); ok {
 		b.WriteString(goal)
 		if strings.TrimSpace(req.TaskDescription) != "" {
 			b.WriteString("\nTask: ")
@@ -400,47 +487,53 @@ func buildQuery(req domain.ContextBuildRequest) string {
 		b.WriteString(req.TaskDescription)
 	}
 	if len(req.Metadata) > 0 {
-		if repoURL, ok := firstStringFromMetadata(req.Metadata, "repository_url", "repo_url"); ok {
-			b.WriteString("\nRepository URL: ")
-			b.WriteString(repoURL)
+		if !transferLeague {
+			if repoURL, ok := firstStringFromMetadata(req.Metadata, "repository_url", "repo_url"); ok {
+				b.WriteString("\nRepository URL: ")
+				b.WriteString(repoURL)
+			}
+			if repoProfile, ok := firstStringFromMetadata(req.Metadata, "repo_profile"); ok {
+				b.WriteString("\nRepository profile: ")
+				b.WriteString(repoProfile)
+			}
+			if caseID, ok := firstStringFromMetadata(req.Metadata, "benchmark_case_id"); ok {
+				b.WriteString("\nBenchmark case: ")
+				b.WriteString(caseID)
+			}
+			if caseType, ok := firstStringFromMetadata(req.Metadata, "benchmark_case_type"); ok {
+				b.WriteString("\nBenchmark case type: ")
+				b.WriteString(caseType)
+			}
 		}
-		if repoProfile, ok := firstStringFromMetadata(req.Metadata, "repo_profile"); ok {
-			b.WriteString("\nRepository profile: ")
-			b.WriteString(repoProfile)
+		if league != "pattern_transfer" {
+			appendMetadataLine(&b, req.Metadata, "Runtime", "runtime_or_stack")
+			appendMetadataLine(&b, req.Metadata, "Language", "language")
+			appendMetadataLine(&b, req.Metadata, "Framework", "framework")
 		}
-		if caseID, ok := firstStringFromMetadata(req.Metadata, "benchmark_case_id"); ok {
-			b.WriteString("\nBenchmark case: ")
-			b.WriteString(caseID)
-		}
-		if caseType, ok := firstStringFromMetadata(req.Metadata, "benchmark_case_type"); ok {
-			b.WriteString("\nBenchmark case type: ")
-			b.WriteString(caseType)
-		}
-		appendMetadataLine(&b, req.Metadata, "Runtime", "runtime_or_stack")
-		appendMetadataLine(&b, req.Metadata, "Language", "language")
-		appendMetadataLine(&b, req.Metadata, "Framework", "framework")
 		appendMetadataLine(&b, req.Metadata, "Problem domain", "problem_domain")
 		appendMetadataLine(&b, req.Metadata, "Error class", "error_class")
 		appendMetadataLine(&b, req.Metadata, "Fix pattern", "fix_pattern")
 		appendMetadataLine(&b, req.Metadata, "Validation pattern", "validation_pattern")
-		if goal, ok := firstStringFromMetadata(req.Metadata, "goal"); ok {
-			b.WriteString("\nGoal: ")
-			b.WriteString(goal)
-		}
-		if title, ok := firstStringFromMetadata(req.Metadata, "title"); ok {
-			b.WriteString("\nTitle: ")
-			b.WriteString(title)
-		}
-		if dod, ok := firstStringFromMetadata(req.Metadata, "definition_of_done"); ok {
-			b.WriteString("\nDefinition of done: ")
-			b.WriteString(dod)
-		}
-		if request, ok := req.Metadata["project_request"].(map[string]any); ok {
-			appendMetadataLine(&b, request, "Project type", "project_type")
-			appendMetadataLine(&b, request, "Project root", "project_root")
-			appendMetadataLine(&b, request, "Test focus", "test_focus")
-			appendMetadataLine(&b, request, "Sequence", "sequence_id")
-			appendMetadataLine(&b, request, "Sequence position", "sequence_position")
+		if !transferLeague {
+			if goal, ok := firstStringFromMetadata(req.Metadata, "goal"); ok {
+				b.WriteString("\nGoal: ")
+				b.WriteString(goal)
+			}
+			if title, ok := firstStringFromMetadata(req.Metadata, "title"); ok {
+				b.WriteString("\nTitle: ")
+				b.WriteString(title)
+			}
+			if dod, ok := firstStringFromMetadata(req.Metadata, "definition_of_done"); ok {
+				b.WriteString("\nDefinition of done: ")
+				b.WriteString(dod)
+			}
+			if request, ok := req.Metadata["project_request"].(map[string]any); ok {
+				appendMetadataLine(&b, request, "Project type", "project_type")
+				appendMetadataLine(&b, request, "Project root", "project_root")
+				appendMetadataLine(&b, request, "Test focus", "test_focus")
+				appendMetadataLine(&b, request, "Sequence", "sequence_id")
+				appendMetadataLine(&b, request, "Sequence position", "sequence_position")
+			}
 		}
 	}
 	return semantic.TruncateChars(b.String(), 1200)
