@@ -62,6 +62,9 @@ func (w *RuntimeWorker) Start(parent context.Context) error {
 	}
 	ctx, cancel := context.WithCancel(parent)
 	w.cancel = cancel
+	if err := w.recoverInterruptedTasks(ctx); err != nil {
+		log.Warn().Err(err).Str("worker_id", w.workerID).Msg("failed to recover interrupted tasks on startup")
+	}
 	if err := w.redis.RegisterWorker(ctx, w.workerID, "planner,researcher,coder,reviewer"); err != nil {
 		return err
 	}
@@ -155,6 +158,11 @@ func (w *RuntimeWorker) tryClaimTask(ctx context.Context, agentType domain.Agent
 		return
 	}
 	w.setCurrentTask(&taskID)
+	w.recordRecoveryCheckpoint(ctx, taskID, "claimed", map[string]any{
+		"worker_id":        w.workerID,
+		"assigned_agent":   string(agentType),
+		"execution_target": string(task.ExecutionTarget),
+	})
 	if err := w.redis.UpdateWorkerCurrentTask(ctx, w.workerID, w.getCurrentTask()); err != nil {
 		log.Warn().Err(err).Str("worker_id", w.workerID).Msg("failed to update current task")
 	}
@@ -172,10 +180,17 @@ func (w *RuntimeWorker) executeTask(ctx context.Context, taskID string) {
 		w.releaseTask(ctx)
 		return
 	}
+	w.recordRecoveryCheckpoint(ctx, taskID, "executing", map[string]any{
+		"worker_id": w.workerID,
+	})
 
 	result := w.runner.Execute(task)
 	switch result.Status {
 	case "success":
+		w.recordRecoveryCheckpoint(ctx, taskID, "completed", map[string]any{
+			"worker_id": w.workerID,
+			"status":    "success",
+		})
 		if derefAgent(task.AssignedAgent) == domain.AgentTypePlanner {
 			if err := w.handlePlannerSuccess(ctx, task, result); err != nil {
 				log.Warn().Err(err).Str("task_id", taskID).Msg("failed to handle planner success")
@@ -192,6 +207,10 @@ func (w *RuntimeWorker) executeTask(ctx context.Context, taskID string) {
 			w.reconcileRootTask(ctx, taskID)
 		}
 	case "waiting_approval":
+		w.recordRecoveryCheckpoint(ctx, taskID, "waiting_approval", map[string]any{
+			"worker_id": w.workerID,
+			"status":    "waiting_approval",
+		})
 		timeoutSeconds := 300
 		actionType := "task_execution"
 		targetResource := "task"
@@ -216,6 +235,10 @@ func (w *RuntimeWorker) executeTask(ctx context.Context, taskID string) {
 			}
 		}
 	default:
+		w.recordRecoveryCheckpoint(ctx, taskID, "failed", map[string]any{
+			"worker_id": w.workerID,
+			"status":    "failed",
+		})
 		errorMessage := strings.TrimSpace(result.ErrorMessage)
 		if errorMessage == "" {
 			errorMessage = "task execution failed"
@@ -228,6 +251,40 @@ func (w *RuntimeWorker) executeTask(ctx context.Context, taskID string) {
 		w.reconcileRootTask(ctx, taskID)
 	}
 	w.releaseTask(ctx)
+}
+
+func (w *RuntimeWorker) recoverInterruptedTasks(ctx context.Context) error {
+	if w.postgres == nil {
+		return nil
+	}
+	cutoff := time.Now().UTC().Add(-time.Duration(maxInt(30, w.cfg.WorkerHeartbeatInterval*3)) * time.Second)
+	ids, err := w.postgres.RequeueRecoverableRemoteTasks(ctx, cutoff, "worker:"+w.workerID)
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	log.Warn().Str("worker_id", w.workerID).Int("requeued", len(ids)).Msg("requeued interrupted remote tasks on startup")
+	return nil
+}
+
+func (w *RuntimeWorker) recordRecoveryCheckpoint(ctx context.Context, taskID, stage string, extra map[string]any) {
+	if w.postgres == nil {
+		return
+	}
+	checkpoint := map[string]any{
+		"stage":      strings.TrimSpace(stage),
+		"updated_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	for key, value := range extra {
+		checkpoint[key] = value
+	}
+	if err := w.postgres.PatchTaskMetadata(ctx, taskID, map[string]any{
+		"recovery_checkpoint": checkpoint,
+	}); err != nil {
+		log.Warn().Err(err).Str("worker_id", w.workerID).Str("task_id", taskID).Msg("failed to record recovery checkpoint")
+	}
 }
 
 func (w *RuntimeWorker) handlePlannerSuccess(ctx context.Context, task *domain.TaskResponse, result runner.Result) error {
@@ -580,4 +637,11 @@ func (w *RuntimeWorker) releaseTask(ctx context.Context) {
 	if err := w.redis.EmitWorkerHeartbeat(ctx, w.workerID, w.cfg.WorkerHeartbeatInterval, nil, w.startedAt); err != nil && !errors.Is(err, context.Canceled) {
 		log.Warn().Err(err).Str("worker_id", w.workerID).Msg("failed to emit heartbeat after releasing task")
 	}
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

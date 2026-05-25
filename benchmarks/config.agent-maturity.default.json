@@ -14,7 +14,7 @@
     "memory_on",
     "reference_external"
   ],
-  "runs_per_case": 1,
+  "runs_per_case": 3,
   "default_memory_strategy": "repo_specific_first",
   "external_soft_fail": true
 }

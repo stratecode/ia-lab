@@ -187,6 +187,36 @@ func TestEffectiveMemoryStrategyFromLeague(t *testing.T) {
 	}
 }
 
+func TestResolveMemorySettingsInfersOperationalStrategyByAgent(t *testing.T) {
+	req := domain.ContextBuildRequest{
+		AgentType: "planner",
+		Metadata: map[string]any{
+			"repository_url":   "https://github.com/example/repo",
+			"runtime_or_stack": "python",
+			"language":         "python",
+		},
+	}
+	mode, strategy := resolveMemorySettings(req)
+	if mode != "on" {
+		t.Fatalf("expected default memory mode on, got %q", mode)
+	}
+	if strategy != "technology_first" {
+		t.Fatalf("expected planner to infer technology_first, got %q", strategy)
+	}
+
+	req.AgentType = "reviewer"
+	_, strategy = resolveMemorySettings(req)
+	if strategy != "pattern_first" {
+		t.Fatalf("expected reviewer to infer pattern_first, got %q", strategy)
+	}
+
+	req.AgentType = "coder"
+	_, strategy = resolveMemorySettings(req)
+	if strategy != "repo_specific_first" {
+		t.Fatalf("expected coder to infer repo_specific_first, got %q", strategy)
+	}
+}
+
 func TestSearchVariantsForTechnologyTransfer(t *testing.T) {
 	runtime := "php"
 	language := "php"

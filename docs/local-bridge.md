@@ -609,3 +609,10 @@ The bridge is considered healthy when all of these pass:
 - escaped path is rejected explicitly
 - approval-gated task reaches `waiting_approval` and then `completed`
 - `/tasks/{id}/sources` shows persisted artifacts
+Current defaults and operational notes:
+
+- official `agent_maturity` campaigns now default to `runs_per_case=3`
+- `planner` and `reviewer` can consume reusable semantic experience outside benchmark-only flows when repo memory scope is available
+- the embedded remote worker now records `recovery_checkpoint` metadata and re-queues stale interrupted remote tasks on startup
+
+This is not full lease-based resume yet. It is the first durable recovery layer, which is much less glamorous and much more useful.

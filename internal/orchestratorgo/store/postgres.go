@@ -1244,6 +1244,43 @@ func (s *PostgresStore) PatchTaskMetadata(ctx context.Context, taskID string, pa
 	return err
 }
 
+func (s *PostgresStore) RequeueRecoverableRemoteTasks(ctx context.Context, cutoff time.Time, actor string) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `
+		UPDATE tasks
+		   SET state = 'queued',
+		       retry_count = retry_count + 1,
+		       error_message = NULL,
+		       queued_at = NOW(),
+		       updated_at = NOW(),
+		       metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+		           'recovery_checkpoint',
+		           COALESCE(metadata->'recovery_checkpoint', '{}'::jsonb) || jsonb_build_object(
+		               'last_requeue_at', NOW(),
+		               'recovery_actor', $2,
+		               'recovery_stage', 'requeued_after_interruption'
+		           )
+		       )
+		 WHERE execution_target != 'local'
+		   AND archived_at IS NULL
+		   AND state IN ('assigned', 'in_progress', 'retrying')
+		   AND COALESCE(updated_at, created_at) < $1
+		 RETURNING id::text
+	`, cutoff, actor)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (s *PostgresStore) CreateEvaluationRun(ctx context.Context, params CreateEvaluationRunParams) (*domain.EvaluationRunResponse, error) {
 	evaluationID := uuid.NewString()
 	if _, err := s.pool.Exec(ctx, `

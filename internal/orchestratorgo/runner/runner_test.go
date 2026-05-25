@@ -251,6 +251,32 @@ func TestReviewerIncludesSemanticFailureMemory(t *testing.T) {
 	}
 }
 
+func TestPlannerIncludesSemanticFailureMemory(t *testing.T) {
+	metadata := map[string]any{
+		"context_package": &domain.ContextPackage{
+			SourceRefs: []string{"task:planner-failed#0"},
+			OperationalIR: &domain.OperationalIR{
+				ValidationRules: []string{"Keep approvals only on destructive steps"},
+				Invalid: []domain.OperationalItem{{
+					SourceRef:     "task:planner-failed#0",
+					Outcome:       "failed",
+					FailureReason: "planner scheduled coder before researcher",
+				}},
+			},
+		},
+	}
+	sources, rules, checks := plannerSemanticMemory(metadata)
+	if len(sources) != 1 || sources[0] != "task:planner-failed#0" {
+		t.Fatalf("unexpected sources: %#v", sources)
+	}
+	if len(rules) != 1 || rules[0] != "Keep approvals only on destructive steps" {
+		t.Fatalf("unexpected rules: %#v", rules)
+	}
+	if len(checks) != 1 || !strings.Contains(checks[0], "planner scheduled coder before researcher") {
+		t.Fatalf("unexpected checks: %#v", checks)
+	}
+}
+
 func TestBuildRepoWorkflowPlanUsesBenchmarkCaseFile(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {

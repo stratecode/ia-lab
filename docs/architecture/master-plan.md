@@ -98,6 +98,7 @@ Objective: move from controlled workflow to useful engineering work on existing 
   - individual capability
   - handoff quality
   - end-to-end system usefulness
+- run official maturity campaigns with `runs_per_case=3` so progression claims are based on repeated evidence instead of a lucky first pass
 - use three baselines for curated maturity cases:
   - `memory_off`
   - `memory_on`
@@ -137,6 +138,7 @@ Objective: keep the system useful when the host, bridge, or long-running executi
 
 - treat restart recovery as a product capability, not an operational afterthought
 - checkpoint task intent, patch payloads, commands, and execution stage before expensive work begins
+- persist recovery checkpoints on worker-owned tasks and re-queue stale interrupted remote work on startup as the first practical recovery layer
 - make bridge claims lease-based so interrupted work can be safely resumed or re-queued
 - persist enough execution state to continue from the last durable phase after reboot
 - gate heavy local work behind host health and resource budget checks

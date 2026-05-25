@@ -148,6 +148,23 @@ func reviewerSemanticMemory(metadata map[string]any) ([]string, []string, []stri
 	return append([]string{}, pkg.SourceRefs...), rules, checks
 }
 
+func plannerSemanticMemory(metadata map[string]any) ([]string, []string, []string) {
+	pkg, ok := metadata["context_package"].(*domain.ContextPackage)
+	if !ok || pkg == nil || pkg.OperationalIR == nil {
+		return []string{}, []string{}, []string{}
+	}
+	constraintRefs := append([]string{}, pkg.SourceRefs...)
+	insights := append([]string{}, pkg.OperationalIR.ValidationRules...)
+	antiPatterns := make([]string, 0, len(pkg.OperationalIR.Invalid))
+	for _, item := range pkg.OperationalIR.Invalid {
+		if strings.TrimSpace(item.FailureReason) == "" {
+			continue
+		}
+		antiPatterns = append(antiPatterns, fmt.Sprintf("%s: %s", item.SourceRef, item.FailureReason))
+	}
+	return constraintRefs, insights, antiPatterns
+}
+
 func asStringRunner(value any) string {
 	if value == nil {
 		return ""
@@ -160,6 +177,17 @@ func asStringRunner(value any) string {
 
 func (r *TaskRunner) executePlanner(task *domain.TaskResponse) Result {
 	metadata := cloneMap(task.Metadata)
+	semanticSources, semanticRules, priorFailureChecks := plannerSemanticMemory(metadata)
+	if len(semanticRules) > 0 || len(priorFailureChecks) > 0 {
+		existing := anyStringSliceDefault(metadata["capability_context"], []string{})
+		if len(semanticRules) > 0 {
+			existing = append(existing, "Semantic planning rules:\n- "+strings.Join(semanticRules, "\n- "))
+		}
+		if len(priorFailureChecks) > 0 {
+			existing = append(existing, "Semantic planning anti-patterns:\n- "+strings.Join(priorFailureChecks, "\n- "))
+		}
+		metadata["capability_context"] = existing
+	}
 	if repoWorkflow, ok := buildRepoWorkflowPlan(metadata); ok {
 		return repoWorkflow
 	}
@@ -181,12 +209,15 @@ func (r *TaskRunner) executePlanner(task *domain.TaskResponse) Result {
 				Status:  "success",
 				Summary: "planner completed",
 				Results: map[string]any{
-					"status":        "success",
-					"plan_summary":  result.Summary,
-					"plan_markdown": result.Plan,
-					"subtasks":      result.Subtasks,
-					"raw_response":  result.Raw,
-					"plan_only":     planOnly,
+					"status":                    "success",
+					"plan_summary":              result.Summary,
+					"plan_markdown":             result.Plan,
+					"subtasks":                  result.Subtasks,
+					"raw_response":              result.Raw,
+					"plan_only":                 planOnly,
+					"semantic_context_sources":  semanticSources,
+					"semantic_validation_rules": semanticRules,
+					"prior_failure_checks":      priorFailureChecks,
 				},
 			}
 		}
@@ -197,11 +228,14 @@ func (r *TaskRunner) executePlanner(task *domain.TaskResponse) Result {
 		Status:  "success",
 		Summary: "planner completed in fallback mode",
 		Results: map[string]any{
-			"status":        "success",
-			"plan_summary":  fmt.Sprintf("Fallback plan generated for task %s", task.ID),
-			"plan_markdown": "# Execution plan\n\n1. Scope\n2. Prepare\n3. Deliver",
-			"subtasks":      []map[string]any{},
-			"plan_only":     asBool(task.Metadata["plan_only"]),
+			"status":                    "success",
+			"plan_summary":              fmt.Sprintf("Fallback plan generated for task %s", task.ID),
+			"plan_markdown":             "# Execution plan\n\n1. Scope\n2. Prepare\n3. Deliver",
+			"subtasks":                  []map[string]any{},
+			"plan_only":                 asBool(task.Metadata["plan_only"]),
+			"semantic_context_sources":  semanticSources,
+			"semantic_validation_rules": semanticRules,
+			"prior_failure_checks":      priorFailureChecks,
 		},
 	}
 }

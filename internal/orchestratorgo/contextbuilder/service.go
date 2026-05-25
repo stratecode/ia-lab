@@ -1063,7 +1063,7 @@ func resolveMemorySettings(req domain.ContextBuildRequest) (string, string) {
 		strategy = normalizeMemoryStrategy(metadataString(req.Metadata, "context_memory_strategy", "benchmark_memory_strategy", "memory_strategy"))
 	}
 	if strategy == "" {
-		strategy = "repo_specific_first"
+		strategy = inferredOperationalMemoryStrategy(req)
 	}
 	return mode, strategy
 }
@@ -1082,6 +1082,26 @@ func effectiveMemoryStrategy(req domain.ContextBuildRequest) string {
 		}
 	}
 	return normalizeMemoryStrategy(req.MemoryStrategy)
+}
+
+func inferredOperationalMemoryStrategy(req domain.ContextBuildRequest) string {
+	if explicit := normalizeMemoryStrategy(metadataString(req.Metadata, "context_memory_strategy", "benchmark_memory_strategy", "memory_strategy")); explicit != "" {
+		return explicit
+	}
+	if explicit := normalizeMemoryStrategy(req.MemoryStrategy); explicit != "" {
+		return explicit
+	}
+	if !hasRepoMemoryScope(req.Metadata) {
+		return "repo_specific_first"
+	}
+	switch strings.ToLower(strings.TrimSpace(req.AgentType)) {
+	case "planner", "researcher":
+		return "technology_first"
+	case "reviewer":
+		return "pattern_first"
+	default:
+		return "repo_specific_first"
+	}
 }
 
 func benchmarkLeague(req domain.ContextBuildRequest) string {
