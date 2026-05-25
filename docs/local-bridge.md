@@ -614,5 +614,7 @@ Current defaults and operational notes:
 - official `agent_maturity` campaigns now default to `runs_per_case=3`
 - `planner` and `reviewer` can consume reusable semantic experience outside benchmark-only flows when repo memory scope is available
 - the embedded remote worker now records `recovery_checkpoint` metadata and re-queues stale interrupted remote tasks on startup
+- local bridge claims are now lease-based and persist both `local_bridge_lease` and `recovery_checkpoint` metadata during claim, heartbeat, resume, and completion
+- lease recovery has been fault-injected end-to-end: kill bridge, let lease expire, restart same bridge, and confirm task completion without manual rescue
 
-This is not full lease-based resume yet. It is the first durable recovery layer, which is much less glamorous and much more useful.
+This is now the first practical end-to-end recovery layer for local bridges. It is still not full checkpoint-and-continue for arbitrary subprocess state, but it is real resume/reclaim behavior instead of wishful prose.

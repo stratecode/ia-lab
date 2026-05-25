@@ -12,7 +12,9 @@ type LocalBridgeRegisterRequest struct {
 }
 
 type LocalBridgeHeartbeatRequest struct {
-	Status string `json:"status"`
+	Status          string  `json:"status"`
+	CurrentTaskID   *string `json:"current_task_id,omitempty"`
+	LeaseTTLSeconds *int    `json:"lease_ttl_seconds,omitempty"`
 }
 
 type LocalBridgeResponse struct {

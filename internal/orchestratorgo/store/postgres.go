@@ -388,6 +388,64 @@ func (s *PostgresStore) HeartbeatLocalBridge(ctx context.Context, bridgeID, stat
 	return s.GetLocalBridge(ctx, bridgeID)
 }
 
+func (s *PostgresStore) TouchLocalBridgeTaskLease(ctx context.Context, taskID, bridgeID string, ttlSeconds int, status string) error {
+	taskID = strings.TrimSpace(taskID)
+	bridgeID = strings.TrimSpace(bridgeID)
+	if taskID == "" || bridgeID == "" {
+		return nil
+	}
+	if ttlSeconds <= 0 {
+		ttlSeconds = 45
+	}
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Duration(ttlSeconds) * time.Second)
+	stage := nonEmptyBridgeLeaseStatus(status, "active")
+	patch := map[string]any{
+		"local_bridge_lease": map[string]any{
+			"bridge_id":         bridgeID,
+			"status":            stage,
+			"last_heartbeat_at": now.Format(time.RFC3339),
+			"lease_expires_at":  expiresAt.Format(time.RFC3339),
+		},
+		"recovery_checkpoint": map[string]any{
+			"stage":            stage,
+			"bridge_id":        bridgeID,
+			"updated_at":       now.Format(time.RFC3339),
+			"lease_expires_at": expiresAt.Format(time.RFC3339),
+			"execution_target": "local",
+		},
+	}
+	return s.PatchTaskMetadata(ctx, taskID, patch)
+}
+
+func (s *PostgresStore) FinalizeLocalBridgeTaskLease(ctx context.Context, taskID, bridgeID, status string) error {
+	taskID = strings.TrimSpace(taskID)
+	bridgeID = strings.TrimSpace(bridgeID)
+	if taskID == "" || bridgeID == "" {
+		return nil
+	}
+	now := time.Now().UTC()
+	stage := nonEmptyBridgeLeaseStatus(status, "completed")
+	patch := map[string]any{
+		"local_bridge_lease": map[string]any{
+			"bridge_id":         bridgeID,
+			"status":            stage,
+			"last_heartbeat_at": now.Format(time.RFC3339),
+			"lease_expires_at":  now.Format(time.RFC3339),
+			"released_at":       now.Format(time.RFC3339),
+		},
+		"recovery_checkpoint": map[string]any{
+			"stage":            stage,
+			"bridge_id":        bridgeID,
+			"updated_at":       now.Format(time.RFC3339),
+			"lease_expires_at": now.Format(time.RFC3339),
+			"released_at":      now.Format(time.RFC3339),
+			"execution_target": "local",
+		},
+	}
+	return s.PatchTaskMetadata(ctx, taskID, patch)
+}
+
 func (s *PostgresStore) ListLocalBridges(ctx context.Context) ([]domain.LocalBridgeResponse, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text, name, hostname, workspace_root, status, capabilities, api_key_name, last_heartbeat, created_at, updated_at
@@ -428,6 +486,66 @@ func (s *PostgresStore) ClaimNextLocalBridgeTask(ctx context.Context, bridgeID s
 	row := tx.QueryRow(ctx, taskSelectSQL+`
 		WHERE execution_target = 'local'
 		  AND assigned_agent IN ('coder', 'researcher', 'reviewer')
+		  AND state IN ('assigned', 'in_progress', 'retrying')
+		  AND archived_at IS NULL
+		  AND (COALESCE(metadata->>'workspace_root', '') = '' OR metadata->>'workspace_root' = $1)
+		  AND COALESCE(metadata->'local_bridge_lease'->>'bridge_id', '') = $2
+		ORDER BY updated_at DESC, created_at ASC, id ASC
+		LIMIT 1
+		FOR UPDATE SKIP LOCKED
+	`, bridge.WorkspaceRoot, bridgeID)
+	task, err := scanTask(row)
+	if err == nil && task != nil {
+		now := time.Now().UTC()
+		switch task.State {
+		case domain.TaskStateAssigned:
+			if err := transitionTaskStateTx(ctx, tx, task.ID, domain.TaskStateAssigned, domain.TaskStateInProgress, "bridge:"+bridgeID, "Execution resumed in local bridge", now); err != nil {
+				return nil, err
+			}
+		case domain.TaskStateRetrying:
+			if err := transitionTaskStateTx(ctx, tx, task.ID, domain.TaskStateRetrying, domain.TaskStateInProgress, "bridge:"+bridgeID, "Retry resumed in local bridge", now); err != nil {
+				return nil, err
+			}
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+		if err := s.TouchLocalBridgeTaskLease(ctx, task.ID, bridgeID, 45, "resumed"); err != nil {
+			return nil, err
+		}
+		return buildLocalBridgeClaim(task, bridge), nil
+	}
+	if err != nil && err != pgx.ErrNoRows {
+		return nil, err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE tasks
+		   SET state = 'queued',
+		       retry_count = retry_count + 1,
+		       queued_at = NOW(),
+		       updated_at = NOW(),
+		       metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+		           'local_bridge_lease',
+		           COALESCE(metadata->'local_bridge_lease', '{}'::jsonb) || jsonb_build_object(
+		               'status', 'expired',
+		               'requeued_at', NOW()
+		           )
+		       )
+		 WHERE execution_target = 'local'
+		   AND assigned_agent IN ('coder', 'researcher', 'reviewer')
+		   AND state IN ('assigned', 'in_progress', 'retrying')
+		   AND archived_at IS NULL
+		   AND (COALESCE(metadata->>'workspace_root', '') = '' OR metadata->>'workspace_root' = $1)
+		   AND COALESCE(metadata->'local_bridge_lease'->>'bridge_id', '') <> $2
+		   AND COALESCE((metadata->'local_bridge_lease'->>'lease_expires_at')::timestamptz, to_timestamp(0)) < NOW()
+	`, bridge.WorkspaceRoot, bridgeID); err != nil {
+		return nil, err
+	}
+
+	row = tx.QueryRow(ctx, taskSelectSQL+`
+		WHERE execution_target = 'local'
+		  AND assigned_agent IN ('coder', 'researcher', 'reviewer')
 		  AND state = 'queued'
 		  AND archived_at IS NULL
 		  AND (COALESCE(metadata->>'workspace_root', '') = '' OR metadata->>'workspace_root' = $1)
@@ -435,7 +553,7 @@ func (s *PostgresStore) ClaimNextLocalBridgeTask(ctx context.Context, bridgeID s
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
 	`, bridge.WorkspaceRoot)
-	task, err := scanTask(row)
+	task, err = scanTask(row)
 	if err == pgx.ErrNoRows {
 		if err := tx.Commit(ctx); err != nil {
 			return nil, err
@@ -456,7 +574,16 @@ func (s *PostgresStore) ClaimNextLocalBridgeTask(ctx context.Context, bridgeID s
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
+	if err := s.TouchLocalBridgeTaskLease(ctx, task.ID, bridgeID, 45, "claimed"); err != nil {
+		return nil, err
+	}
+	return buildLocalBridgeClaim(task, bridge), nil
+}
 
+func buildLocalBridgeClaim(task *domain.TaskResponse, bridge *domain.LocalBridgeResponse) *domain.LocalBridgeTaskClaimResponse {
+	if task == nil || bridge == nil {
+		return nil
+	}
 	metadata := task.Metadata
 	workspaceRoot := strings.TrimSpace(asString(metadata["workspace_root"]))
 	if workspaceRoot == "" {
@@ -470,7 +597,6 @@ func (s *PostgresStore) ClaimNextLocalBridgeTask(ctx context.Context, bridgeID s
 	if branch == "" {
 		branch = "main"
 	}
-
 	assignedAgent := ""
 	if task.AssignedAgent != nil {
 		assignedAgent = string(*task.AssignedAgent)
@@ -479,7 +605,6 @@ func (s *PostgresStore) ClaimNextLocalBridgeTask(ctx context.Context, bridgeID s
 	if task.WorkspacePath != nil {
 		workspacePath = *task.WorkspacePath
 	}
-
 	return &domain.LocalBridgeTaskClaimResponse{
 		TaskID:          task.ID,
 		RootTaskID:      task.RootTaskID,
@@ -492,7 +617,14 @@ func (s *PostgresStore) ClaimNextLocalBridgeTask(ctx context.Context, bridgeID s
 		Metadata:        metadata,
 		RepoPath:        repoPath,
 		Branch:          branch,
-	}, nil
+	}
+}
+
+func nonEmptyBridgeLeaseStatus(value, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return fallback
 }
 
 func (s *PostgresStore) ListChildren(ctx context.Context, parentTaskID string) ([]domain.TaskResponse, error) {

@@ -140,6 +140,7 @@ Objective: keep the system useful when the host, bridge, or long-running executi
 - checkpoint task intent, patch payloads, commands, and execution stage before expensive work begins
 - persist recovery checkpoints on worker-owned tasks and re-queue stale interrupted remote work on startup as the first practical recovery layer
 - make bridge claims lease-based so interrupted work can be safely resumed or re-queued
+- validate lease recovery with deliberate fault injection, not just green-path execution
 - persist enough execution state to continue from the last durable phase after reboot
 - gate heavy local work behind host health and resource budget checks
 - prefer reproducible caches or prebuilt artifacts for expensive dependencies such as `llama.cpp`

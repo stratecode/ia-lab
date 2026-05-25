@@ -34,6 +34,7 @@ type Daemon struct {
 	hostname       string
 	pollInterval   time.Duration
 	heartbeatEvery time.Duration
+	currentTaskID  *string
 }
 
 func NewDaemon(opts DaemonOptions) (*Daemon, error) {
@@ -84,7 +85,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 		if time.Since(lastHeartbeat) >= d.heartbeatEvery {
-			if _, err := d.client.Heartbeat(ctx, d.bridgeID, "active"); err != nil {
+			if _, err := d.client.Heartbeat(ctx, d.bridgeID, "active", d.currentTaskID, intPtr(int(d.heartbeatEvery.Seconds())*3)); err != nil {
 				return err
 			}
 			lastHeartbeat = time.Now()
@@ -101,6 +102,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 				continue
 			}
 		}
+		d.currentTaskID = &claim.TaskID
 		result, execErr := d.executor.Execute(ctx, *claim)
 		if execErr != nil {
 			msg := execErr.Error()
@@ -114,6 +116,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		if err := d.client.SubmitResult(ctx, d.bridgeID, claim.TaskID, result); err != nil {
 			return fmt.Errorf("submit result for task %s: %w", claim.TaskID, err)
 		}
+		d.currentTaskID = nil
 		log.Info().Str("bridge_id", d.bridgeID).Str("task_id", claim.TaskID).Str("status", result.Status).Msg("local bridge processed task")
 	}
 }
