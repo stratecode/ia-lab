@@ -144,6 +144,57 @@ func TestWorkspaceExecutorSkipsRepeatApprovalAfterGrant(t *testing.T) {
 	}
 }
 
+func TestWorkspaceExecutorPropagatesSemanticContextHits(t *testing.T) {
+	root := initGitWorkspace(t)
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"context_package": map[string]any{
+				"source_refs": []any{
+					"artifact:repo_workflow_case:1",
+					"artifact:repo_workflow_lesson:1",
+				},
+				"chunks": []any{
+					map[string]any{
+						"source_ref": "artifact:repo_workflow_case:1",
+						"metadata": map[string]any{
+							"memory_match_type": "technology_similar",
+							"repo_profile":      "php_logging_library",
+							"repository_url":    "https://github.com/Seldaek/monolog",
+							"benchmark_case_id": "monolog-experience-review",
+						},
+					},
+				},
+			},
+			"tool_request": map[string]any{
+				"tool": "run_command",
+				"argv": []any{"python3", "-c", "print('semantic-ok')"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result.SemanticContextChunkCount; got != 1 {
+		t.Fatalf("expected semantic chunk count 1, got %d", got)
+	}
+	if len(result.SemanticContextSources) != 2 {
+		t.Fatalf("expected semantic sources, got %#v", result.SemanticContextSources)
+	}
+	if len(result.SemanticContextHits) != 1 {
+		t.Fatalf("expected semantic hits, got %#v", result.SemanticContextHits)
+	}
+	if got := result.SemanticContextHits[0]["match_type"]; got != "technology_similar" {
+		t.Fatalf("expected technology_similar hit, got %#v", result.SemanticContextHits[0])
+	}
+	if got := result.SemanticContextHits[0]["benchmark_case_id"]; got != "monolog-experience-review" {
+		t.Fatalf("expected benchmark_case_id propagated, got %#v", result.SemanticContextHits[0])
+	}
+}
+
 func TestWorkspaceExecutorScaffoldProject(t *testing.T) {
 	root := initGitWorkspace(t)
 	executor, err := NewWorkspaceExecutor(root)

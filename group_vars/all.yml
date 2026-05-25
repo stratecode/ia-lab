@@ -496,6 +496,8 @@ orchestrator_telegram_bot_token: "{{ lookup('env', 'LAB_TELEGRAM_BOT_TOKEN') | d
 orchestrator_telegram_allowed_users: "{{ lookup('env', 'LAB_TELEGRAM_ALLOWED_USERS') | default('', true) }}"
 orchestrator_cleanup_key_name: "{{ lookup('env', 'LAB_ORCHESTRATOR_CLEANUP_KEY_NAME') | default('workspace-cleanup-timer', true) }}"
 orchestrator_cleanup_api_key: "{{ lookup('env', 'LAB_ORCHESTRATOR_CLEANUP_API_KEY') | default('', true) }}"
+orchestrator_benchmark_key_name: "{{ lookup('env', 'LAB_ORCHESTRATOR_BENCHMARK_KEY_NAME') | default(lookup('env', 'LAB_BENCHMARK_API_KEY_NAME') | default('benchmark-operator', true), true) }}"
+orchestrator_benchmark_api_key: "{{ lookup('env', 'LAB_ORCHESTRATOR_BENCHMARK_API_KEY') | default(lookup('env', 'LAB_BENCHMARK_API_KEY') | default('', true), true) }}"
 orchestrator_open_webui_key_name: "{{ lookup('env', 'LAB_ORCHESTRATOR_OPEN_WEBUI_KEY_NAME') | default('open-webui-orchestrator-tools', true) }}"
 orchestrator_open_webui_api_key: "{{ lookup('env', 'LAB_ORCHESTRATOR_OPEN_WEBUI_API_KEY') | default('', true) }}"
 orchestrator_backup_retain_count: "{{ lookup('env', 'LAB_ORCHESTRATOR_BACKUP_RETAIN_COUNT') | default('7', true) | int }}"

@@ -155,13 +155,16 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 	}
 	agentTypePtr := &agentType
 	output := map[string]any{
-		"summary":       strings.TrimSpace(derefStringPtr(result.Summary)),
-		"stdout":        derefStringPtr(result.Stdout),
-		"stderr":        derefStringPtr(result.Stderr),
-		"exit_code":     result.ExitCode,
-		"diff":          derefStringPtr(result.Diff),
-		"changed_files": result.ChangedFiles,
-		"test_results":  result.TestResults,
+		"summary":                      strings.TrimSpace(derefStringPtr(result.Summary)),
+		"stdout":                       derefStringPtr(result.Stdout),
+		"stderr":                       derefStringPtr(result.Stderr),
+		"exit_code":                    result.ExitCode,
+		"diff":                         derefStringPtr(result.Diff),
+		"changed_files":                result.ChangedFiles,
+		"test_results":                 result.TestResults,
+		"semantic_context_sources":     result.SemanticContextSources,
+		"semantic_context_chunk_count": result.SemanticContextChunkCount,
+		"semantic_context_hits":        result.SemanticContextHits,
 	}
 	invocationID, err := s.Postgres.CreateToolInvocation(ctx, store.CreateToolInvocationParams{
 		TaskID:        taskIDPtr,
@@ -246,18 +249,21 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 	}
 
 	results := map[string]any{
-		"status":             strings.ToLower(strings.TrimSpace(result.Status)),
-		"summary":            derefStringPtr(result.Summary),
-		"stdout":             derefStringPtr(result.Stdout),
-		"stderr":             derefStringPtr(result.Stderr),
-		"exit_code":          result.ExitCode,
-		"diff":               derefStringPtr(result.Diff),
-		"changed_files":      result.ChangedFiles,
-		"test_results":       result.TestResults,
-		"artifacts":          artifactsToPersist,
-		"error_message":      derefStringPtr(result.ErrorMessage),
-		"tool_invocation_id": invocationID,
-		"artifact_ids":       artifactIDs,
+		"status":                       strings.ToLower(strings.TrimSpace(result.Status)),
+		"summary":                      derefStringPtr(result.Summary),
+		"stdout":                       derefStringPtr(result.Stdout),
+		"stderr":                       derefStringPtr(result.Stderr),
+		"exit_code":                    result.ExitCode,
+		"diff":                         derefStringPtr(result.Diff),
+		"changed_files":                result.ChangedFiles,
+		"test_results":                 result.TestResults,
+		"artifacts":                    artifactsToPersist,
+		"error_message":                derefStringPtr(result.ErrorMessage),
+		"tool_invocation_id":           invocationID,
+		"artifact_ids":                 artifactIDs,
+		"semantic_context_sources":     result.SemanticContextSources,
+		"semantic_context_chunk_count": result.SemanticContextChunkCount,
+		"semantic_context_hits":        result.SemanticContextHits,
 	}
 	return results, invocationID, artifactIDs, nil
 }

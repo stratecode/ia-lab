@@ -359,3 +359,40 @@ func TestBuildQueryOmitsRepoSpecificMarkersForPatternTransfer(t *testing.T) {
 		t.Fatalf("expected pattern metadata to remain in query, got %q", query)
 	}
 }
+
+func TestMemoryMatchTypeTechnologyTransferRequiresCoherentSignal(t *testing.T) {
+	req := domain.ContextBuildRequest{
+		Metadata: map[string]any{
+			"benchmark_league":    "technology_transfer",
+			"runtime_or_stack":    "php",
+			"language":            "php",
+			"framework":           "library",
+			"problem_domain":      "logging",
+			"error_class":         "repository_structure_validation",
+			"fix_pattern":         "deterministic_marker_before_review",
+			"validation_pattern":  "containerized_manifest_smoke",
+			"benchmark_case_type": "review_only",
+		},
+	}
+
+	weak := domain.SemanticChunkResponse{
+		Metadata: map[string]any{
+			"language": "php",
+		},
+	}
+	if got := memoryMatchType(weak, req); got != "semantic_related" {
+		t.Fatalf("expected weak single-dimension hit to stay semantic_related, got %q", got)
+	}
+
+	strong := domain.SemanticChunkResponse{
+		Metadata: map[string]any{
+			"runtime_or_stack":   "php",
+			"language":           "php",
+			"problem_domain":     "logging",
+			"validation_pattern": "containerized_manifest_smoke",
+		},
+	}
+	if got := memoryMatchType(strong, req); got != "technology_similar" {
+		t.Fatalf("expected coherent technology hit to be technology_similar, got %q", got)
+	}
+}

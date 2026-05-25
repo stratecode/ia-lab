@@ -249,9 +249,12 @@ func searchVariants(req domain.SemanticSearchRequest, buildReq domain.ContextBui
 		return uniqueSearchVariants(
 			req,
 			searchVariant(req, "runtime_or_stack", "language", "framework"),
+			searchVariant(req, "runtime_or_stack", "framework", "problem_domain"),
 			searchVariant(req, "runtime_or_stack", "language"),
+			searchVariant(req, "language", "framework", "validation_pattern"),
 			searchVariant(req, "framework", "problem_domain"),
 			searchVariant(req, "language", "problem_domain", "error_class"),
+			searchVariant(req, "problem_domain", "error_class", "fix_pattern"),
 		)
 	case "pattern_transfer":
 		return uniqueSearchVariants(
@@ -876,29 +879,40 @@ func adjustedScore(item domain.SemanticChunkResponse, req domain.ContextBuildReq
 			score += 0.04
 		}
 	case "technology_transfer":
+		techCount := sharedTechnologyDimensionCount(runtimeOrStack, itemRuntime, language, itemLanguage, framework, itemFramework)
+		patternCount := sharedPatternDimensionCount(problemDomain, itemProblemDomain, errorClass, itemErrorClass, fixPattern, itemFixPattern, validationPattern, itemValidationPattern)
 		if runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime {
-			score += 0.24
+			score += 0.16
 		}
 		if language != "" && itemLanguage != "" && language == itemLanguage {
-			score += 0.20
+			score += 0.14
 		}
 		if framework != "" && itemFramework != "" && framework == itemFramework {
-			score += 0.18
+			score += 0.14
 		}
 		if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
-			score += 0.10
+			score += 0.14
 		}
 		if errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass {
-			score += 0.10
+			score += 0.12
 		}
 		if fixPattern != "" && itemFixPattern != "" && fixPattern == itemFixPattern {
-			score += 0.10
+			score += 0.12
 		}
 		if validationPattern != "" && itemValidationPattern != "" && validationPattern == itemValidationPattern {
-			score += 0.08
+			score += 0.10
 		}
 		if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
-			score += 0.06
+			score += 0.04
+		}
+		if techCount >= 2 {
+			score += 0.12
+		}
+		if techCount >= 1 && patternCount >= 1 {
+			score += 0.14
+		}
+		if patternCount >= 2 {
+			score += 0.08
 		}
 	case "negative_transfer":
 		if repoURL != "" && itemRepoURL != "" && repoURL == itemRepoURL {
@@ -1142,15 +1156,25 @@ func memoryMatchType(item domain.SemanticChunkResponse, req domain.ContextBuildR
 	itemFixPattern := metadataString(item.Metadata, "fix_pattern")
 	validationPattern := metadataString(req.Metadata, "validation_pattern")
 	itemValidationPattern := metadataString(item.Metadata, "validation_pattern")
-	patternMatch := (repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile) ||
-		(caseType != "" && itemCaseType != "" && caseType == itemCaseType) ||
-		(problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain) ||
-		(errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass) ||
-		(fixPattern != "" && itemFixPattern != "" && fixPattern == itemFixPattern) ||
-		(validationPattern != "" && itemValidationPattern != "" && validationPattern == itemValidationPattern)
-	technologyMatch := (runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime) ||
-		(language != "" && itemLanguage != "" && language == itemLanguage) ||
-		(framework != "" && itemFramework != "" && framework == itemFramework)
+	patternCount := sharedPatternDimensionCount(problemDomain, itemProblemDomain, errorClass, itemErrorClass, fixPattern, itemFixPattern, validationPattern, itemValidationPattern)
+	if repoProfile != "" && itemRepoProfile != "" && repoProfile == itemRepoProfile {
+		patternCount++
+	}
+	if caseType != "" && itemCaseType != "" && caseType == itemCaseType {
+		patternCount++
+	}
+	technologyCount := sharedTechnologyDimensionCount(runtimeOrStack, itemRuntime, language, itemLanguage, framework, itemFramework)
+	patternMatch := patternCount > 0
+	technologyMatch := technologyCount > 0
+	if benchmarkLeague(req) == "technology_transfer" {
+		if technologyCount >= 2 || (technologyCount >= 1 && patternCount >= 1) {
+			return "technology_similar"
+		}
+		if patternCount >= 2 {
+			return "pattern_similar"
+		}
+		return "semantic_related"
+	}
 	if benchmarkLeague(req) == "pattern_transfer" && patternMatch {
 		return "pattern_similar"
 	}
@@ -1161,6 +1185,37 @@ func memoryMatchType(item domain.SemanticChunkResponse, req domain.ContextBuildR
 		return "pattern_similar"
 	}
 	return "semantic_related"
+}
+
+func sharedTechnologyDimensionCount(runtimeOrStack, itemRuntime, language, itemLanguage, framework, itemFramework string) int {
+	count := 0
+	if runtimeOrStack != "" && itemRuntime != "" && runtimeOrStack == itemRuntime {
+		count++
+	}
+	if language != "" && itemLanguage != "" && language == itemLanguage {
+		count++
+	}
+	if framework != "" && itemFramework != "" && framework == itemFramework {
+		count++
+	}
+	return count
+}
+
+func sharedPatternDimensionCount(problemDomain, itemProblemDomain, errorClass, itemErrorClass, fixPattern, itemFixPattern, validationPattern, itemValidationPattern string) int {
+	count := 0
+	if problemDomain != "" && itemProblemDomain != "" && problemDomain == itemProblemDomain {
+		count++
+	}
+	if errorClass != "" && itemErrorClass != "" && errorClass == itemErrorClass {
+		count++
+	}
+	if fixPattern != "" && itemFixPattern != "" && fixPattern == itemFixPattern {
+		count++
+	}
+	if validationPattern != "" && itemValidationPattern != "" && validationPattern == itemValidationPattern {
+		count++
+	}
+	return count
 }
 
 func appendMetadataLine(b *strings.Builder, metadata map[string]any, label string, keys ...string) {

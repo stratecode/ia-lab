@@ -58,6 +58,7 @@ func NewWorkspaceExecutor(workspaceRoot string) (*WorkspaceExecutor, error) {
 
 func (e *WorkspaceExecutor) Execute(ctx context.Context, claim domain.LocalBridgeTaskClaimResponse) (domain.LocalBridgeResultRequest, error) {
 	metadata := claim.Metadata
+	contextSources, contextHits, contextChunkCount := semanticContextRefs(metadata)
 	toolRequest, ok := metadata["tool_request"].(map[string]any)
 	if !ok || toolRequest == nil {
 		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: "local task requires metadata.tool_request"}
@@ -73,45 +74,51 @@ func (e *WorkspaceExecutor) Execute(ctx context.Context, claim domain.LocalBridg
 		targetResource := firstNonEmptyString(strings.TrimSpace(asString(toolRequest["path"])), tool)
 		timeout := asInt(toolRequest["timeout_seconds"], 300)
 		summary := fmt.Sprintf("Approval required before executing tool %s", tool)
-		return domain.LocalBridgeResultRequest{
+		return withSemanticRefs(domain.LocalBridgeResultRequest{
 			Status:         "waiting_approval",
 			Summary:        &summary,
 			ActionType:     &actionType,
 			TargetResource: &targetResource,
 			TimeoutSeconds: &timeout,
-		}, nil
+		}, contextSources, contextHits, contextChunkCount), nil
 	}
 
+	var result domain.LocalBridgeResultRequest
+	var err error
 	switch tool {
 	case "read_file":
-		return e.readFile(toolRequest)
+		result, err = e.readFile(toolRequest)
 	case "list_files":
-		return e.listFiles(toolRequest)
+		result, err = e.listFiles(toolRequest)
 	case "write_file":
-		return e.writeFile(toolRequest)
+		result, err = e.writeFile(toolRequest)
 	case "research_project":
-		return e.researchProject(toolRequest)
+		result, err = e.researchProject(toolRequest)
 	case "scaffold_project":
-		return e.scaffoldProject(toolRequest)
+		result, err = e.scaffoldProject(toolRequest)
 	case "review_project":
-		return e.reviewProject(ctx, toolRequest)
+		result, err = e.reviewProject(ctx, toolRequest)
 	case "apply_patch":
-		return e.applyPatch(ctx, toolRequest)
+		result, err = e.applyPatch(ctx, toolRequest)
 	case "run_command":
-		return e.runCommand(ctx, toolRequest)
+		result, err = e.runCommand(ctx, toolRequest)
 	case "git_status":
-		return e.runSubprocess(ctx, []string{"git", "status", "--short"}, "git status")
+		result, err = e.runSubprocess(ctx, []string{"git", "status", "--short"}, "git status")
 	case "git_diff":
-		return e.runSubprocess(ctx, []string{"git", "diff", "--no-ext-diff"}, "git diff")
+		result, err = e.runSubprocess(ctx, []string{"git", "diff", "--no-ext-diff"}, "git diff")
 	case "run_tests":
 		argv, ok := anyStringSlice(toolRequest["argv"])
 		if !ok || len(argv) == 0 {
 			argv = []string{"pytest", "-q"}
 		}
-		return e.runAllowedCommand(ctx, argv, "Ran tests")
+		result, err = e.runAllowedCommand(ctx, argv, "Ran tests")
 	default:
 		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: fmt.Sprintf("unsupported local tool: %s", tool)}
 	}
+	if err != nil {
+		return result, err
+	}
+	return withSemanticRefs(result, contextSources, contextHits, contextChunkCount), nil
 }
 
 func (e *WorkspaceExecutor) readFile(request map[string]any) (domain.LocalBridgeResultRequest, error) {
@@ -534,6 +541,88 @@ func stringPtr(value string) *string {
 
 func intPtr(value int) *int {
 	return &value
+}
+
+func withSemanticRefs(result domain.LocalBridgeResultRequest, sources []string, hits []map[string]any, chunkCount int) domain.LocalBridgeResultRequest {
+	if len(sources) > 0 {
+		result.SemanticContextSources = append([]string{}, sources...)
+	}
+	if len(hits) > 0 {
+		result.SemanticContextHits = copyMapSlice(hits)
+	}
+	if chunkCount > 0 {
+		result.SemanticContextChunkCount = chunkCount
+	}
+	return result
+}
+
+func semanticContextRefs(metadata map[string]any) ([]string, []map[string]any, int) {
+	contextPackage, _ := metadata["context_package"].(map[string]any)
+	if len(contextPackage) == 0 {
+		return nil, nil, 0
+	}
+	sources := contextPackageSourceRefs(contextPackage["source_refs"])
+	chunks, _ := contextPackage["chunks"].([]any)
+	hits := make([]map[string]any, 0, len(chunks))
+	for _, rawChunk := range chunks {
+		chunk, _ := rawChunk.(map[string]any)
+		if len(chunk) == 0 {
+			continue
+		}
+		hit := map[string]any{}
+		if sourceRef := strings.TrimSpace(asString(chunk["source_ref"])); sourceRef != "" {
+			hit["source_ref"] = sourceRef
+		}
+		chunkMetadata, _ := chunk["metadata"].(map[string]any)
+		if matchType := strings.TrimSpace(asString(chunkMetadata["memory_match_type"])); matchType != "" {
+			hit["match_type"] = matchType
+		}
+		if repoProfile := strings.TrimSpace(asString(chunkMetadata["repo_profile"])); repoProfile != "" {
+			hit["repo_profile"] = repoProfile
+		}
+		if repositoryURL := strings.TrimSpace(firstNonEmptyString(asString(chunkMetadata["repository_url"]), asString(chunkMetadata["repo_url"]))); repositoryURL != "" {
+			hit["repository_url"] = repositoryURL
+		}
+		if benchmarkCaseID := strings.TrimSpace(asString(chunkMetadata["benchmark_case_id"])); benchmarkCaseID != "" {
+			hit["benchmark_case_id"] = benchmarkCaseID
+		}
+		if len(hit) > 0 {
+			hits = append(hits, hit)
+		}
+	}
+	return sources, hits, len(chunks)
+}
+
+func contextPackageSourceRefs(value any) []string {
+	switch refs := value.(type) {
+	case []string:
+		return append([]string{}, refs...)
+	case []any:
+		out := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			if text := strings.TrimSpace(asString(ref)); text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func copyMapSlice(items []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		cloned := make(map[string]any, len(item))
+		for key, value := range item {
+			cloned[key] = value
+		}
+		out = append(out, cloned)
+	}
+	return out
 }
 
 func defaultBridgeTestCommand(projectType, stack string) []string {

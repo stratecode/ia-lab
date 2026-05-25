@@ -97,9 +97,11 @@ collect_api_key_candidates() {
   local tmp
   tmp="$(mktemp)"
   trap 'rm -f "$tmp"' RETURN
+  append_unique_line "LAB_ORCHESTRATOR_BENCHMARK_API_KEY:${LAB_ORCHESTRATOR_BENCHMARK_API_KEY:-}" "$tmp"
+  append_unique_line "LAB_BENCHMARK_API_KEY:${LAB_BENCHMARK_API_KEY:-}" "$tmp"
+  append_unique_line "LAB_AGENT_API_KEY:${LAB_AGENT_API_KEY:-}" "$tmp"
   append_unique_line "LAB_ORCHESTRATOR_CLEANUP_API_KEY:${LAB_ORCHESTRATOR_CLEANUP_API_KEY:-}" "$tmp"
   append_unique_line "LAB_ORCHESTRATOR_OPEN_WEBUI_API_KEY:${LAB_ORCHESTRATOR_OPEN_WEBUI_API_KEY:-}" "$tmp"
-  append_unique_line "LAB_AGENT_API_KEY:${LAB_AGENT_API_KEY:-}" "$tmp"
   cat "$tmp"
 }
 
@@ -157,7 +159,7 @@ remote_upsert_benchmark_api_key() {
   local ssh_host="${LAB_BENCHMARK_SSH_HOST:-${LAB_COCKPIT_DOMAIN:-${LAB_HOSTNAME:-}}}"
   local ssh_user="${LAB_BENCHMARK_SSH_USER:-${LAB_USER:-}}"
   local ssh_key="${LAB_BENCHMARK_SSH_KEY:-${ROOT_DIR}/ssh/lab}"
-  local key_name="${LAB_BENCHMARK_API_KEY_NAME:-benchmark-operator}"
+  local key_name="${LAB_ORCHESTRATOR_BENCHMARK_KEY_NAME:-${LAB_BENCHMARK_API_KEY_NAME:-benchmark-operator}}"
   local raw_key
   raw_key="$(python3 - <<'PY'
 import secrets
@@ -238,6 +240,51 @@ cleanup_remote_workspace_hint() {
   [[ -n "$ssh_host" && -n "$ssh_user" && -f "$ssh_key" ]] || return 0
   ssh -i "$ssh_key" -o BatchMode=yes -o StrictHostKeyChecking=accept-new "${ssh_user}@${ssh_host}" \
     "rm -rf '${workspace_root}'" >/dev/null 2>&1 || true
+}
+
+enrich_task_json_for_report() {
+  local payload="$1"
+  JSON_INPUT="$payload" python3 - <<'PY'
+import json, os
+
+task = json.loads(os.environ["JSON_INPUT"])
+metadata = task.get("metadata") or {}
+context = metadata.get("context_package") or {}
+results = task.get("results") or {}
+
+if "semantic_context_sources" not in results:
+    refs = context.get("source_refs") or []
+    if refs:
+        results["semantic_context_sources"] = refs
+
+if "semantic_context_chunk_count" not in results:
+    chunks = context.get("chunks") or []
+    if chunks:
+        results["semantic_context_chunk_count"] = len(chunks)
+
+if "semantic_context_hits" not in results:
+    hits = []
+    for chunk in context.get("chunks") or []:
+        meta = chunk.get("metadata") or {}
+        hit = {}
+        if chunk.get("source_ref"):
+            hit["source_ref"] = chunk.get("source_ref")
+        if meta.get("memory_match_type"):
+            hit["match_type"] = meta.get("memory_match_type")
+        if meta.get("repo_profile"):
+            hit["repo_profile"] = meta.get("repo_profile")
+        if meta.get("repository_url") or meta.get("repo_url"):
+            hit["repository_url"] = meta.get("repository_url") or meta.get("repo_url")
+        if meta.get("benchmark_case_id"):
+            hit["benchmark_case_id"] = meta.get("benchmark_case_id")
+        if hit:
+            hits.append(hit)
+    if hits:
+        results["semantic_context_hits"] = hits
+
+task["results"] = results
+print(json.dumps(task, indent=2))
+PY
 }
 
 select_agentd_cmd() {
@@ -1253,6 +1300,7 @@ PY
   request POST "/initiatives/${initiative_id}/tasks/launch" "{\"task_ids\":[\"${researcher_task_id}\"],\"mode_overrides\":{}}" >/dev/null
   local researcher_json
   researcher_json="$(wait_for_task_state "$researcher_task_id" "completed" || request GET "/tasks/${researcher_task_id}")"
+  researcher_json="$(enrich_task_json_for_report "$researcher_json")"
   printf '%s\n' "$researcher_json" > "${run_dir}/researcher_task.json"
 
   request POST "/initiatives/${initiative_id}/tasks/launch" "{\"task_ids\":[\"${coder_task_id}\"],\"mode_overrides\":{}}" >/dev/null
@@ -1260,6 +1308,7 @@ PY
   request POST "/approvals/${approval_id}/approve" "{\"operator\":\"${OPERATOR}\"}" >/dev/null
   local coder_json reviewer_json initiative_final initiative_status artifacts_json reviewer_task_json
   coder_json="$(wait_for_task_state "$coder_task_id" "completed" || request GET "/tasks/${coder_task_id}")"
+  coder_json="$(enrich_task_json_for_report "$coder_json")"
   printf '%s\n' "$coder_json" > "${run_dir}/coder_task.json"
 
   request POST "/initiatives/${initiative_id}/tasks/launch" "{\"task_ids\":[\"${reviewer_task_id}\"],\"mode_overrides\":{}}" >/dev/null
@@ -1271,6 +1320,7 @@ PY
 
   printf '%s\n' "$artifacts_json" > "${run_dir}/initiative_artifacts.json"
   printf '%s\n' "$initiative_final" > "${run_dir}/initiative_detail.json"
+  reviewer_task_json="$(enrich_task_json_for_report "$reviewer_task_json")"
   printf '%s\n' "$reviewer_task_json" > "${run_dir}/reviewer_task.json"
   git -C "$workspace_root" diff --no-ext-diff > "${run_dir}/git.diff" || true
   tail -n 80 "$bridge_log" > "${run_dir}/bridge.log.tail" || true

@@ -634,6 +634,7 @@
       until: orchestrator_health.status == 200
 
     - name: Ensure cleanup API key exists in orchestrator database
+      when: orchestrator_cleanup_api_key | length > 0
       ansible.builtin.shell: |
         set -euo pipefail
         export RAW_KEY="{{ orchestrator_cleanup_api_key }}"
@@ -671,7 +672,47 @@
         executable: /bin/bash
       changed_when: false
 
+    - name: Ensure benchmark API key exists in orchestrator database
+      when: orchestrator_benchmark_api_key | length > 0
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export RAW_KEY="{{ orchestrator_benchmark_api_key }}"
+        KEY_HASH="$(python3 - <<'PY'
+        import hashlib
+        import os
+        print(hashlib.sha256(os.environ["RAW_KEY"].encode()).hexdigest())
+        PY
+        )"
+        KEY_ID="$(python3 - <<'PY'
+        import uuid
+        print(uuid.uuid4())
+        PY
+        )"
+        docker exec -i orchestrator-postgres psql -v ON_ERROR_STOP=1 -U "{{ orchestrator_postgres_user }}" -d "{{ orchestrator_postgres_db }}" <<SQL
+        INSERT INTO api_keys (id, key_hash, name, scope, is_active, created_at)
+        SELECT '${KEY_ID}'::uuid, '${KEY_HASH}', '{{ orchestrator_benchmark_key_name }}', 'operator', true, NOW()
+        WHERE NOT EXISTS (
+          SELECT 1 FROM api_keys WHERE name = '{{ orchestrator_benchmark_key_name }}'
+        );
+        UPDATE api_keys
+           SET key_hash='${KEY_HASH}',
+               scope='operator',
+               is_active=true,
+               revoked_at=NULL
+         WHERE name='{{ orchestrator_benchmark_key_name }}'
+           AND (
+             key_hash <> '${KEY_HASH}'
+             OR scope <> 'operator'
+             OR is_active <> true
+             OR revoked_at IS NOT NULL
+           );
+        SQL
+      args:
+        executable: /bin/bash
+      changed_when: false
+
     - name: Ensure Open WebUI orchestrator API key exists in orchestrator database
+      when: orchestrator_open_webui_api_key | length > 0
       ansible.builtin.shell: |
         set -euo pipefail
         export RAW_KEY="{{ orchestrator_open_webui_api_key }}"

@@ -48,17 +48,20 @@ type LocalBridgeTaskClaimResponse struct {
 }
 
 type LocalBridgeResultRequest struct {
-	Status         string           `json:"status"`
-	Summary        *string          `json:"summary"`
-	Stdout         *string          `json:"stdout"`
-	Stderr         *string          `json:"stderr"`
-	ExitCode       *int             `json:"exit_code"`
-	Diff           *string          `json:"diff"`
-	ChangedFiles   []string         `json:"changed_files"`
-	TestResults    map[string]any   `json:"test_results"`
-	Artifacts      []map[string]any `json:"artifacts"`
-	ErrorMessage   *string          `json:"error_message"`
-	ActionType     *string          `json:"action_type"`
-	TargetResource *string          `json:"target_resource"`
-	TimeoutSeconds *int             `json:"timeout_seconds"`
+	Status                    string           `json:"status"`
+	Summary                   *string          `json:"summary"`
+	Stdout                    *string          `json:"stdout"`
+	Stderr                    *string          `json:"stderr"`
+	ExitCode                  *int             `json:"exit_code"`
+	Diff                      *string          `json:"diff"`
+	ChangedFiles              []string         `json:"changed_files"`
+	TestResults               map[string]any   `json:"test_results"`
+	Artifacts                 []map[string]any `json:"artifacts"`
+	ErrorMessage              *string          `json:"error_message"`
+	ActionType                *string          `json:"action_type"`
+	TargetResource            *string          `json:"target_resource"`
+	TimeoutSeconds            *int             `json:"timeout_seconds"`
+	SemanticContextSources    []string         `json:"semantic_context_sources"`
+	SemanticContextChunkCount int              `json:"semantic_context_chunk_count"`
+	SemanticContextHits       []map[string]any `json:"semantic_context_hits"`
 }
