@@ -415,8 +415,10 @@ func diversifyTransferCandidates(items []domain.SemanticChunkResponse, req domai
 	sourceCap := 1
 	league := benchmarkLeague(req)
 	if league == "technology_transfer" {
-		caseCap = 3
-		sourceCap = 2
+		// Technology transfer benefits from multiple precedents, but over-concentrating
+		// on the same case makes "reuse" look broader than it really is.
+		caseCap = 2
+		sourceCap = 1
 	}
 	seenByCase := map[string]int{}
 	seenBySource := map[string]int{}

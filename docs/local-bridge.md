@@ -616,5 +616,6 @@ Current defaults and operational notes:
 - the embedded remote worker now records `recovery_checkpoint` metadata and re-queues stale interrupted remote tasks on startup
 - local bridge claims are now lease-based and persist both `local_bridge_lease` and `recovery_checkpoint` metadata during claim, heartbeat, resume, and completion
 - lease recovery has been fault-injected end-to-end: kill bridge, let lease expire, restart same bridge, and confirm task completion without manual rescue
+- host reboot recovery has also been fault-injected: reboot the remote orchestrator host during local execution, wait for `orchestrator.service` to return, restart the same bridge, and confirm task completion without manual task repair
 
 This is now the first practical end-to-end recovery layer for local bridges. It is still not full checkpoint-and-continue for arbitrary subprocess state, but it is real resume/reclaim behavior instead of wishful prose.
