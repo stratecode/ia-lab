@@ -14,6 +14,8 @@ import (
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 )
 
+const maxBridgeJSONBodySize = 16 << 20
+
 type Client struct {
 	baseURL    string
 	apiKey     string
@@ -67,7 +69,7 @@ func (c *Client) ClaimNext(ctx context.Context, bridgeID string) (*domain.LocalB
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBridgeJSONBodySize))
 	if err != nil {
 		return nil, err
 	}
@@ -392,7 +394,7 @@ func (c *Client) requestJSON(ctx context.Context, method, path string, input any
 		return err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBridgeJSONBodySize))
 	if err != nil {
 		return err
 	}

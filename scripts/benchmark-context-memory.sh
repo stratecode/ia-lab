@@ -244,10 +244,10 @@ cleanup_remote_workspace_hint() {
 
 enrich_task_json_for_report() {
   local payload="$1"
-  JSON_INPUT="$payload" python3 - <<'PY'
-import json, os
+  printf '%s' "$payload" | python3 -c '
+import json, sys
 
-task = json.loads(os.environ["JSON_INPUT"])
+task = json.load(sys.stdin)
 metadata = task.get("metadata") or {}
 context = metadata.get("context_package") or {}
 results = task.get("results") or {}
@@ -284,7 +284,7 @@ if "semantic_context_hits" not in results:
 
 task["results"] = results
 print(json.dumps(task, indent=2))
-PY
+'
 }
 
 select_agentd_cmd() {
@@ -308,12 +308,14 @@ select_agentd_cmd() {
 
 json_get() {
   local path="$1"
-  local payload
-  payload="$(cat)"
-  JSON_INPUT="$payload" python3 - "$path" <<'PY'
-import json, os, sys
+  python3 -c '
+import json, sys
 path = [p for p in sys.argv[1].split(".") if p]
-data = json.loads(os.environ["JSON_INPUT"])
+raw = sys.stdin.read()
+if not raw.strip():
+    print("")
+    raise SystemExit(0)
+data = json.loads(raw)
 value = data
 for part in path:
     if isinstance(value, list):
@@ -327,40 +329,42 @@ if isinstance(value, (dict, list)):
     print(json.dumps(value))
 else:
     print("" if value is None else value)
-PY
+' "$path"
 }
 
 initiative_task_id_by_agent() {
   local agent="$1"
-  local payload
-  payload="$(cat)"
-  JSON_INPUT="$payload" python3 - "$agent" <<'PY'
-import json, os, sys
+  python3 -c '
+import json, sys
 agent = sys.argv[1]
-items = json.loads(os.environ["JSON_INPUT"]).get("items", [])
+raw = sys.stdin.read()
+if not raw.strip():
+    raise SystemExit(1)
+items = json.loads(raw).get("items", [])
 for item in items:
     task = item.get("task") or {}
     if (task.get("assigned_agent") or "") == agent:
         print(item.get("task_id", ""))
         raise SystemExit(0)
 raise SystemExit(1)
-PY
+' "$agent"
 }
 
 approval_id_for_task() {
   local task_id="$1"
-  local payload
-  payload="$(cat)"
-  JSON_INPUT="$payload" python3 - "$task_id" <<'PY'
-import json, os, sys
+  python3 -c '
+import json, sys
 task_id = sys.argv[1]
-items = json.loads(os.environ["JSON_INPUT"]).get("items", [])
+raw = sys.stdin.read()
+if not raw.strip():
+    raise SystemExit(1)
+items = json.loads(raw).get("items", [])
 for item in items:
     if item.get("task_id") == task_id and item.get("status") == "pending":
         print(item.get("id", ""))
         raise SystemExit(0)
 raise SystemExit(1)
-PY
+' "$task_id"
 }
 
 wait_for_task_state() {
@@ -1180,23 +1184,63 @@ PY
 )"
       return 1
     fi
-    reference_payload="$(python3 - "$case_path" "${paired_run_dir}/planner_task.json" "${paired_run_dir}/researcher_task.json" "${paired_run_dir}/coder_task.json" "${paired_run_dir}/reviewer_task.json" "${paired_run_dir}/benchmark_run.json" <<'PY'
+    reference_payload="$(python3 - "$case_path" "${paired_run_dir}/planner_task.json" "${paired_run_dir}/researcher_task.json" "${paired_run_dir}/coder_task.json" "${paired_run_dir}/reviewer_task.json" "${paired_run_dir}/initiative_detail.json" "${paired_run_dir}/benchmark_run.json" <<'PY'
 import json, pathlib, sys
 case = json.loads(pathlib.Path(sys.argv[1]).read_text())
 planner = json.loads(pathlib.Path(sys.argv[2]).read_text())
 researcher = json.loads(pathlib.Path(sys.argv[3]).read_text())
 coder = json.loads(pathlib.Path(sys.argv[4]).read_text())
 reviewer = json.loads(pathlib.Path(sys.argv[5]).read_text())
-run = json.loads(pathlib.Path(sys.argv[6]).read_text())
+initiative_detail = json.loads(pathlib.Path(sys.argv[6]).read_text())
+run = json.loads(pathlib.Path(sys.argv[7]).read_text())
 mode = case.get("reference_eval_mode") or "coordination_quality"
 
 def compact(obj):
     return json.dumps(obj, indent=2, ensure_ascii=False)
 
+def preview(value, limit=600):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text[:limit]
+
+def artifact_titles(task):
+    results = task.get("results") or {}
+    titles = []
+    for item in results.get("artifacts") or []:
+        title = item.get("title") or item.get("type")
+        if title:
+            titles.append(title)
+    return titles
+
+def task_evidence(task):
+    metadata = task.get("metadata") or {}
+    results = task.get("results") or {}
+    return {
+        "state": task.get("state"),
+        "summary": results.get("summary"),
+        "status": results.get("status"),
+        "exit_code": results.get("exit_code"),
+        "changed_files": results.get("changed_files"),
+        "artifact_titles": artifact_titles(task),
+        "stdout_preview": preview(results.get("stdout")),
+        "stderr_preview": preview(results.get("stderr")),
+        "semantic_context_chunk_count": results.get("semantic_context_chunk_count"),
+        "semantic_context_hit_count": len((results.get("semantic_context_hits") or [])),
+        "approval_required": metadata.get("approval_required") or metadata.get("requires_approval"),
+        "approval_granted": metadata.get("approval_granted"),
+    }
+
 planner_results = planner.get("results") or {}
 researcher_results = (researcher.get("results") or {})
 coder_results = (coder.get("results") or {})
 reviewer_results = (reviewer.get("results") or {})
+initiative = initiative_detail.get("initiative") or {}
+execution_summary = initiative_detail.get("execution_summary") or {}
+reviews = initiative_detail.get("reviews") or []
+review_decisions = [{"phase": item.get("phase"), "decision": item.get("decision")} for item in reviews]
 
 if mode == "plan_quality":
     orchestrator_answer = compact({
@@ -1207,51 +1251,36 @@ if mode == "plan_quality":
         "coder_tool": planner_results.get("coder_tool"),
         "plan_executable": planner_results.get("plan_executable"),
         "fallback_detected": planner_results.get("fallback_detected"),
+        "initiative_status": initiative.get("status"),
+        "review_decisions": review_decisions,
     })
 elif mode == "review_quality":
     orchestrator_answer = compact({
-        "validation_summary": reviewer_results.get("validation_summary"),
-        "test_result": reviewer_results.get("test_result"),
-        "pass_checks": reviewer_results.get("pass_checks"),
-        "changed_files": coder_results.get("changed_files"),
+        "reviewer_evidence": task_evidence(reviewer),
+        "coder_evidence": task_evidence(coder),
+        "initiative_status": initiative.get("status"),
+        "execution_summary": execution_summary,
     })
 elif mode == "execution_quality":
     orchestrator_answer = compact({
-        "researcher": {
-            "recommendations": researcher_results.get("recommendations"),
-            "stack_rationale": researcher_results.get("stack_rationale"),
-            "checklist": researcher_results.get("checklist"),
-        },
-        "coder": {
-            "summary": coder_results.get("summary"),
-            "changed_files": coder_results.get("changed_files"),
-            "diff_present": bool(coder_results.get("diff")),
-        },
-        "reviewer": {
-            "validation_summary": reviewer_results.get("validation_summary"),
-            "test_result": reviewer_results.get("test_result"),
-        },
+        "researcher_evidence": task_evidence(researcher),
+        "coder_evidence": task_evidence(coder),
+        "reviewer_evidence": task_evidence(reviewer),
+        "initiative_status": initiative.get("status"),
+        "execution_summary": execution_summary,
+        "review_decisions": review_decisions,
     })
 else:
     orchestrator_answer = compact({
         "planner": planner_results,
-        "researcher": {
-            "recommendations": researcher_results.get("recommendations"),
-            "stack_rationale": researcher_results.get("stack_rationale"),
-            "checklist": researcher_results.get("checklist"),
-        },
-        "coder": {
-            "summary": coder_results.get("summary"),
-            "changed_files": coder_results.get("changed_files"),
-            "diff_present": bool(coder_results.get("diff")),
-        },
-        "reviewer": {
-            "validation_summary": reviewer_results.get("validation_summary"),
-            "test_result": reviewer_results.get("test_result"),
-            "pass_checks": reviewer_results.get("pass_checks"),
-        },
+        "researcher_evidence": task_evidence(researcher),
+        "coder_evidence": task_evidence(coder),
+        "reviewer_evidence": task_evidence(reviewer),
         "memory_hits": run.get("memory_hits"),
         "handoff_chain": case.get("expected_handoffs") or [],
+        "initiative_status": initiative.get("status"),
+        "execution_summary": execution_summary,
+        "review_decisions": review_decisions,
     })
 
 sources = []
@@ -1261,7 +1290,7 @@ for hit in run.get("memory_hits") or []:
 
 query = "\n".join([
     case.get("goal") or "",
-    "Return the ideal benchmark outcome for this governed multi-agent case.",
+    "Evaluate the observed governed multi-agent outcome against the success contract and describe the ideal outcome.",
     "Respect this success contract:",
     compact(case.get("success_contract") or {}),
 ])
@@ -1794,7 +1823,7 @@ score = max(0, round(system_score + primary_agent_score + handoff_score + memory
 print(json.dumps({
     "case_id": "$case_id",
     "mode": "$mode",
-    "baseline_mode": "memory_off" if "$mode" == "memory_on" else "$mode",
+    "baseline_mode": "$mode",
     "baseline_score": score if "$mode" == "memory_off" else None,
     "iteration": $iteration,
     "benchmark_league": "$benchmark_league",

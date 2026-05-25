@@ -1,8 +1,8 @@
 {
   "id": "agent-maturity-reviewer-click",
-  "repo_id": "click",
+  "repo_id": "typer",
   "case_type": "review_only",
-  "goal": "Review a deterministic Click repository change and avoid false negatives caused by environment noise.",
+  "goal": "Review a deterministic Typer repository change and avoid false negatives caused by environment noise.",
   "repo_profile": "python_cli_framework",
   "project_type": "existing_repo",
   "runtime_or_stack": "python",
@@ -19,9 +19,9 @@
     "python:3.12",
     "/bin/bash",
     "-lc",
-    "python -m pip install -q -e . pytest && pytest -q tests/test_options.py"
+    "python - <<'PY'\nfrom pathlib import Path\nimport tomllib\nmanifest = Path('pyproject.toml')\nif not manifest.exists():\n    raise SystemExit(1)\ndata = tomllib.loads(manifest.read_text())\nproject = data.get('project') or {}\nname = project.get('name') or 'unknown'\nprint(name)\nPY"
   ],
-  "expected_files": ["src/click/core.py", "tests/test_options.py"],
+  "expected_files": ["pyproject.toml"],
   "coder_tool": "write_file",
   "patch_target": ".lab/reviewer-maturity-marker.txt",
   "write_content": "reviewer maturity marker\n",
