@@ -1,0 +1,48 @@
+{
+  "id": "agent-maturity-reviewer-click",
+  "repo_id": "click",
+  "case_type": "review_only",
+  "goal": "Review a deterministic Click repository change and avoid false negatives caused by environment noise.",
+  "repo_profile": "python_cli_framework",
+  "project_type": "existing_repo",
+  "runtime_or_stack": "python",
+  "project_root": ".",
+  "test_focus": "reviewer validation quality",
+  "test_command": [
+    "docker",
+    "run",
+    "--rm",
+    "-v",
+    "{{ project_root_abs }}:/src",
+    "-w",
+    "/src",
+    "python:3.12",
+    "/bin/bash",
+    "-lc",
+    "python -m pip install -q -e . pytest && pytest -q tests/test_options.py"
+  ],
+  "expected_files": ["src/click/core.py", "tests/test_options.py"],
+  "coder_tool": "write_file",
+  "patch_target": ".lab/reviewer-maturity-marker.txt",
+  "write_content": "reviewer maturity marker\n",
+  "coder_summary": "Write a deterministic reviewer maturity marker file before repository review.",
+  "benchmark_memory_strategy": "repo_specific_first",
+  "benchmark_league": "repo_recall",
+  "sequence_id": "agent_maturity_reviewer",
+  "sequence_position": 1,
+  "maturity_block": "execution_maturity",
+  "primary_agent": "reviewer",
+  "expected_handoffs": [
+    "coder->reviewer"
+  ],
+  "success_contract": {
+    "required_agents": ["researcher", "coder", "reviewer"],
+    "expected_launch_order": ["researcher", "coder", "reviewer"],
+    "requires_coder_approval": true,
+    "expected_coder_tool": "write_file",
+    "initiative_must_complete": true,
+    "review_must_pass": true,
+    "reject_toolchain_confusion": true
+  },
+  "reference_eval_mode": "review_quality"
+}

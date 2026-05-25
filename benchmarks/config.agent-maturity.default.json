@@ -1,0 +1,20 @@
+{
+  "repos_file": "benchmarks/repos.default.json",
+  "case_mode": "static",
+  "case_ids": [
+    "agent-maturity-planner-click",
+    "agent-maturity-researcher-monolog",
+    "agent-maturity-coder-python-slugify",
+    "agent-maturity-reviewer-click",
+    "agent-maturity-coordination-python-slugify"
+  ],
+  "repo_ids": [],
+  "modes": [
+    "memory_off",
+    "memory_on",
+    "reference_external"
+  ],
+  "runs_per_case": 1,
+  "default_memory_strategy": "repo_specific_first",
+  "external_soft_fail": true
+}

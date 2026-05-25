@@ -1,0 +1,51 @@
+{
+  "id": "agent-maturity-researcher-monolog",
+  "repo_id": "monolog",
+  "case_type": "review_only",
+  "goal": "Gather useful repository context for Monolog so the downstream patch and review stay deterministic and clean.",
+  "repo_profile": "php_logging_library",
+  "project_type": "existing_repo",
+  "runtime_or_stack": "php",
+  "project_root": ".",
+  "test_focus": "researcher context usefulness for PHP library review",
+  "test_command": [
+    "docker",
+    "run",
+    "--rm",
+    "-v",
+    "{{ project_root_abs }}:/src",
+    "-w",
+    "/src",
+    "composer:2",
+    "/bin/bash",
+    "-lc",
+    "composer validate --no-check-all --strict"
+  ],
+  "expected_files": [
+    "composer.json"
+  ],
+  "coder_tool": "write_file",
+  "patch_target": ".lab/researcher-maturity-marker.txt",
+  "write_content": "researcher maturity marker\n",
+  "coder_summary": "Write a deterministic researcher maturity marker file before repository review.",
+  "benchmark_memory_strategy": "technology_first",
+  "benchmark_league": "technology_transfer",
+  "sequence_id": "agent_maturity_researcher_php",
+  "sequence_position": 1,
+  "maturity_block": "execution_maturity",
+  "primary_agent": "researcher",
+  "expected_handoffs": [
+    "planner->researcher",
+    "researcher->coder",
+    "researcher->reviewer"
+  ],
+  "success_contract": {
+    "required_agents": ["researcher", "coder", "reviewer"],
+    "expected_launch_order": ["researcher", "coder", "reviewer"],
+    "requires_coder_approval": true,
+    "expected_coder_tool": "write_file",
+    "initiative_must_complete": true,
+    "review_must_pass": true
+  },
+  "reference_eval_mode": "execution_quality"
+}

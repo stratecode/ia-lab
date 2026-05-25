@@ -1,0 +1,49 @@
+{
+  "id": "agent-maturity-coder-python-slugify",
+  "repo_id": "typer",
+  "case_type": "review_only",
+  "goal": "Apply a deterministic Typer marker patch and validate coder execution quality on a repo that already has a stable smoke command.",
+  "repo_profile": "python_cli_framework",
+  "project_type": "existing_repo",
+  "runtime_or_stack": "python",
+  "project_root": ".",
+  "test_focus": "deterministic coder execution quality",
+  "test_command": [
+    "docker",
+    "run",
+    "--rm",
+    "-v",
+    "{{ project_root_abs }}:/src",
+    "-w",
+    "/src",
+    "python:3.12",
+    "/bin/bash",
+    "-lc",
+    "python - <<'PY'\nfrom pathlib import Path\nimport tomllib\nmanifest = Path('pyproject.toml')\nif not manifest.exists():\n    raise SystemExit(1)\ndata = tomllib.loads(manifest.read_text())\nproject = data.get('project') or {}\nname = project.get('name') or 'unknown'\nprint(name)\nPY"
+  ],
+  "expected_files": ["pyproject.toml"],
+  "coder_tool": "write_file",
+  "patch_target": ".lab/coder-maturity-marker.txt",
+  "write_content": "coder maturity marker\n",
+  "coder_summary": "Write a deterministic coder maturity marker file before repository review.",
+  "benchmark_memory_strategy": "repo_specific_first",
+  "benchmark_league": "repo_recall",
+  "sequence_id": "agent_maturity_coder_python",
+  "sequence_position": 1,
+  "maturity_block": "execution_maturity",
+  "primary_agent": "coder",
+  "expected_handoffs": [
+    "planner->coder",
+    "researcher->coder",
+    "coder->reviewer"
+  ],
+  "success_contract": {
+    "required_agents": ["researcher", "coder", "reviewer"],
+    "expected_launch_order": ["researcher", "coder", "reviewer"],
+    "requires_coder_approval": true,
+    "expected_coder_tool": "write_file",
+    "initiative_must_complete": true,
+    "review_must_pass": true
+  },
+  "reference_eval_mode": "execution_quality"
+}

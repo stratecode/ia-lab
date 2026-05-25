@@ -245,6 +245,35 @@ Current benchmark reading, based on the official harness:
 - `negative_transfer` should usually stay flat and `guarded`:
   a charming `+10` here is often contamination wearing a tie
 
+### Agent maturity suite
+
+The same harness also supports curated `agent_maturity` cases.
+
+Those cases measure three layers at once:
+
+- `individual maturity`
+  planner, researcher, coder, reviewer
+- `handoff maturity`
+  whether the next agent receives context that is actually actionable
+- `system maturity`
+  whether the governed initiative closes cleanly with the expected approvals, artifacts, and validation
+
+The canonical config template for this suite is:
+
+- [benchmarks/config.agent-maturity.default.json](/Users/fran.lopez/Development/StrateCode/lab/benchmarks/config.agent-maturity.default.json)
+
+The external comparison mode is:
+
+- `reference_external`
+
+That mode does not replace the governed initiative path. It compares the orchestrator-produced outcome against a direct external reference answer and judge, then stores:
+
+- `evaluation_reference.json`
+- `evaluation_judge.json`
+- `agent_maturity_run.json`
+
+If `reference_external` starts outscoring everything while the governed run stays weak, that is not maturity. That is a benchmark politely telling you the agents still need adult supervision.
+
 ### Memory layers
 
 When the benchmark talks about "memory", it is not all one thing:

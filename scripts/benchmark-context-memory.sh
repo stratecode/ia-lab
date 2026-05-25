@@ -376,7 +376,7 @@ wait_for_task_state() {
       printf '%s' "$task_json"
       return 0
     fi
-    if [[ "$state" == "failed" || "$state" == "cancelled" ]]; then
+    if [[ "$state" == "failed" || "$state" == "cancelled" || "$state" == "error" ]]; then
       printf '%s' "$task_json"
       return 1
     fi
@@ -551,6 +551,65 @@ if problems:
 PY
 }
 
+build_planner_task_report() {
+  local tasks_json="$1"
+  local case_json_path="$2"
+  local initiative_id="$3"
+  JSON_INPUT="$tasks_json" python3 - "$case_json_path" "$initiative_id" <<'PY'
+import json, os, pathlib, sys
+
+tasks = json.loads(os.environ["JSON_INPUT"]).get("items", [])
+case = json.loads(pathlib.Path(sys.argv[1]).read_text())
+initiative_id = sys.argv[2]
+success_contract = case.get("success_contract") or {}
+expected_agents = success_contract.get("required_agents") or ["researcher", "coder", "reviewer"]
+expected_launch_order = success_contract.get("expected_launch_order") or expected_agents
+expected_coder_tool = success_contract.get("expected_coder_tool") or ""
+requires_coder_approval = bool(success_contract.get("requires_coder_approval"))
+
+sorted_items = sorted(tasks, key=lambda item: int(item.get("launch_order") or 0))
+launch_order = [(item.get("task") or {}).get("assigned_agent") or "" for item in sorted_items]
+assigned_agents = [agent for agent in launch_order if agent]
+seen_agents = {}
+for item in tasks:
+    task = item.get("task") or {}
+    agent = task.get("assigned_agent") or ""
+    if agent and agent not in seen_agents:
+        seen_agents[agent] = task
+
+missing_agents = sorted(set(expected_agents) - set(seen_agents))
+coder = seen_agents.get("coder") or {}
+coder_meta = coder.get("metadata") or {}
+coder_tool = ((coder_meta.get("tool_request") or {}).get("tool") or "")
+coder_requires_approval = bool(coder_meta.get("requires_approval"))
+fallback_detected = ((coder_meta.get("project_request") or {}).get("repo_profile") or "") == "existing_repo_generic"
+launch_prefix_ok = launch_order[:len(expected_launch_order)] == expected_launch_order
+materialized_plan_valid = (not missing_agents) and launch_prefix_ok and (not expected_coder_tool or coder_tool == expected_coder_tool)
+plan_executable = materialized_plan_valid and (coder_requires_approval == requires_coder_approval) and not fallback_detected
+state = "completed" if plan_executable else "failed"
+
+print(json.dumps({
+    "id": f"planner:{initiative_id}",
+    "state": state,
+    "assigned_agent": "planner",
+    "initiative_id": initiative_id,
+    "results": {
+        "materialized_plan_valid": materialized_plan_valid,
+        "plan_executable": plan_executable,
+        "fallback_detected": fallback_detected,
+        "assigned_agents": assigned_agents,
+        "launch_order": launch_order,
+        "requires_approval_agents": [agent for agent, task in seen_agents.items() if bool((task.get("metadata") or {}).get("requires_approval"))],
+        "missing_agents": missing_agents,
+        "coder_tool": coder_tool,
+        "coder_requires_approval": coder_requires_approval,
+        "expected_agents": expected_agents,
+        "expected_launch_order": expected_launch_order
+    }
+}, indent=2))
+PY
+}
+
 build_summary_reports() {
   local report_root="$1"
   python3 - "$report_root" <<'PY'
@@ -577,6 +636,14 @@ def sort_key(row):
 runs.sort(key=sort_key)
 
 baseline_scores = {}
+reference_scores = {}
+for row in runs:
+    case_key = (row.get("case_id") or "unknown", int(row.get("iteration", 1) or 1))
+    if (row.get("mode") or "") == "memory_off":
+        baseline_scores[case_key] = float(row.get("score", 0) or 0)
+    if (row.get("mode") or "") == "reference_external":
+        reference_scores[case_key] = float(row.get("score", 0) or 0)
+
 first_sequence_scores = {}
 previous_sequence_scores = {}
 for row in runs:
@@ -591,15 +658,27 @@ for row in runs:
 
     baseline_key = (case_id, iteration)
     baseline_score = baseline_scores.get(baseline_key)
+    reference_score = reference_scores.get(baseline_key)
+    row["baseline_score"] = baseline_score
+    row["reference_score"] = reference_score
+    row["delta_vs_memory_off"] = 0 if baseline_score is None or mode == "memory_off" else round(base_score - baseline_score, 1)
+    row["delta_vs_reference_external"] = 0 if reference_score is None or mode == "reference_external" else round(base_score - reference_score, 1)
     if mode == "memory_off":
-        baseline_scores[baseline_key] = base_score
         score_delta_vs_first_run = 0
         score_delta_vs_previous_run = 0
     else:
         score_delta_vs_first_run = base_score - baseline_score if baseline_score is not None else 0
         score_delta_vs_previous_run = 0
-        if baseline_score is not None and base_score > baseline_score:
+        if mode == "memory_on" and baseline_score is not None and base_score > baseline_score:
             score += 10
+        if mode == "memory_on" and reference_score is not None:
+            distance = abs(base_score - reference_score)
+            if distance <= 5:
+                score += 5
+            elif distance <= 10:
+                score += 3
+            elif distance <= 20:
+                score += 1
 
     seq_key = (sequence_id, mode, iteration)
     if seq_key not in first_sequence_scores or sequence_position < first_sequence_scores[seq_key][0]:
@@ -648,11 +727,18 @@ for row in runs:
         slot["forbidden_total"] += int(row.get("forbidden_hit_count", 0) or 0)
         slot["score_delta_vs_first_total"] += int(row.get("score_delta_vs_first_run", 0) or 0)
         slot["score_delta_vs_previous_total"] += int(row.get("score_delta_vs_previous_run", 0) or 0)
+        slot["agent_score_total"] += float(row.get("agent_score", 0) or 0)
+        slot["handoff_score_total"] += float(row.get("handoff_score", 0) or 0)
+        slot["system_score_total"] += float(row.get("system_score", 0) or 0)
+        slot["reference_score_total"] += float(row.get("reference_score", 0) or 0)
+        slot["delta_vs_reference_total"] += float(row.get("delta_vs_reference_external", 0) or 0)
         effect = row.get("retrieval_precision_label")
         if effect:
             slot["effects"][effect] = slot["effects"].get(effect, 0) + 1
         if not slot.get("resolved_commit"):
             slot["resolved_commit"] = row.get("resolved_commit") or ""
+        if not slot.get("maturity_block"):
+            slot["maturity_block"] = row.get("maturity_block") or ""
 
     default_slot = lambda: {
         "run_count": 0,
@@ -666,8 +752,14 @@ for row in runs:
         "forbidden_total": 0,
         "score_delta_vs_first_total": 0,
         "score_delta_vs_previous_total": 0,
+        "agent_score_total": 0.0,
+        "handoff_score_total": 0.0,
+        "system_score_total": 0.0,
+        "reference_score_total": 0.0,
+        "delta_vs_reference_total": 0.0,
         "effects": {},
         "resolved_commit": "",
+        "maturity_block": "",
     }
 
     repo_slot = aggregates.setdefault(repo, {}).setdefault(mode, default_slot())
@@ -752,26 +844,31 @@ repo_lines = [
     "",
     "## By Repo",
     "",
-    "| Repo | League | Runs | Off Avg | On Avg | Delta | On Hits Avg | Experience | Repo Hits | Tech Hits | Pattern Hits | Forbidden | On Success | Effect | Commit |",
-    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
+    "| Repo | League | Maturity | Runs | Off Avg | On Avg | Ref Avg | Delta | Delta vs Ref | Agent | Handoff | System | On Hits Avg | Experience | Repo Hits | Tech Hits | Pattern Hits | Forbidden | On Success | Effect | Commit |",
+    "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
 ]
 for repo, modes in sorted(aggregates.items()):
     off = modes.get("memory_off", {})
     on = modes.get("memory_on", {})
+    ref = modes.get("reference_external", {})
     any_mode = on or off
     league = "-"
+    maturity = "-"
     for row in runs:
         if (row.get("repo_id") or row.get("case_id")) == repo:
             league = row.get("benchmark_league") or "-"
+            maturity = row.get("maturity_block") or "-"
             break
     off_avg = avg(off, "score_total") if off else 0
     on_avg = avg(on, "score_total") if on else 0
+    ref_avg = avg(ref, "score_total") if ref else 0
     delta = on_avg - off_avg
     runs_count = int(on.get("run_count", 0) or off.get("run_count", 0) or 0)
     effect_summary = ", ".join(f"{k}:{v}" for k, v in sorted((on.get("effects") or {}).items())) or "-"
     commit = ((on.get("resolved_commit") or off.get("resolved_commit") or "")[:12]) if any_mode else ""
     repo_lines.append(
-        f"| {repo} | {league} | {runs_count} | {off_avg:.1f} | {on_avg:.1f} | {delta:+.1f} | "
+        f"| {repo} | {league} | {maturity} | {runs_count} | {off_avg:.1f} | {on_avg:.1f} | {ref_avg:.1f} | {delta:+.1f} | {avg(on, 'delta_vs_reference_total') if on else 0:.1f} | "
+        f"{avg(on, 'agent_score_total') if on else 0:.1f} | {avg(on, 'handoff_score_total') if on else 0:.1f} | {avg(on, 'system_score_total') if on else 0:.1f} | "
         f"{avg(on, 'hit_total') if on else 0:.1f} | {avg(on, 'experience_source_total') if on else 0:.1f} | "
         f"{avg(on, 'repo_specific_hit_total') if on else 0:.1f} | {avg(on, 'technology_hit_total') if on else 0:.1f} | "
         f"{avg(on, 'pattern_hit_total') if on else 0:.1f} | {avg(on, 'forbidden_total') if on else 0:.1f} | "
@@ -782,17 +879,19 @@ league_lines = [
     "",
     "## By League",
     "",
-    "| League | Runs | Off Avg | On Avg | Delta | On Hits Avg | Repo Hits | Tech Hits | Pattern Hits | Forbidden | Effect |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+    "| League | Runs | Off Avg | On Avg | Ref Avg | Delta | Delta vs Ref | Agent | Handoff | System | On Hits Avg | Repo Hits | Tech Hits | Pattern Hits | Forbidden | Effect |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
 ]
 for league, modes in sorted(league_aggregates.items()):
     off = modes.get("memory_off", {})
     on = modes.get("memory_on", {})
+    ref = modes.get("reference_external", {})
     off_avg = avg(off, "score_total") if off else 0
     on_avg = avg(on, "score_total") if on else 0
     effect_summary = ", ".join(f"{k}:{v}" for k, v in sorted((on.get("effects") or {}).items())) or "-"
     league_lines.append(
-        f"| {league} | {int(on.get('run_count', 0) or off.get('run_count', 0) or 0)} | {off_avg:.1f} | {on_avg:.1f} | {on_avg - off_avg:+.1f} | "
+        f"| {league} | {int(on.get('run_count', 0) or off.get('run_count', 0) or 0)} | {off_avg:.1f} | {on_avg:.1f} | {avg(ref, 'score_total') if ref else 0:.1f} | {on_avg - off_avg:+.1f} | {avg(on, 'delta_vs_reference_total') if on else 0:.1f} | "
+        f"{avg(on, 'agent_score_total') if on else 0:.1f} | {avg(on, 'handoff_score_total') if on else 0:.1f} | {avg(on, 'system_score_total') if on else 0:.1f} | "
         f"{avg(on, 'hit_total') if on else 0:.1f} | {avg(on, 'repo_specific_hit_total') if on else 0:.1f} | "
         f"{avg(on, 'technology_hit_total') if on else 0:.1f} | {avg(on, 'pattern_hit_total') if on else 0:.1f} | "
         f"{avg(on, 'forbidden_total') if on else 0:.1f} | {effect_summary} |"
@@ -802,24 +901,29 @@ sequence_lines = [
     "",
     "## By Sequence",
     "",
-    "| Sequence | League | Runs | Off Avg | On Avg | Delta | On Delta vs First | On Delta vs Previous | On Trend | On Stability | On Spread | Repo Hits | Tech Hits | Pattern Hits | Forbidden |",
-    "|---|---|---:|---:|---:|---:|---:|---:|---|---|---:|---:|---:|---:|---:|",
+    "| Sequence | League | Maturity | Runs | Off Avg | On Avg | Ref Avg | Delta | Delta vs Ref | On Delta vs First | On Delta vs Previous | On Trend | On Stability | On Spread | Agent | Handoff | System | Repo Hits | Tech Hits | Pattern Hits | Forbidden |",
+    "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
 ]
 for sequence_id, modes in sorted(sequence_aggregates.items()):
     off = modes.get("memory_off", {})
     on = modes.get("memory_on", {})
+    ref = modes.get("reference_external", {})
     league = (on or off).get("benchmark_league", "-") if (on or off) else "-"
+    maturity = (on or off).get("maturity_block", "-") if (on or off) else "-"
     sequence_lines.append(
-        f"| {sequence_id} | {league} | {int(on.get('run_count', 0) or off.get('run_count', 0) or 0)} | "
-        f"{avg(off, 'score_total') if off else 0:.1f} | {avg(on, 'score_total') if on else 0:.1f} | "
+        f"| {sequence_id} | {league} | {maturity} | {int(on.get('run_count', 0) or off.get('run_count', 0) or 0)} | "
+        f"{avg(off, 'score_total') if off else 0:.1f} | {avg(on, 'score_total') if on else 0:.1f} | {avg(ref, 'score_total') if ref else 0:.1f} | "
         f"{(avg(on, 'score_total') if on else 0) - (avg(off, 'score_total') if off else 0):+.1f} | "
+        f"{avg(on, 'delta_vs_reference_total') if on else 0:.1f} | "
         f"{avg(on, 'score_delta_vs_first_total') if on else 0:.1f} | {avg(on, 'score_delta_vs_previous_total') if on else 0:.1f} | "
         f"{on.get('progression_label', '-') if on else '-'} | {on.get('stability_label', '-') if on else '-'} | {float(on.get('score_stddev', 0) or 0):.2f} | "
+        f"{avg(on, 'agent_score_total') if on else 0:.1f} | {avg(on, 'handoff_score_total') if on else 0:.1f} | {avg(on, 'system_score_total') if on else 0:.1f} | "
         f"{avg(on, 'repo_specific_hit_total') if on else 0:.1f} | {avg(on, 'technology_hit_total') if on else 0:.1f} | "
         f"{avg(on, 'pattern_hit_total') if on else 0:.1f} | {avg(on, 'forbidden_total') if on else 0:.1f} |"
     )
 
 root.joinpath("summary.md").write_text("\n".join(repo_lines + league_lines + sequence_lines) + "\n")
+root.joinpath("agent_maturity_summary.md").write_text("\n".join(repo_lines + league_lines + sequence_lines) + "\n")
 
 progress_lines = [
     "# Benchmark Progression",
@@ -925,6 +1029,14 @@ write_run_report() {
   local run_dir="$1"
   local report_json="$2"
   printf '%s\n' "$report_json" > "${run_dir}/benchmark_run.json"
+  python3 - "${run_dir}/benchmark_run.json" "${run_dir}/agent_maturity_run.json" <<'PY'
+import json, pathlib, sys
+src = pathlib.Path(sys.argv[1])
+dst = pathlib.Path(sys.argv[2])
+data = json.loads(src.read_text())
+if data.get("maturity_block"):
+    dst.write_text(json.dumps(data, indent=2) + "\n")
+PY
   python3 - "${run_dir}/benchmark_run.json" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
@@ -942,12 +1054,21 @@ lines = [
     f"- Outcome: {data.get('status')}",
     f"- Initiative: {data.get('initiative_id', '')}",
     f"- Score: {data.get('score', 0)}",
+    f"- Baseline Mode: {data.get('baseline_mode', '-')}",
+    f"- Baseline Score: {data.get('baseline_score', '-')}",
+    f"- Delta vs Memory Off: {data.get('delta_vs_memory_off', 0)}",
+    f"- Delta vs Reference: {data.get('delta_vs_reference_external', 0)}",
     f"- Score Delta vs First Run: {data.get('score_delta_vs_first_run', 0)}",
     f"- Score Delta vs Previous Run: {data.get('score_delta_vs_previous_run', 0)}",
     f"- Memory Effect: {data.get('memory_effect', '-')}",
     f"- Retrieval Precision: {data.get('retrieval_precision_label', '-')}",
     f"- Forbidden Hits: {data.get('forbidden_hit_count', 0)}",
     f"- Experience Sources: {data.get('experience_source_count', 0)}",
+    f"- Maturity Block: {data.get('maturity_block', '-')}",
+    f"- Primary Agent: {data.get('primary_agent', '-')}",
+    f"- Agent Score: {data.get('agent_score', 0)}",
+    f"- Handoff Score: {data.get('handoff_score', 0)}",
+    f"- System Score: {data.get('system_score', 0)}",
     "",
     "## Memory Hits",
 ]
@@ -1041,13 +1162,186 @@ PY
     return 0
   fi
 
+  if [[ "$mode" == "reference_external" ]]; then
+    local paired_run_dir reference_payload reference_response judge_payload judge_response
+    paired_run_dir="${REPORT_ROOT}/$(basename "${case_path%.json}")-memory_on-run${iteration}"
+    if [[ ! -f "${paired_run_dir}/benchmark_run.json" ]]; then
+      write_run_report "$run_dir" "$(python3 - "$case_path" <<'PY'
+import json, pathlib, sys
+case = json.loads(pathlib.Path(sys.argv[1]).read_text())
+print(json.dumps({
+  "case_id": case["id"],
+  "mode": "reference_external",
+  "status": "failed",
+  "score": 0,
+  "reason": "paired memory_on run is required before reference_external"
+}, indent=2))
+PY
+)"
+      return 1
+    fi
+    reference_payload="$(python3 - "$case_path" "${paired_run_dir}/planner_task.json" "${paired_run_dir}/researcher_task.json" "${paired_run_dir}/coder_task.json" "${paired_run_dir}/reviewer_task.json" "${paired_run_dir}/benchmark_run.json" <<'PY'
+import json, pathlib, sys
+case = json.loads(pathlib.Path(sys.argv[1]).read_text())
+planner = json.loads(pathlib.Path(sys.argv[2]).read_text())
+researcher = json.loads(pathlib.Path(sys.argv[3]).read_text())
+coder = json.loads(pathlib.Path(sys.argv[4]).read_text())
+reviewer = json.loads(pathlib.Path(sys.argv[5]).read_text())
+run = json.loads(pathlib.Path(sys.argv[6]).read_text())
+mode = case.get("reference_eval_mode") or "coordination_quality"
+
+def compact(obj):
+    return json.dumps(obj, indent=2, ensure_ascii=False)
+
+planner_results = planner.get("results") or {}
+researcher_results = (researcher.get("results") or {})
+coder_results = (coder.get("results") or {})
+reviewer_results = (reviewer.get("results") or {})
+
+if mode == "plan_quality":
+    orchestrator_answer = compact({
+        "assigned_agents": planner_results.get("assigned_agents"),
+        "launch_order": planner_results.get("launch_order"),
+        "requires_approval_agents": planner_results.get("requires_approval_agents"),
+        "missing_agents": planner_results.get("missing_agents"),
+        "coder_tool": planner_results.get("coder_tool"),
+        "plan_executable": planner_results.get("plan_executable"),
+        "fallback_detected": planner_results.get("fallback_detected"),
+    })
+elif mode == "review_quality":
+    orchestrator_answer = compact({
+        "validation_summary": reviewer_results.get("validation_summary"),
+        "test_result": reviewer_results.get("test_result"),
+        "pass_checks": reviewer_results.get("pass_checks"),
+        "changed_files": coder_results.get("changed_files"),
+    })
+elif mode == "execution_quality":
+    orchestrator_answer = compact({
+        "researcher": {
+            "recommendations": researcher_results.get("recommendations"),
+            "stack_rationale": researcher_results.get("stack_rationale"),
+            "checklist": researcher_results.get("checklist"),
+        },
+        "coder": {
+            "summary": coder_results.get("summary"),
+            "changed_files": coder_results.get("changed_files"),
+            "diff_present": bool(coder_results.get("diff")),
+        },
+        "reviewer": {
+            "validation_summary": reviewer_results.get("validation_summary"),
+            "test_result": reviewer_results.get("test_result"),
+        },
+    })
+else:
+    orchestrator_answer = compact({
+        "planner": planner_results,
+        "researcher": {
+            "recommendations": researcher_results.get("recommendations"),
+            "stack_rationale": researcher_results.get("stack_rationale"),
+            "checklist": researcher_results.get("checklist"),
+        },
+        "coder": {
+            "summary": coder_results.get("summary"),
+            "changed_files": coder_results.get("changed_files"),
+            "diff_present": bool(coder_results.get("diff")),
+        },
+        "reviewer": {
+            "validation_summary": reviewer_results.get("validation_summary"),
+            "test_result": reviewer_results.get("test_result"),
+            "pass_checks": reviewer_results.get("pass_checks"),
+        },
+        "memory_hits": run.get("memory_hits"),
+        "handoff_chain": case.get("expected_handoffs") or [],
+    })
+
+sources = []
+for hit in run.get("memory_hits") or []:
+    ref = hit.get("source_ref") or "benchmark-artifact"
+    sources.append({"title": ref, "uri": "", "kind": hit.get("match_type") or "benchmark_memory"})
+
+query = "\n".join([
+    case.get("goal") or "",
+    "Return the ideal benchmark outcome for this governed multi-agent case.",
+    "Respect this success contract:",
+    compact(case.get("success_contract") or {}),
+])
+
+print(json.dumps({
+    "query": query,
+    "orchestrator_answer": orchestrator_answer,
+    "sources": sources
+}, ensure_ascii=False))
+PY
+)"
+    reference_response="$(request POST "/evaluations/reference" "$reference_payload")"
+    printf '%s\n' "$reference_response" > "${run_dir}/evaluation_reference.json"
+    judge_payload="$(REFERENCE_JSON="$reference_response" REFERENCE_PAYLOAD="$reference_payload" python3 - <<'PY'
+import json, os
+ref = json.loads(os.environ["REFERENCE_JSON"])
+payload = json.loads(os.environ["REFERENCE_PAYLOAD"])
+print(json.dumps({
+    "query": payload["query"],
+    "orchestrator_answer": payload["orchestrator_answer"],
+    "reference_answer": ref["reference_answer"],
+    "sources": payload.get("sources") or [],
+}))
+PY
+)"
+    judge_response="$(request POST "/evaluations/judge" "$judge_payload")"
+    printf '%s\n' "$judge_response" > "${run_dir}/evaluation_judge.json"
+    write_run_report "$run_dir" "$(CASE_PATH="$case_path" JUDGE_JSON="$judge_response" BASELINE_RUN="${paired_run_dir}/benchmark_run.json" python3 - <<'PY'
+import json, os, pathlib
+case = json.loads(pathlib.Path(os.environ["CASE_PATH"]).read_text())
+judge = json.loads(os.environ["JUDGE_JSON"])
+baseline = json.loads(pathlib.Path(os.environ["BASELINE_RUN"]).read_text())
+scores = judge.get("judge_scores") or {}
+acc = float(scores.get("accuracy_score", 0) or 0)
+cov = float(scores.get("coverage_score", 0) or 0)
+src = float(scores.get("source_use_score", 0) or 0)
+use = float(scores.get("usefulness_score", 0) or 0)
+hall = float(scores.get("hallucination_risk_score", 1) or 1)
+reference_score = round(((acc + cov + src + use + (1.0 - hall)) / 5.0) * 100.0, 1)
+print(json.dumps({
+  "case_id": case["id"],
+  "mode": "reference_external",
+  "baseline_mode": "reference_external",
+  "baseline_score": reference_score,
+  "reference_score": reference_score,
+  "delta_vs_memory_off": 0,
+  "delta_vs_reference_external": 0,
+  "benchmark_league": case.get("benchmark_league"),
+  "maturity_block": case.get("maturity_block"),
+  "primary_agent": case.get("primary_agent"),
+  "sequence_id": case.get("sequence_id") or case["id"],
+  "sequence_position": int(case.get("sequence_position") or 1),
+  "repo_id": baseline.get("repo_id"),
+  "repo_url": baseline.get("repo_url"),
+  "branch": baseline.get("branch"),
+  "resolved_commit": baseline.get("resolved_commit"),
+  "status": "success",
+  "score": reference_score,
+  "agent_score": 0,
+  "handoff_score": 0,
+  "system_score": 0,
+  "agent_scores": {},
+  "handoff_scores": {},
+  "reference_eval_mode": case.get("reference_eval_mode"),
+  "reference_provider": judge.get("mode", "direct"),
+  "retrieval_precision_label": "reference_external"
+}, indent=2))
+PY
+)"
+    log "completed $(basename "${case_path%.json}") reference_external run ${iteration}"
+    return 0
+  fi
+
   local memory_mode="on"
   if [[ "$mode" == "memory_off" ]]; then
     memory_mode="off"
   fi
 
   local workspace_root case_id repo_id repo_url repo_branch repo_profile case_goal strategy benchmark_league sequence_id sequence_position
-  local memory_expectation forbidden_match_types_json
+  local memory_expectation forbidden_match_types_json maturity_block primary_agent expected_handoffs_json success_contract_json reference_eval_mode
   local run_meta
   run_meta="$(python3 - "$case_path" <<PY
 import json, sys
@@ -1079,7 +1373,12 @@ print(json.dumps({
     "sequence_position": case.get("sequence_position") or 1,
     "strategy": case.get("benchmark_memory_strategy") or "$MEMORY_STRATEGY_DEFAULT",
     "memory_expectation": case.get("memory_expectation") or "helpful",
-    "forbidden_match_types": case.get("forbidden_match_types") or []
+    "forbidden_match_types": case.get("forbidden_match_types") or [],
+    "maturity_block": case.get("maturity_block") or "",
+    "primary_agent": case.get("primary_agent") or "",
+    "expected_handoffs": case.get("expected_handoffs") or [],
+    "success_contract": case.get("success_contract") or {},
+    "reference_eval_mode": case.get("reference_eval_mode") or ""
 }))
 PY
 )"
@@ -1095,6 +1394,11 @@ PY
   strategy="$(printf '%s' "$run_meta" | json_get strategy)"
   memory_expectation="$(printf '%s' "$run_meta" | json_get memory_expectation)"
   forbidden_match_types_json="$(printf '%s' "$run_meta" | json_get forbidden_match_types)"
+  maturity_block="$(printf '%s' "$run_meta" | json_get maturity_block)"
+  primary_agent="$(printf '%s' "$run_meta" | json_get primary_agent)"
+  expected_handoffs_json="$(printf '%s' "$run_meta" | json_get expected_handoffs)"
+  success_contract_json="$(printf '%s' "$run_meta" | json_get success_contract)"
+  reference_eval_mode="$(printf '%s' "$run_meta" | json_get reference_eval_mode)"
 
   local scratch_root bridge_log bridge_id bridge_name bridge_pid resolved_head resolved_commit
   scratch_root="$(mktemp -d "${WORKDIR_ROOT%/}/lab-benchmark-${run_slug}-XXXXXX")"
@@ -1292,6 +1596,7 @@ PY
 )"
     return 1
   fi
+  build_planner_task_report "$tasks_json" "$workspace_root/.lab/benchmark-case.json" "$initiative_id" > "${run_dir}/planner_task.json"
   request POST "/initiatives/${initiative_id}/approve/plan" "{\"operator\":\"${OPERATOR}\",\"feedback\":\"benchmark\"}" >/dev/null
   researcher_task_id="$(printf '%s' "$tasks_json" | initiative_task_id_by_agent researcher)"
   coder_task_id="$(printf '%s' "$tasks_json" | initiative_task_id_by_agent coder)"
@@ -1326,16 +1631,17 @@ PY
   tail -n 80 "$bridge_log" > "${run_dir}/bridge.log.tail" || true
 
   local report_json
-report_json="$(python3 - "${run_dir}/researcher_task.json" "${run_dir}/coder_task.json" "${run_dir}/reviewer_task.json" "${run_dir}/initiative_artifacts.json" <<PY
+report_json="$(python3 - "${run_dir}/planner_task.json" "${run_dir}/researcher_task.json" "${run_dir}/coder_task.json" "${run_dir}/reviewer_task.json" "${run_dir}/initiative_artifacts.json" <<PY
 import json, pathlib, sys
-researcher = json.loads(pathlib.Path(sys.argv[1]).read_text())
-coder = json.loads(pathlib.Path(sys.argv[2]).read_text())
-reviewer = json.loads(pathlib.Path(sys.argv[3]).read_text())
-artifacts = json.loads(pathlib.Path(sys.argv[4]).read_text()).get("items", [])
+planner = json.loads(pathlib.Path(sys.argv[1]).read_text())
+researcher = json.loads(pathlib.Path(sys.argv[2]).read_text())
+coder = json.loads(pathlib.Path(sys.argv[3]).read_text())
+reviewer = json.loads(pathlib.Path(sys.argv[4]).read_text())
+artifacts = json.loads(pathlib.Path(sys.argv[5]).read_text()).get("items", [])
 hit_map = {}
 for stage_name, task in (("researcher", researcher), ("coder", coder), ("reviewer", reviewer)):
     ctx = (task.get("metadata") or {}).get("context_package") or {}
-    for chunk in ctx.get("chunks", []):
+    for chunk in (ctx.get("chunks") or []):
         meta = chunk.get("metadata") or {}
         key = (
             chunk.get("source_ref") or "",
@@ -1351,7 +1657,7 @@ for stage_name, task in (("researcher", researcher), ("coder", coder), ("reviewe
             }
         if stage_name not in hit_map[key]["stages"]:
             hit_map[key]["stages"].append(stage_name)
-    for hit in (task.get("results") or {}).get("semantic_context_hits", []):
+    for hit in ((task.get("results") or {}).get("semantic_context_hits") or []):
         match_type = hit.get("match_type", "unknown")
         repo_profile = hit.get("repo_profile")
         source_ref = hit.get("source_ref")
@@ -1377,26 +1683,99 @@ results = reviewer.get("results") or {}
 reviewer_ok = reviewer.get("state") == "completed" and results.get("status") == "success" and results.get("exit_code") == 0
 if not reviewer_ok:
     status = "failed"
-score = 0
-if status == "success":
-    score += 40
-test_status = ((results.get("test_results") or {}).get("status") or "")
+planner_results = planner.get("results") or {}
+researcher_results = researcher.get("results") or {}
+coder_results = coder.get("results") or {}
+case_success = json.loads('''$success_contract_json''')
+expected_handoffs = json.loads('''$expected_handoffs_json''')
+
+def task_completed(task):
+    return (task.get("state") or "") == "completed"
+
+def parse_iso(task, field):
+    value = task.get(field)
+    if not value:
+        return None
+    return value
+
+launch_order = planner_results.get("launch_order") or []
+expected_launch_order = case_success.get("expected_launch_order") or []
+launch_order_ok = launch_order[:len(expected_launch_order)] == expected_launch_order if expected_launch_order else True
+
+primary_agent = "$primary_agent"
+maturity_block = "$maturity_block"
+reference_eval_mode = "$reference_eval_mode"
+reviewer_error = " ".join([
+    str(results.get("error") or ""),
+    str(results.get("stderr") or ""),
+    str(reviewer.get("error_message") or ""),
+]).lower()
+toolchain_confusion = any(token in reviewer_error for token in ["command not found", "docker", "pip install", "module not found", "composer: not found"])
+
+agent_scores = {
+    "planner": 0,
+    "researcher": 0,
+    "coder": 0,
+    "reviewer": 0,
+}
+if planner_results.get("materialized_plan_valid"):
+    agent_scores["planner"] += 5
+if planner_results.get("plan_executable"):
+    agent_scores["planner"] += 5
+if not planner_results.get("fallback_detected"):
+    agent_scores["planner"] += 5
+
+if task_completed(researcher):
+    agent_scores["researcher"] += 5
+if researcher_results.get("recommendations") or researcher_results.get("checklist") or researcher_results.get("stack_rationale"):
+    agent_scores["researcher"] += 5
+if task_completed(researcher) and task_completed(coder):
+    agent_scores["researcher"] += 5
+
+if task_completed(coder):
+    agent_scores["coder"] += 5
+if coder_results.get("changed_files") or pathlib.Path("${run_dir}/git.diff").read_text().strip():
+    agent_scores["coder"] += 5
 if reviewer_ok:
-    score += 15
-if pathlib.Path("${run_dir}/git.diff").read_text().strip():
-    score += 10
+    agent_scores["coder"] += 5
+
+if task_completed(reviewer):
+    agent_scores["reviewer"] += 5
+if reviewer_ok:
+    agent_scores["reviewer"] += 5
+if not toolchain_confusion:
+    agent_scores["reviewer"] += 5
+
+handoff_scores = {}
+handoff_scores["planner_to_researcher_quality"] = 5 if ("planner->researcher" in expected_handoffs and "researcher" in launch_order[:1] and task_completed(researcher)) else (5 if "planner->researcher" not in expected_handoffs else 0)
+handoff_scores["planner_to_coder_quality"] = 5 if ("planner->coder" in expected_handoffs and planner_results.get("coder_tool") == case_success.get("expected_coder_tool") and task_completed(coder)) else (5 if "planner->coder" not in expected_handoffs else 0)
+handoff_scores["researcher_to_coder_usefulness"] = 5 if ("researcher->coder" in expected_handoffs and task_completed(researcher) and task_completed(coder)) else (5 if "researcher->coder" not in expected_handoffs else 0)
+handoff_scores["coder_to_reviewer_reviewability"] = 5 if ("coder->reviewer" in expected_handoffs and task_completed(coder) and task_completed(reviewer)) else (5 if "coder->reviewer" not in expected_handoffs else 0)
+handoff_scores["memory_reuse_across_handoff"] = 5 if ("$mode" == "memory_on" and len(hits) > 0) or ("$memory_expectation" == "avoid_transfer" and len(hits) == 0) else 0
+handoff_scores["approval_gate_recovery"] = 5 if (case_success.get("requires_coder_approval") and bool((coder.get("metadata") or {}).get("requires_approval")) and task_completed(coder)) or (not case_success.get("requires_coder_approval")) else 0
+
+handoff_expected_count = max(1, len(expected_handoffs) + 2)
+handoff_score = round((sum(handoff_scores.values()) / (handoff_expected_count * 5.0)) * 15.0, 1)
+primary_agent_score = float(agent_scores.get(primary_agent, 0))
+system_score = 0
+if status == "success":
+    system_score += 30
+if reviewer_ok:
+    system_score += 15
+
+memory_score = 0
 league = "$benchmark_league"
 if league == "repo_recall" and repo_specific_hits:
-    score += 15
+    memory_score = 10
 elif league == "technology_transfer" and technology_hits and not repo_specific_hits:
-    score += 15
+    memory_score = 10
 elif league == "pattern_transfer":
     if pattern_hits and not repo_specific_hits:
-        score += 15
+        memory_score = 10
     elif technology_hits and not repo_specific_hits:
-        score += 8
-if forbidden_hits:
-    score -= 15
+        memory_score = 6
+elif "$memory_expectation" == "avoid_transfer" and not hits:
+    memory_score = 10
 memory_effect = "baseline"
 if "$mode" == "memory_on":
     if forbidden_hits:
@@ -1407,11 +1786,23 @@ if "$mode" == "memory_on":
         memory_effect = "helped"
     else:
         memory_effect = "neutral"
+memory_penalty = 15 if forbidden_hits else 0
+handoff_penalty = 15 if any(score == 0 for key, score in handoff_scores.items() if key.startswith(("planner_", "researcher_", "coder_")) and key.replace("_quality", "").replace("_usefulness", "").replace("_reviewability", "").replace("_", "->") in expected_handoffs) else 0
+fallback_penalty = 10 if planner_results.get("fallback_detected") else 0
+review_penalty = 10 if toolchain_confusion and not reviewer_ok else 0
+score = max(0, round(system_score + primary_agent_score + handoff_score + memory_score - memory_penalty - handoff_penalty - fallback_penalty - review_penalty, 1))
 print(json.dumps({
     "case_id": "$case_id",
     "mode": "$mode",
+    "baseline_mode": "memory_off" if "$mode" == "memory_on" else "$mode",
+    "baseline_score": score if "$mode" == "memory_off" else None,
     "iteration": $iteration,
     "benchmark_league": "$benchmark_league",
+    "maturity_block": maturity_block,
+    "primary_agent": primary_agent,
+    "reference_eval_mode": reference_eval_mode,
+    "expected_handoffs": expected_handoffs,
+    "handoff_chain": expected_handoffs,
     "sequence_id": "$sequence_id",
     "sequence_position": int("$sequence_position"),
     "memory_mode": "$memory_mode",
@@ -1435,6 +1826,16 @@ print(json.dumps({
     "memory_effect": memory_effect,
     "retrieval_precision_label": memory_effect,
     "artifact_count": len(artifacts),
+    "agent_scores": agent_scores,
+    "agent_score": primary_agent_score,
+    "handoff_scores": handoff_scores,
+    "handoff_score": handoff_score,
+    "system_score": system_score,
+    "memory_score": memory_score,
+    "memory_penalty": memory_penalty,
+    "handoff_penalty": handoff_penalty,
+    "fallback_penalty": fallback_penalty,
+    "review_penalty": review_penalty,
     "score": score
 }, indent=2))
 PY

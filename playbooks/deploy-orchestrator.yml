@@ -1,0 +1,10 @@
+---
+- name: Deploy orchestrator platform slice
+  hosts: all
+  become: true
+
+  vars_files:
+    - ../group_vars/vault.yml
+
+  roles:
+    - orchestrator

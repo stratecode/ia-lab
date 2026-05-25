@@ -94,6 +94,14 @@ Objective: move from controlled workflow to useful engineering work on existing 
   - `repo_recall` for local continuity on the same repository
   - `technology_transfer` for reuse across repositories that share stack and framework traits
   - `pattern_transfer` for reuse across repositories that share error, fix, or validation patterns
+- add an `agent_maturity` suite on top of the official harness so `planner`, `researcher`, `coder`, and `reviewer` are measured as:
+  - individual capability
+  - handoff quality
+  - end-to-end system usefulness
+- use three baselines for curated maturity cases:
+  - `memory_off`
+  - `memory_on`
+  - `reference_external`
 - treat reusable technology/pattern memory as an evidence-backed hypothesis with early signal, not as a universal mature capability yet
 
 Current evidence snapshot from the official benchmark harness on May 24, 2026:
@@ -121,6 +129,7 @@ Interpretation:
 - the system now shows reusable transfer by technology and pattern
 - technology and pattern transfer are not equally mature; transfer works, but stability is lower than repo-local recall
 - negative transfer control is part of the validated story now, not a future aspiration
+- agent maturity is the next validation layer: not just “did the repo pass”, but “did the right agent and the right handoff create that outcome”
 
 ### Cross-Cutting: Resilience and Resume
 

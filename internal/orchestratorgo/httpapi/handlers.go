@@ -1027,19 +1027,45 @@ func (s *Server) getResearchRun(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createReferenceEvaluation(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ResearchRunID string `json:"research_run_id"`
+		ResearchRunID      string             `json:"research_run_id"`
+		Query              string             `json:"query"`
+		OrchestratorAnswer string             `json:"orchestrator_answer"`
+		Sources            []domain.SourceRef `json:"sources"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 	body.ResearchRunID = strings.TrimSpace(body.ResearchRunID)
-	if body.ResearchRunID == "" {
-		writeDetail(w, http.StatusBadRequest, "research_run_id is required")
-		return
-	}
 	if strings.TrimSpace(s.Config.OpenAIReferenceAPIKey) == "" {
 		writeDetail(w, http.StatusBadRequest, "OpenAI reference API key is not configured")
+		return
+	}
+	if body.ResearchRunID == "" {
+		body.Query = strings.TrimSpace(body.Query)
+		if body.Query == "" {
+			writeDetail(w, http.StatusBadRequest, "research_run_id or query is required")
+			return
+		}
+		referenceAnswer, err := s.callOpenAIChat(
+			r.Context(),
+			s.Config.OpenAIReferenceModel,
+			"Eres un asistente de investigación riguroso. Responde a la pregunta del usuario con claridad. Si faltan datos, dilo.",
+			body.Query,
+		)
+		if err != nil {
+			writeDetail(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"mode":                "direct",
+			"reference_provider":  "openai",
+			"reference_model":     s.Config.OpenAIReferenceModel,
+			"reference_answer":    referenceAnswer,
+			"query":               body.Query,
+			"orchestrator_answer": strings.TrimSpace(body.OrchestratorAnswer),
+			"sources":             body.Sources,
+		})
 		return
 	}
 	researchRun, err := s.Postgres.GetResearchRun(r.Context(), body.ResearchRunID)
@@ -1077,19 +1103,52 @@ func (s *Server) createReferenceEvaluation(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) judgeEvaluation(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		EvaluationRunID string `json:"evaluation_run_id"`
+		EvaluationRunID    string             `json:"evaluation_run_id"`
+		Query              string             `json:"query"`
+		OrchestratorAnswer string             `json:"orchestrator_answer"`
+		ReferenceAnswer    string             `json:"reference_answer"`
+		Sources            []domain.SourceRef `json:"sources"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 	body.EvaluationRunID = strings.TrimSpace(body.EvaluationRunID)
-	if body.EvaluationRunID == "" {
-		writeDetail(w, http.StatusBadRequest, "evaluation_run_id is required")
-		return
-	}
 	if strings.TrimSpace(s.Config.OpenAIReferenceAPIKey) == "" {
 		writeDetail(w, http.StatusBadRequest, "OpenAI reference API key is not configured")
+		return
+	}
+	if body.EvaluationRunID == "" {
+		body.Query = strings.TrimSpace(body.Query)
+		body.OrchestratorAnswer = strings.TrimSpace(body.OrchestratorAnswer)
+		body.ReferenceAnswer = strings.TrimSpace(body.ReferenceAnswer)
+		if body.Query == "" || body.OrchestratorAnswer == "" || body.ReferenceAnswer == "" {
+			writeDetail(w, http.StatusBadRequest, "evaluation_run_id or direct query/orchestrator_answer/reference_answer is required")
+			return
+		}
+		verdict, err := s.callOpenAIJudge(r.Context(), body.Query, body.OrchestratorAnswer, body.ReferenceAnswer, body.Sources)
+		if err != nil {
+			writeDetail(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		scores := map[string]any{
+			"accuracy_score":           verdict.AccuracyScore,
+			"coverage_score":           verdict.CoverageScore,
+			"source_use_score":         verdict.SourceUseScore,
+			"usefulness_score":         verdict.UsefulnessScore,
+			"hallucination_risk_score": verdict.HallucinationRiskScore,
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"mode":                "direct",
+			"judge_model":         s.Config.OpenAIJudgeModel,
+			"judge_verdict":       verdict.Raw,
+			"judge_scores":        scores,
+			"winner":              verdict.Winner,
+			"query":               body.Query,
+			"orchestrator_answer": body.OrchestratorAnswer,
+			"reference_answer":    body.ReferenceAnswer,
+			"sources":             body.Sources,
+		})
 		return
 	}
 	evaluationRun, err := s.Postgres.GetEvaluationRun(r.Context(), body.EvaluationRunID)
