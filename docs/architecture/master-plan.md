@@ -29,15 +29,21 @@ The intended direction is stronger multi-agent autonomy. That direction is real,
 - local bridge flow through `lab-agent`, `lab-agentd`, and `lab-agent tui`
 - operator entry points through Telegram, Open WebUI, and the orchestrator API
 - research and capability flows for web, documents, and images
+- project-scoped capability registry and broker with governed capability policies by `repository_url`
 - persisted tasks, approvals, artifacts, evaluations, and initiative state
 - observability through health, metrics, logs, and persisted execution traces
+- official benchmark harness as the canonical initiative-driven validation path
+- benchmark evidence for `repo_recall`, `technology_transfer`, and `pattern_transfer`
+- `agent_maturity` evidence for `planner`, `researcher`, `coder`, `reviewer`, and multi-agent coordination
+- lease-based local bridge recovery after daemon interruption and full host reboot
+- benchmark-level capability provenance through `capability_usage`, `capability_helped`, and per-project policy enforcement
 
 ### What is still incomplete or narrow
 
 - end-to-end autonomous multi-agent routing on arbitrary work
 - reviewer behavior that is broadly useful for real repositories, not just constrained flows
-- a canonical golden path validated on an existing real repository from start to finish
-- mature use of semantic memory for planning, review, and recovery loops
+- fine-grained checkpoint-and-continue for long-running subprocess execution
+- external reference evaluation that is stable across broader repo classes
 
 ## Golden Path
 
@@ -132,6 +138,58 @@ Interpretation:
 - technology and pattern transfer are not equally mature; transfer works, but stability is lower than repo-local recall
 - negative transfer control is part of the validated story now, not a future aspiration
 - agent maturity is the next validation layer: not just “did the repo pass”, but “did the right agent and the right handoff create that outcome”
+
+Updated evidence snapshot from the official harness and maturity suite on May 26, 2026:
+
+- `agent_maturity`
+  validated across `planner`, `researcher`, `coder`, `reviewer`, and `coordination`
+  official campaigns run with `runs_per_case=3`
+  `memory_on` remains stronger than `memory_off` across curated maturity cases
+- `pattern_transfer` inside maturity
+  validated on the reviewer HTTP client sequence `axios -> httpx`
+  signal came from `pattern_similar` memory with no `repo_specific` hits
+- capability-governed execution
+  benchmark artifacts now persist `capability_usage`, `capability_helped`, `capability_noise`, and `capability_denied`
+  current productive signal comes mainly from `filesystem.read` and `code.analysis`
+- project-scoped MCP/capability governance
+  capabilities are now discovered through a registry and filtered by project policy on `repository_url`
+  this is validated on the runtime and benchmark path, not just in isolated API smoke checks
+- bridge recovery
+  lease reclaim works after bridge interruption
+  reboot recovery is validated against the orchestrator host
+  the remaining gap is fine-grained subprocess continuation, not task-level recovery
+
+Iteration 3 closure decision:
+
+- `Iteration 3` is considered closed for roadmap purposes
+- closure is based on validated real repository utility through the canonical initiative-driven harness
+- closure includes:
+  - governed repo execution on existing repositories
+  - benchmark evidence across `repo_recall`, `technology_transfer`, and `pattern_transfer`
+  - maturity evidence across individual agents, handoffs, and coordinated execution
+  - lease-based bridge recovery after interruption and reboot
+- remaining weaknesses do not block closure
+- remaining weaknesses define the next phase
+
+Deferred from `Iteration 3` into the next phase:
+
+- reviewer generalization on less curated repositories
+- broader stability of `reference_external`
+- fine-grained resume for long-running subprocesses
+- wider validation outside the current curated benchmark catalog
+- broader MCP ecosystem expansion and utility ranking beyond the current governed baseline
+
+### Phase 4: Generalization and Operational Hardening
+
+Objective: move from validated curated utility to broader, more reliable operational usefulness.
+
+- validate reviewer usefulness on less curated and less cooperative repositories
+- broaden benchmark coverage beyond the current curated catalog without losing interpretability
+- harden `reference_external` so it becomes a stable comparison tool instead of an occasionally theatrical one
+- implement finer-grained resume for long-running local subprocesses
+- improve tool and capability ranking so project-scoped MCP use is driven by observed utility, not only by static policy
+- expand MCP-backed evidence sources for `researcher` and `reviewer` while keeping `coder` tightly governed
+- keep the benchmark harness canonical and use it to measure generalization, not just re-run friendly cases
 
 ### Cross-Cutting: Resilience and Resume
 
