@@ -3,6 +3,7 @@ package bridge
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/stratecode/lab/internal/orchestratorgo/codeanalysis"
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 )
 
@@ -112,6 +114,8 @@ func (e *WorkspaceExecutor) Execute(ctx context.Context, claim domain.LocalBridg
 			argv = []string{"pytest", "-q"}
 		}
 		result, err = e.runAllowedCommand(ctx, argv, "Ran tests")
+	case "code_analysis":
+		result, err = e.codeAnalysis(toolRequest)
 	default:
 		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: fmt.Sprintf("unsupported local tool: %s", tool)}
 	}
@@ -309,15 +313,73 @@ func (e *WorkspaceExecutor) reviewProject(ctx context.Context, request map[strin
 		}, nil
 	}
 	summary := fmt.Sprintf("Review passed for %s", rel)
+	analysisTypes := anyStringSliceDefault(request["analysis_types"], nil)
 	report := fmt.Sprintf("expected_files=%s\ntest_command=%s\n", strings.Join(expectedFiles, ","), strings.Join(testCommand, " "))
+	artifacts := []map[string]any{
+		{"type": "review_report", "title": "Project review report", "media_type": "text/plain", "content_text": report},
+	}
+	if len(analysisTypes) > 0 {
+		analysis, analysisErr := codeanalysis.Analyze(projectRoot, analysisTypes)
+		if analysisErr != nil {
+			report += fmt.Sprintf("analysis_error=%s\n", analysisErr.Error())
+			artifacts = append(artifacts, map[string]any{
+				"type":         "code_analysis_report",
+				"title":        "Code analysis failure",
+				"media_type":   "text/plain",
+				"content_text": analysisErr.Error(),
+			})
+		} else {
+			report += fmt.Sprintf("analysis_types=%s\nanalysis_findings=%d\n", strings.Join(analysisTypes, ","), analysis.Summary.TotalFindings)
+			artifacts = append(artifacts, map[string]any{
+				"type":         "code_analysis_report",
+				"title":        "Code analysis report",
+				"media_type":   "application/json",
+				"content_text": mustJSON(analysis),
+				"metadata": map[string]any{
+					"analysis_types": analysisTypes,
+					"summary":        analysis.Summary,
+				},
+			})
+		}
+		artifacts[0]["content_text"] = report
+	}
 	return domain.LocalBridgeResultRequest{
-		Status:   "success",
-		Summary:  &summary,
-		Stdout:   stringPtr(stdout),
-		Stderr:   stringPtr(stderr),
-		ExitCode: intPtr(exitCode),
+		Status:    "success",
+		Summary:   &summary,
+		Stdout:    stringPtr(stdout),
+		Stderr:    stringPtr(stderr),
+		ExitCode:  intPtr(exitCode),
+		Artifacts: artifacts,
+	}, nil
+}
+
+func (e *WorkspaceExecutor) codeAnalysis(request map[string]any) (domain.LocalBridgeResultRequest, error) {
+	rootValue := firstNonEmptyString(strings.TrimSpace(asString(request["project_root"])), strings.TrimSpace(asString(request["path"])), ".")
+	projectRoot, rel, err := e.resolve(rootValue)
+	if err != nil {
+		return domain.LocalBridgeResultRequest{}, err
+	}
+	analysisTypes := anyStringSliceDefault(request["analysis_types"], []string{strings.TrimSpace(asString(request["analysis_type"]))})
+	result, err := codeanalysis.Analyze(projectRoot, analysisTypes)
+	if err != nil {
+		return domain.LocalBridgeResultRequest{}, err
+	}
+	summary := fmt.Sprintf("Analyzed %s with %d finding(s)", rel, result.Summary.TotalFindings)
+	stdout := mustJSON(result)
+	return domain.LocalBridgeResultRequest{
+		Status:  "success",
+		Summary: &summary,
+		Stdout:  &stdout,
 		Artifacts: []map[string]any{
-			{"type": "review_report", "title": "Project review report", "media_type": "text/plain", "content_text": report},
+			{
+				"type":         "code_analysis_report",
+				"title":        "Code analysis report",
+				"media_type":   "application/json",
+				"content_text": stdout,
+				"metadata": map[string]any{
+					"analysis_types": analysisTypes,
+				},
+			},
 		},
 	}, nil
 }
@@ -541,6 +603,14 @@ func stringPtr(value string) *string {
 
 func intPtr(value int) *int {
 	return &value
+}
+
+func mustJSON(value any) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
 }
 
 func withSemanticRefs(result domain.LocalBridgeResultRequest, sources []string, hits []map[string]any, chunkCount int) domain.LocalBridgeResultRequest {

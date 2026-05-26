@@ -613,6 +613,8 @@ Current defaults and operational notes:
 
 - official `agent_maturity` campaigns now default to `runs_per_case=3`
 - `planner` and `reviewer` can consume reusable semantic experience outside benchmark-only flows when repo memory scope is available
+- `researcher` now carries governed read-oriented capability intent (`web.search`, `web.fetch`, `document.read`) in deterministic repo workflows
+- `reviewer` now carries governed `code.analysis` intent and `review_project` can attach a code-analysis artifact during validation
 - the embedded remote worker now records `recovery_checkpoint` metadata and re-queues stale interrupted remote tasks on startup
 - local bridge claims are now lease-based and persist both `local_bridge_lease` and `recovery_checkpoint` metadata during claim, heartbeat, resume, and completion
 - while a local task is still running, the bridge now keeps heartbeating with live execution metadata (`stage`, `tool`, `summary`) so recovery is not blind mid-command

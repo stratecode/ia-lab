@@ -29,6 +29,7 @@ The Go runtime covers the compatibility base and the first write-oriented lifecy
 - `GET /capabilities`
 - `POST /tools/web/search`
 - `POST /tools/web/fetch`
+- `POST /tools/code/analyze`
 - `POST /tools/documents/read`
 - `POST /tools/images/analyze`
 - `GET /tools/invocations/{id}`
@@ -64,6 +65,7 @@ Current write support is intentionally narrow:
   - `tool_request.tool=append_file`
 - `coder` tasks marked with `metadata.requires_approval=true` request approval once, pause in `waiting_approval`, and resume after approval.
 - `web.fetch` now fetches and strips HTML content in the Go core.
+- `code.analysis` now provides governed repository analysis findings for reviewer-grade validation without handing arbitrary filesystem write access to agents.
 - `document.read` and `image.analyze` now run through HTTP sidecars so the Go core stops swallowing PDF/DOCX/OCR complexity whole.
 - `execution_target=local` is now serviced by Go binaries:
   - `lab-agent`

@@ -293,6 +293,7 @@ func TestWorkspaceExecutorResearchAndReviewProject(t *testing.T) {
 				"project_root":   "projects/demo-review",
 				"expected_files": []any{"README.md", "main.py", "tests/test_main.py", "lab.json"},
 				"test_command":   []any{"python3", "-c", "print('ok')"},
+				"analysis_types": []any{"dependencies", "security"},
 			},
 		},
 	})
@@ -304,6 +305,45 @@ func TestWorkspaceExecutorResearchAndReviewProject(t *testing.T) {
 	}
 	if len(reviewResult.Artifacts) == 0 {
 		t.Fatalf("expected review artifacts, got %#v", reviewResult)
+	}
+	foundAnalysis := false
+	for _, artifact := range reviewResult.Artifacts {
+		if artifact["type"] == "code_analysis_report" {
+			foundAnalysis = true
+			break
+		}
+	}
+	if !foundAnalysis {
+		t.Fatalf("expected code analysis artifact, got %#v", reviewResult.Artifacts)
+	}
+}
+
+func TestWorkspaceExecutorCodeAnalysis(t *testing.T) {
+	root := initGitWorkspace(t)
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"dependencies":{"left-pad":"*"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"tool_request": map[string]any{
+				"tool":           "code_analysis",
+				"project_root":   ".",
+				"analysis_types": []any{"dependencies"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if result.Stdout == nil || !strings.Contains(*result.Stdout, "package.json present without") {
+		t.Fatalf("expected analysis output, got %#v", result)
 	}
 }
 

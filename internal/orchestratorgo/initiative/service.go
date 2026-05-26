@@ -396,7 +396,8 @@ func fallbackExecutionPlan(initiative *domain.InitiativeResponse, design map[str
 						"definition_of_done": "Reviewer confirms the scaffold passes expected checks.",
 						"metadata": map[string]any{
 							"tool_request": map[string]any{
-								"tool": "review_project",
+								"tool":           "review_project",
+								"analysis_types": []string{"dependencies", "security"},
 							},
 							"project_request": map[string]any{
 								"project_name":      projectName,
@@ -411,6 +412,9 @@ func fallbackExecutionPlan(initiative *domain.InitiativeResponse, design map[str
 								"expected_files":    expectedFiles,
 							},
 							"workspace_root": initiative.WorkspaceRoot,
+							"allowed_capabilities": []string{
+								"code.analysis",
+							},
 						},
 					},
 				},
@@ -474,24 +478,24 @@ func fallbackRepoExecutionPlan(initiative *domain.InitiativeResponse, design map
 	goal := firstNonEmptyString(sanitizedInitiativeGoal(initiative.Goal), initiative.Title)
 	profile := detectRepoWorkflowProfile(initiative.WorkspaceRoot, initiative.Goal)
 	projectRequest := map[string]any{
-		"project_name":     profile.repoName,
-		"parent_directory": ".",
-		"project_root":     profile.projectRoot,
-		"project_type":     profile.projectType,
-		"runtime_or_stack": profile.stack,
-		"language":         profile.language,
-		"framework":        profile.framework,
-		"problem_domain":   profile.problemDomain,
-		"error_class":      profile.errorClass,
-		"fix_pattern":      profile.fixPattern,
+		"project_name":       profile.repoName,
+		"parent_directory":   ".",
+		"project_root":       profile.projectRoot,
+		"project_type":       profile.projectType,
+		"runtime_or_stack":   profile.stack,
+		"language":           profile.language,
+		"framework":          profile.framework,
+		"problem_domain":     profile.problemDomain,
+		"error_class":        profile.errorClass,
+		"fix_pattern":        profile.fixPattern,
 		"validation_pattern": profile.validationPattern,
-		"repository_url":   profile.repositoryURL,
-		"default_branch":   profile.defaultBranch,
-		"goal":             goal,
-		"test_focus":       profile.testFocus,
-		"test_command":     profile.testCommand,
-		"expected_files":   profile.expected,
-		"repo_profile":     profile.projectFlow,
+		"repository_url":     profile.repositoryURL,
+		"default_branch":     profile.defaultBranch,
+		"goal":               goal,
+		"test_focus":         profile.testFocus,
+		"test_command":       profile.testCommand,
+		"expected_files":     profile.expected,
+		"repo_profile":       profile.projectFlow,
 	}
 	if profile.benchmarkCaseID != "" {
 		projectRequest["benchmark_case_id"] = profile.benchmarkCaseID
@@ -518,6 +522,11 @@ func fallbackRepoExecutionPlan(initiative *domain.InitiativeResponse, design map
 		"initiative_goal": goal,
 		"project_request": projectRequest,
 		"workspace_root":  initiative.WorkspaceRoot,
+		"allowed_capabilities": []string{
+			"web.search",
+			"web.fetch",
+			"document.read",
+		},
 		"tool_request": map[string]any{
 			"tool":            "research_project",
 			"project_request": projectRequest,
@@ -553,11 +562,15 @@ func fallbackRepoExecutionPlan(initiative *domain.InitiativeResponse, design map
 	reviewerMetadata := map[string]any{
 		"project_request": projectRequest,
 		"workspace_root":  initiative.WorkspaceRoot,
+		"allowed_capabilities": []string{
+			"code.analysis",
+		},
 		"tool_request": map[string]any{
 			"tool":           "review_project",
 			"project_root":   profile.projectRoot,
 			"expected_files": profile.expected,
 			"test_command":   profile.testCommand,
+			"analysis_types": []string{"dependencies", "security"},
 		},
 	}
 	applyBenchmarkMetadata(reviewerMetadata, profile)
@@ -730,33 +743,33 @@ func loadBenchmarkRepoWorkflowProfileFromGoal(goal, workspaceRoot string) (repoW
 
 func decodeBenchmarkRepoWorkflowProfile(raw []byte, workspaceRoot string) (repoWorkflowProfile, bool) {
 	var payload struct {
-		ID             string   `json:"id"`
-		CaseType       string   `json:"case_type"`
-		RepoProfile    string   `json:"repo_profile"`
-		RepoURL        string   `json:"repo_url"`
-		DefaultBranch  string   `json:"default_branch"`
-		ProjectType    string   `json:"project_type"`
-		Runtime        string   `json:"runtime_or_stack"`
-		ProjectRoot    string   `json:"project_root"`
-		TestFocus      string   `json:"test_focus"`
-		TestCommand    []string `json:"test_command"`
-		ExpectedFiles  []string `json:"expected_files"`
-		CoderTool      string   `json:"coder_tool"`
-		PatchTarget    string   `json:"patch_target"`
-		Patch          string   `json:"patch"`
-		WriteContent   string   `json:"write_content"`
-		CoderSummary   string   `json:"coder_summary"`
-		BenchmarkLeague string  `json:"benchmark_league"`
-		SequenceID     string   `json:"sequence_id"`
-		SequencePosition any    `json:"sequence_position"`
-		MemoryMode     string   `json:"benchmark_memory_mode"`
-		MemoryStrategy string   `json:"benchmark_memory_strategy"`
-		Language       string   `json:"language"`
-		Framework      string   `json:"framework"`
-		ProblemDomain  string   `json:"problem_domain"`
-		ErrorClass     string   `json:"error_class"`
-		FixPattern     string   `json:"fix_pattern"`
-		ValidationPattern string `json:"validation_pattern"`
+		ID                string   `json:"id"`
+		CaseType          string   `json:"case_type"`
+		RepoProfile       string   `json:"repo_profile"`
+		RepoURL           string   `json:"repo_url"`
+		DefaultBranch     string   `json:"default_branch"`
+		ProjectType       string   `json:"project_type"`
+		Runtime           string   `json:"runtime_or_stack"`
+		ProjectRoot       string   `json:"project_root"`
+		TestFocus         string   `json:"test_focus"`
+		TestCommand       []string `json:"test_command"`
+		ExpectedFiles     []string `json:"expected_files"`
+		CoderTool         string   `json:"coder_tool"`
+		PatchTarget       string   `json:"patch_target"`
+		Patch             string   `json:"patch"`
+		WriteContent      string   `json:"write_content"`
+		CoderSummary      string   `json:"coder_summary"`
+		BenchmarkLeague   string   `json:"benchmark_league"`
+		SequenceID        string   `json:"sequence_id"`
+		SequencePosition  any      `json:"sequence_position"`
+		MemoryMode        string   `json:"benchmark_memory_mode"`
+		MemoryStrategy    string   `json:"benchmark_memory_strategy"`
+		Language          string   `json:"language"`
+		Framework         string   `json:"framework"`
+		ProblemDomain     string   `json:"problem_domain"`
+		ErrorClass        string   `json:"error_class"`
+		FixPattern        string   `json:"fix_pattern"`
+		ValidationPattern string   `json:"validation_pattern"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return repoWorkflowProfile{}, false

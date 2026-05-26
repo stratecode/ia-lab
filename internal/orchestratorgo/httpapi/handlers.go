@@ -19,6 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
+	"github.com/stratecode/lab/internal/orchestratorgo/codeanalysis"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
 	"github.com/stratecode/lab/internal/orchestratorgo/contextbuilder"
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
@@ -106,6 +107,7 @@ func (s *Server) Router(auth *Authenticator) http.Handler {
 	})
 	r.Post("/tools/web/search", s.webSearch)
 	r.Post("/tools/web/fetch", s.webFetch)
+	r.Post("/tools/code/analyze", s.codeAnalyze)
 	r.Post("/tools/documents/read", s.documentRead)
 	r.Post("/tools/images/analyze", s.imageAnalyze)
 	r.Get("/tools/invocations/{invocationID}", s.getToolInvocation)
@@ -208,8 +210,8 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listCapabilities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"capabilities": []string{"web.search", "web.fetch", "document.read", "image.analyze", "research.query"},
-		"total":        5,
+		"capabilities": []string{"web.search", "web.fetch", "code.analysis", "document.read", "image.analyze", "research.query"},
+		"total":        6,
 	})
 }
 
@@ -881,6 +883,73 @@ func (s *Server) documentRead(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (s *Server) codeAnalyze(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		FilePath      string   `json:"file_path"`
+		AnalysisType  string   `json:"analysis_type"`
+		AnalysisTypes []string `json:"analysis_types"`
+		Language      string   `json:"language"`
+		TaskID        *string  `json:"task_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	body.FilePath = strings.TrimSpace(body.FilePath)
+	if body.FilePath == "" {
+		writeDetail(w, http.StatusBadRequest, "file_path is required")
+		return
+	}
+	resolved, rel, err := resolveAllowedLocalPath(body.FilePath, s.Config.AllowedLocalRoots)
+	if err != nil {
+		writeDetail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	analysisTypes := append([]string{}, body.AnalysisTypes...)
+	if strings.TrimSpace(body.AnalysisType) != "" {
+		analysisTypes = append(analysisTypes, strings.TrimSpace(body.AnalysisType))
+	}
+	result, err := codeanalysis.Analyze(resolved, analysisTypes)
+	if err != nil {
+		writeDetail(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	output := map[string]any{
+		"findings": result.Findings,
+		"summary":  result.Summary,
+		"path":     rel,
+		"language": strings.TrimSpace(body.Language),
+	}
+	capResult := &capabilities.Result{
+		Status:  "success",
+		Summary: fmt.Sprintf("Analyzed %s with %d finding(s)", rel, result.Summary.TotalFindings),
+		Output:  output,
+		Artifacts: []capabilities.Artifact{
+			{
+				ArtifactType: "code_analysis_report",
+				Title:        "Code analysis report",
+				MediaType:    "application/json",
+				ContentText:  truncateForAPI(mustJSON(output), 4000),
+				Metadata: map[string]any{
+					"path":           rel,
+					"analysis_types": analysisTypes,
+				},
+			},
+		},
+	}
+	response, err := s.persistCapabilityExecution(r.Context(), "api", body.TaskID, "code.analysis", map[string]any{
+		"file_path":      rel,
+		"analysis_type":  strings.TrimSpace(body.AnalysisType),
+		"analysis_types": analysisTypes,
+		"language":       strings.TrimSpace(body.Language),
+	}, capResult)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
 func (s *Server) imageAnalyze(w http.ResponseWriter, r *http.Request) {
 	if s.Capabilities == nil {
 		writeDetail(w, http.StatusServiceUnavailable, "image sidecar is not configured")
@@ -1354,6 +1423,41 @@ func truncateForAPI(text string, max int) string {
 		return text
 	}
 	return strings.TrimSpace(text[:max]) + "..."
+}
+
+func mustJSON(value any) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
+func resolveAllowedLocalPath(rawPath string, allowedRoots []string) (string, string, error) {
+	candidate, err := filepath.Abs(strings.TrimSpace(rawPath))
+	if err != nil {
+		return "", "", err
+	}
+	candidate = filepath.Clean(candidate)
+	for _, root := range allowedRoots {
+		root = strings.TrimSpace(root)
+		if root == "" {
+			continue
+		}
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		absRoot = filepath.Clean(absRoot)
+		rel, err := filepath.Rel(absRoot, candidate)
+		if err != nil {
+			continue
+		}
+		if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))) {
+			return candidate, filepath.ToSlash(rel), nil
+		}
+	}
+	return "", "", fmt.Errorf("path is outside allowed local roots")
 }
 
 func extractPrompt(messages []struct {

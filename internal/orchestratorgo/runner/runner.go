@@ -491,6 +491,11 @@ func buildBoilerplatePlan(task *domain.TaskResponse, metadata map[string]any) (R
 	researcherMetadata := map[string]any{
 		"project_request": projectRequest,
 		"workspace_root":  firstNonEmptyMetadata(metadata, "workspace_root"),
+		"allowed_capabilities": []string{
+			"web.search",
+			"web.fetch",
+			"document.read",
+		},
 		"tool_request": map[string]any{
 			"tool":            "research_project",
 			"project_request": projectRequest,
@@ -519,11 +524,15 @@ func buildBoilerplatePlan(task *domain.TaskResponse, metadata map[string]any) (R
 	reviewerMetadata := map[string]any{
 		"project_request": projectRequest,
 		"workspace_root":  firstNonEmptyMetadata(metadata, "workspace_root"),
+		"allowed_capabilities": []string{
+			"code.analysis",
+		},
 		"tool_request": map[string]any{
 			"tool":           "review_project",
 			"project_root":   projectRootRel,
 			"expected_files": expectedProjectFiles(projectType),
 			"test_command":   testCommand,
+			"analysis_types": []string{"dependencies", "security"},
 		},
 	}
 
@@ -634,6 +643,11 @@ func buildRepoWorkflowPlan(metadata map[string]any) (Result, bool) {
 	researcherMetadata := map[string]any{
 		"project_request": projectRequest,
 		"workspace_root":  workspaceRoot,
+		"allowed_capabilities": []string{
+			"web.search",
+			"web.fetch",
+			"document.read",
+		},
 		"tool_request": map[string]any{
 			"tool":            "research_project",
 			"project_request": projectRequest,
@@ -668,11 +682,15 @@ func buildRepoWorkflowPlan(metadata map[string]any) (Result, bool) {
 	reviewerMetadata := map[string]any{
 		"project_request": projectRequest,
 		"workspace_root":  workspaceRoot,
+		"allowed_capabilities": []string{
+			"code.analysis",
+		},
 		"tool_request": map[string]any{
 			"tool":           "review_project",
 			"project_root":   profile.projectRoot,
 			"expected_files": profile.expectedFiles,
 			"test_command":   profile.testCommand,
+			"analysis_types": []string{"dependencies", "security"},
 		},
 	}
 	applyRunnerBenchmarkMetadata(reviewerMetadata, profile)

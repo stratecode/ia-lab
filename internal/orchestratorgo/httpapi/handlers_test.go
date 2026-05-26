@@ -127,7 +127,7 @@ func TestListCapabilitiesIncludesDocumentAndImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	items, _ := payload["capabilities"].([]any)
-	if len(items) != 5 {
+	if len(items) != 6 {
 		t.Fatalf("unexpected capabilities payload: %#v", payload)
 	}
 }
