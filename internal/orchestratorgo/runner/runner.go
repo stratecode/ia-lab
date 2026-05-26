@@ -494,8 +494,10 @@ func buildBoilerplatePlan(task *domain.TaskResponse, metadata map[string]any) (R
 	projectRequest["expected_files"] = expectedProjectFiles(projectType)
 	projectRootRel := filepath.ToSlash(filepath.Join(parentDirectory, projectName))
 	researcherMetadata := map[string]any{
-		"project_request": projectRequest,
-		"workspace_root":  firstNonEmptyMetadata(metadata, "workspace_root"),
+		"project_request":           projectRequest,
+		"workspace_root":            firstNonEmptyMetadata(metadata, "workspace_root"),
+		"capability_intent":         "needs_external_evidence",
+		"preferred_capability_tags": []string{"evidence", "search", "docs"},
 		"allowed_capabilities": []string{
 			"web.search",
 			"web.fetch",
@@ -507,8 +509,10 @@ func buildBoilerplatePlan(task *domain.TaskResponse, metadata map[string]any) (R
 		},
 	}
 	coderMetadata := map[string]any{
-		"project_request": projectRequest,
-		"workspace_root":  firstNonEmptyMetadata(metadata, "workspace_root"),
+		"project_request":           projectRequest,
+		"workspace_root":            firstNonEmptyMetadata(metadata, "workspace_root"),
+		"capability_intent":         "needs_workspace_write",
+		"preferred_capability_tags": []string{"filesystem", "write", "workspace"},
 		"allowed_capabilities": []string{
 			"filesystem.write",
 		},
@@ -530,8 +534,10 @@ func buildBoilerplatePlan(task *domain.TaskResponse, metadata map[string]any) (R
 		},
 	}
 	reviewerMetadata := map[string]any{
-		"project_request": projectRequest,
-		"workspace_root":  firstNonEmptyMetadata(metadata, "workspace_root"),
+		"project_request":           projectRequest,
+		"workspace_root":            firstNonEmptyMetadata(metadata, "workspace_root"),
+		"capability_intent":         "needs_repo_static_analysis",
+		"preferred_capability_tags": []string{"review", "static-analysis", "code-quality", "validation"},
 		"allowed_capabilities": []string{
 			"code.analysis",
 		},
@@ -649,8 +655,10 @@ func buildRepoWorkflowPlan(metadata map[string]any) (Result, bool) {
 	}
 
 	researcherMetadata := map[string]any{
-		"project_request": projectRequest,
-		"workspace_root":  workspaceRoot,
+		"project_request":           projectRequest,
+		"workspace_root":            workspaceRoot,
+		"capability_intent":         "needs_external_evidence",
+		"preferred_capability_tags": []string{"evidence", "search", "docs"},
 		"allowed_capabilities": []string{
 			"web.search",
 			"web.fetch",
@@ -680,10 +688,12 @@ func buildRepoWorkflowPlan(metadata map[string]any) (Result, bool) {
 		coderToolRequest["content"] = profile.writeContent
 	}
 	coderMetadata := map[string]any{
-		"project_request":   projectRequest,
-		"workspace_root":    workspaceRoot,
-		"requires_approval": true,
-		"repo_workflow":     "repo_workflow_v1",
+		"project_request":           projectRequest,
+		"workspace_root":            workspaceRoot,
+		"requires_approval":         true,
+		"repo_workflow":             "repo_workflow_v1",
+		"capability_intent":         "needs_workspace_write",
+		"preferred_capability_tags": []string{"filesystem", "write", "workspace"},
 		"allowed_capabilities": []string{
 			"filesystem.write",
 		},
@@ -691,8 +701,10 @@ func buildRepoWorkflowPlan(metadata map[string]any) (Result, bool) {
 	}
 	applyRunnerBenchmarkMetadata(coderMetadata, profile)
 	reviewerMetadata := map[string]any{
-		"project_request": projectRequest,
-		"workspace_root":  workspaceRoot,
+		"project_request":           projectRequest,
+		"workspace_root":            workspaceRoot,
+		"capability_intent":         "needs_repo_static_analysis",
+		"preferred_capability_tags": []string{"review", "static-analysis", "code-quality", "validation"},
 		"allowed_capabilities": []string{
 			"code.analysis",
 		},

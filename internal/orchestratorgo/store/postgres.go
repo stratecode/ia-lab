@@ -909,6 +909,7 @@ type CreateToolInvocationParams struct {
 	Capability    string
 	InputPayload  map[string]any
 	OutputPayload map[string]any
+	Metadata      map[string]any
 	Status        string
 	DurationMS    int
 	SourceRefs    []domain.SourceRef
@@ -1089,6 +1090,10 @@ func (s *PostgresStore) CreateToolInvocation(ctx context.Context, params CreateT
 	if err != nil {
 		return "", err
 	}
+	metadataRaw, err := json.Marshal(nonNilMap(params.Metadata))
+	if err != nil {
+		return "", err
+	}
 	invocationID := uuid.NewString()
 	var taskID any
 	if params.TaskID != nil && strings.TrimSpace(*params.TaskID) != "" {
@@ -1101,11 +1106,11 @@ func (s *PostgresStore) CreateToolInvocation(ctx context.Context, params CreateT
 	if _, err := s.pool.Exec(ctx, `
 		INSERT INTO tool_invocations (
 			id, task_id, agent_type, entrypoint, capability, input_payload, output_payload,
-			status, duration_ms, source_refs, artifact_ids, error_message
+			status, duration_ms, source_refs, artifact_ids, error_message, metadata
 		) VALUES (
-			$1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12
+			$1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10::jsonb, $11::jsonb, $12, $13::jsonb
 		)
-	`, invocationID, taskID, agentType, params.Entrypoint, params.Capability, string(inputRaw), string(outputRaw), params.Status, params.DurationMS, string(sourceRaw), string(artifactRaw), params.ErrorMessage); err != nil {
+	`, invocationID, taskID, agentType, params.Entrypoint, params.Capability, string(inputRaw), string(outputRaw), params.Status, params.DurationMS, string(sourceRaw), string(artifactRaw), params.ErrorMessage, string(metadataRaw)); err != nil {
 		return "", err
 	}
 	return invocationID, nil
@@ -1148,21 +1153,24 @@ func (s *PostgresStore) CreateArtifact(ctx context.Context, params CreateArtifac
 
 func (s *PostgresStore) GetToolInvocation(ctx context.Context, invocationID string) (*domain.ToolInvocationResponse, error) {
 	row := s.pool.QueryRow(ctx, `
-		SELECT id::text, task_id::text, entrypoint, capability, status, duration_ms,
-		       output_payload, source_refs, artifact_ids, error_message, created_at
+		SELECT id::text, task_id::text, agent_type, entrypoint, capability, status, duration_ms,
+		       output_payload, source_refs, artifact_ids, error_message, metadata, created_at
 		FROM tool_invocations
 		WHERE id = $1
 	`, invocationID)
 	var (
 		item        domain.ToolInvocationResponse
 		taskID      *string
+		agentType   *string
 		outputRaw   []byte
 		sourceRaw   []byte
 		artifactRaw []byte
+		metadataRaw []byte
 	)
 	if err := row.Scan(
 		&item.ID,
 		&taskID,
+		&agentType,
 		&item.EntryPoint,
 		&item.Capability,
 		&item.Status,
@@ -1171,6 +1179,7 @@ func (s *PostgresStore) GetToolInvocation(ctx context.Context, invocationID stri
 		&sourceRaw,
 		&artifactRaw,
 		&item.ErrorMessage,
+		&metadataRaw,
 		&item.CreatedAt,
 	); err != nil {
 		if err == pgx.ErrNoRows {
@@ -1179,11 +1188,16 @@ func (s *PostgresStore) GetToolInvocation(ctx context.Context, invocationID stri
 		return nil, err
 	}
 	item.TaskID = taskID
+	item.AgentType = agentType
 	_ = json.Unmarshal(outputRaw, &item.Output)
 	_ = json.Unmarshal(sourceRaw, &item.SourceRefs)
 	_ = json.Unmarshal(artifactRaw, &item.ArtifactIDs)
+	_ = json.Unmarshal(metadataRaw, &item.Metadata)
 	if item.Output == nil {
 		item.Output = map[string]any{}
+	}
+	if item.Metadata == nil {
+		item.Metadata = map[string]any{}
 	}
 	summary := strings.TrimSpace(asString(item.Output["summary"]))
 	if summary == "" {

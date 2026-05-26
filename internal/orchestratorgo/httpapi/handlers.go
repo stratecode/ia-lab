@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
+	"github.com/stratecode/lab/internal/orchestratorgo/capabilitybroker"
 	"github.com/stratecode/lab/internal/orchestratorgo/codeanalysis"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
 	"github.com/stratecode/lab/internal/orchestratorgo/contextbuilder"
@@ -31,19 +32,20 @@ import (
 )
 
 type Server struct {
-	Config          config.Config
-	Postgres        *store.PostgresStore
-	Redis           *store.RedisStore
-	Research        *research.Service
-	Initiatives     *initiative.Service
-	Capabilities    *capabilities.Client
-	Semantic        *semantic.Service
-	SemanticIndexer *semantic.Indexer
-	ContextBuilder  *contextbuilder.Service
-	SafeMode        *SafeModeState
-	Now             func() time.Time
-	Version         string
-	OpenAIToolsID   string
+	Config           config.Config
+	Postgres         *store.PostgresStore
+	Redis            *store.RedisStore
+	Research         *research.Service
+	Initiatives      *initiative.Service
+	Capabilities     *capabilities.Client
+	CapabilityBroker *capabilitybroker.Broker
+	Semantic         *semantic.Service
+	SemanticIndexer  *semantic.Indexer
+	ContextBuilder   *contextbuilder.Service
+	SafeMode         *SafeModeState
+	Now              func() time.Time
+	Version          string
+	OpenAIToolsID    string
 }
 
 func (s *Server) Router(auth *Authenticator) http.Handler {
@@ -84,6 +86,11 @@ func (s *Server) Router(auth *Authenticator) http.Handler {
 	r.Post("/config/safe-mode", s.toggleSafeMode)
 	r.Post("/workspaces/cleanup", s.cleanupWorkspaces)
 	r.Get("/capabilities", s.listCapabilities)
+	r.Get("/capabilities/definitions", s.listCapabilityDefinitions)
+	r.Put("/capabilities/definitions/{name}", s.putCapabilityDefinition)
+	r.Post("/capabilities/execute", s.executeCapability)
+	r.Get("/projects/capabilities", s.getProjectCapabilities)
+	r.Put("/projects/capabilities", s.putProjectCapabilities)
 	r.Route("/semantic", func(r chi.Router) {
 		r.Post("/index", s.indexSemanticSource)
 		r.Post("/search", s.searchSemanticChunks)
@@ -211,10 +218,202 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listCapabilities(w http.ResponseWriter, r *http.Request) {
+	if s.CapabilityBroker == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"capabilities": []string{"web.search", "web.fetch", "filesystem.read", "filesystem.list", "filesystem.write", "code.analysis", "document.read", "image.analyze", "research.query"},
+			"total":        9,
+		})
+		return
+	}
+	repositoryURL := strings.TrimSpace(r.URL.Query().Get("repository_url"))
+	agentType := strings.TrimSpace(r.URL.Query().Get("agent_type"))
+	intent := strings.TrimSpace(r.URL.Query().Get("intent"))
+	preferredTags := splitCommaValues(r.URL.Query().Get("preferred_tags"))
+	items, policy, err := s.CapabilityBroker.ListAvailable(r.Context(), repositoryURL, agentType, intent, preferredTags)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"capabilities": []string{"web.search", "web.fetch", "filesystem.read", "filesystem.list", "filesystem.write", "code.analysis", "document.read", "image.analyze", "research.query"},
-		"total":        9,
+		"repository_url": repositoryURL,
+		"agent_type":     agentType,
+		"intent":         intent,
+		"policy":         policy,
+		"capabilities":   items,
+		"total":          len(items),
 	})
+}
+
+func (s *Server) listCapabilityDefinitions(w http.ResponseWriter, r *http.Request) {
+	if !requireOperatorScope(w, r) {
+		return
+	}
+	if s.CapabilityBroker == nil {
+		writeDetail(w, http.StatusServiceUnavailable, "capability broker is not configured")
+		return
+	}
+	items, err := s.CapabilityBroker.ListDefinitions(r.Context())
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"definitions": items, "total": len(items)})
+}
+
+func (s *Server) putCapabilityDefinition(w http.ResponseWriter, r *http.Request) {
+	if !requireOperatorScope(w, r) {
+		return
+	}
+	if s.Postgres == nil {
+		writeDetail(w, http.StatusServiceUnavailable, "postgres is not configured")
+		return
+	}
+	name := strings.TrimSpace(chi.URLParam(r, "name"))
+	var body domain.CapabilityDefinition
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	body.Name = firstNonEmptyString(name, strings.TrimSpace(body.Name))
+	if strings.TrimSpace(body.Name) == "" {
+		writeDetail(w, http.StatusBadRequest, "capability name is required")
+		return
+	}
+	record, err := s.Postgres.UpsertCapabilityDefinition(r.Context(), store.UpsertCapabilityDefinitionParams{
+		Name:                   body.Name,
+		Kind:                   body.Kind,
+		BackendRef:             body.BackendRef,
+		InputSchema:            body.InputSchema,
+		OutputSchema:           body.OutputSchema,
+		AuthorizedAgents:       body.AuthorizedAgents,
+		CapabilityTags:         body.CapabilityTags,
+		RiskClass:              body.RiskClass,
+		CostClass:              body.CostClass,
+		LatencyClass:           body.LatencyClass,
+		WorkspaceScopeRequired: body.WorkspaceScopeRequired,
+		DefaultPolicy:          body.DefaultPolicy,
+		Enabled:                body.Enabled,
+		Version:                body.Version,
+	})
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) getProjectCapabilities(w http.ResponseWriter, r *http.Request) {
+	if !requireOperatorScope(w, r) {
+		return
+	}
+	if s.CapabilityBroker == nil {
+		writeDetail(w, http.StatusServiceUnavailable, "capability broker is not configured")
+		return
+	}
+	repositoryURL := strings.TrimSpace(r.URL.Query().Get("repository_url"))
+	if repositoryURL == "" {
+		writeDetail(w, http.StatusBadRequest, "repository_url is required")
+		return
+	}
+	agentType := strings.TrimSpace(r.URL.Query().Get("agent_type"))
+	intent := strings.TrimSpace(r.URL.Query().Get("intent"))
+	preferredTags := splitCommaValues(r.URL.Query().Get("preferred_tags"))
+	items, policy, err := s.CapabilityBroker.ListAvailable(r.Context(), repositoryURL, agentType, intent, preferredTags)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	version := "default"
+	if policy != nil {
+		version = policy.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	mode := "discover_filter"
+	if policy != nil && strings.TrimSpace(policy.Mode) != "" {
+		mode = strings.TrimSpace(policy.Mode)
+	}
+	writeJSON(w, http.StatusOK, domain.EffectiveProjectCapabilitiesResponse{
+		RepositoryURL: repositoryURL,
+		Mode:          mode,
+		Version:       version,
+		Capabilities:  items,
+	})
+}
+
+func (s *Server) putProjectCapabilities(w http.ResponseWriter, r *http.Request) {
+	if !requireOperatorScope(w, r) {
+		return
+	}
+	if s.Postgres == nil {
+		writeDetail(w, http.StatusServiceUnavailable, "postgres is not configured")
+		return
+	}
+	var body domain.ProjectCapabilityPolicy
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	record, err := s.Postgres.UpsertProjectCapabilityPolicy(r.Context(), store.UpsertProjectCapabilityPolicyParams{
+		RepositoryURL:        body.RepositoryURL,
+		Mode:                 body.Mode,
+		EnabledCapabilities:  body.EnabledCapabilities,
+		DisabledCapabilities: body.DisabledCapabilities,
+		PolicyOverrides:      body.PolicyOverrides,
+		UpdatedBy:            authenticatedKeyName(r.Context()),
+	})
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
+func (s *Server) executeCapability(w http.ResponseWriter, r *http.Request) {
+	if !requireOperatorScope(w, r) {
+		return
+	}
+	if s.CapabilityBroker == nil {
+		writeDetail(w, http.StatusServiceUnavailable, "capability broker is not configured")
+		return
+	}
+	var body struct {
+		TaskID        *string        `json:"task_id"`
+		RepositoryURL string         `json:"repository_url"`
+		AgentType     string         `json:"agent_type"`
+		Intent        string         `json:"intent"`
+		Capability    string         `json:"capability"`
+		PreferredTags []string       `json:"preferred_tags"`
+		Payload       map[string]any `json:"payload"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(body.AgentType) == "" {
+		writeDetail(w, http.StatusBadRequest, "agent_type is required")
+		return
+	}
+	result, policy, err := s.CapabilityBroker.Execute(r.Context(), capabilitybroker.ExecuteRequest{
+		TaskID:        body.TaskID,
+		AgentType:     strings.TrimSpace(body.AgentType),
+		RepositoryURL: strings.TrimSpace(body.RepositoryURL),
+		Intent:        strings.TrimSpace(body.Intent),
+		Capability:    strings.TrimSpace(body.Capability),
+		Input:         nonNilMap(body.Payload),
+	}, body.PreferredTags)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, capabilitybroker.ErrCapabilityNotAllowed) {
+			status = http.StatusForbidden
+		}
+		writeDetail(w, status, err.Error())
+		return
+	}
+	response, err := s.persistCapabilityExecutionDetailed(r.Context(), "broker", body.TaskID, &body.AgentType, result.Candidate, body.RepositoryURL, body.Intent, policy, nonNilMap(body.Payload), result.Result)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
@@ -754,6 +953,263 @@ func (s *Server) cleanupWorkspaces(w http.ResponseWriter, r *http.Request) {
 		RetentionHours: s.Config.WorkspaceRetentionHours,
 		Message:        fmt.Sprintf("Cleaned %d workspace(s) older than %dh", cleanedCount, s.Config.WorkspaceRetentionHours),
 	})
+}
+
+func (s *Server) ExecuteInternalCapability(ctx context.Context, req capabilitybroker.ExecuteRequest) (*capabilities.Result, error) {
+	switch strings.TrimSpace(req.Capability) {
+	case "web.search":
+		return s.executeWebSearchCapability(ctx, req.Input)
+	case "web.fetch":
+		return s.executeWebFetchCapability(ctx, req.Input)
+	case "document.read":
+		return s.executeDocumentReadCapability(ctx, req.Input)
+	case "image.analyze":
+		return s.executeImageAnalyzeCapability(ctx, req.Input)
+	case "code.analysis":
+		return s.executeCodeAnalyzeCapability(ctx, req.Input)
+	case "filesystem.read", "filesystem.list", "filesystem.write":
+		return s.executeFilesystemCapability(ctx, req.Capability, req.Input)
+	case "research.query":
+		return s.executeResearchQueryCapability(ctx, req.Input)
+	default:
+		return nil, fmt.Errorf("unsupported capability %s", req.Capability)
+	}
+}
+
+func (s *Server) executeWebSearchCapability(ctx context.Context, input map[string]any) (*capabilities.Result, error) {
+	query := strings.TrimSpace(asString(input["query"]))
+	if query == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	results, err := s.Research.WebSearch(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	sourceRefs := make([]capabilities.SourceRef, 0, len(results))
+	for _, item := range results {
+		sourceRefs = append(sourceRefs, capabilities.SourceRef{Title: item.Title, URI: item.URL, Kind: "search"})
+	}
+	return &capabilities.Result{
+		Status:     "success",
+		Summary:    fmt.Sprintf("Found %d search result(s)", len(results)),
+		Output:     map[string]any{"query": query, "results": results, "total": len(results)},
+		SourceRefs: sourceRefs,
+	}, nil
+}
+
+func (s *Server) executeWebFetchCapability(ctx context.Context, input map[string]any) (*capabilities.Result, error) {
+	url := strings.TrimSpace(asString(input["url"]))
+	if url == "" {
+		return nil, fmt.Errorf("url is required")
+	}
+	source, content, err := s.Research.WebFetch(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	return &capabilities.Result{
+		Status:  "success",
+		Summary: fmt.Sprintf("Fetched %s", source.URI),
+		Output: map[string]any{
+			"source":       source,
+			"summary":      truncateForAPI(content, 700),
+			"content_text": truncateForAPI(content, 4000),
+		},
+		SourceRefs: []capabilities.SourceRef{{Title: source.Title, URI: source.URI, Kind: source.Kind}},
+		Artifacts: []capabilities.Artifact{{
+			ArtifactType: "web_page",
+			Title:        source.Title,
+			URI:          source.URI,
+			MediaType:    "text/html",
+			ContentText:  truncateForAPI(content, 4000),
+			Metadata:     map[string]any{"kind": source.Kind},
+		}},
+	}, nil
+}
+
+func (s *Server) executeDocumentReadCapability(ctx context.Context, input map[string]any) (*capabilities.Result, error) {
+	if s.Capabilities == nil {
+		return nil, fmt.Errorf("document sidecar is not configured")
+	}
+	location := strings.TrimSpace(asString(input["location"]))
+	if location == "" {
+		return nil, fmt.Errorf("location is required")
+	}
+	return s.Capabilities.ReadDocument(ctx, location)
+}
+
+func (s *Server) executeImageAnalyzeCapability(ctx context.Context, input map[string]any) (*capabilities.Result, error) {
+	if s.Capabilities == nil {
+		return nil, fmt.Errorf("image sidecar is not configured")
+	}
+	location := strings.TrimSpace(asString(input["location"]))
+	if location == "" {
+		return nil, fmt.Errorf("location is required")
+	}
+	return s.Capabilities.AnalyzeImage(ctx, location)
+}
+
+func (s *Server) executeCodeAnalyzeCapability(ctx context.Context, input map[string]any) (*capabilities.Result, error) {
+	filePath := strings.TrimSpace(asString(input["file_path"]))
+	if filePath == "" {
+		return nil, fmt.Errorf("file_path is required")
+	}
+	resolved, rel, err := resolveAllowedLocalPath(filePath, s.Config.AllowedLocalRoots)
+	if err != nil {
+		return nil, err
+	}
+	analysisTypes := asStringSlice(input["analysis_types"])
+	if value := strings.TrimSpace(asString(input["analysis_type"])); value != "" {
+		analysisTypes = append(analysisTypes, value)
+	}
+	result, err := codeanalysis.Analyze(resolved, analysisTypes)
+	if err != nil {
+		return nil, err
+	}
+	output := map[string]any{
+		"findings": result.Findings,
+		"summary":  result.Summary,
+		"path":     rel,
+		"language": strings.TrimSpace(asString(input["language"])),
+	}
+	return &capabilities.Result{
+		Status:  "success",
+		Summary: fmt.Sprintf("Analyzed %s with %d finding(s)", rel, result.Summary.TotalFindings),
+		Output:  output,
+		Artifacts: []capabilities.Artifact{{
+			ArtifactType: "code_analysis_report",
+			Title:        "Code analysis report",
+			MediaType:    "application/json",
+			ContentText:  truncateForAPI(mustJSON(output), 4000),
+			Metadata:     map[string]any{"path": rel, "analysis_types": analysisTypes},
+		}},
+	}, nil
+}
+
+func (s *Server) executeFilesystemCapability(ctx context.Context, capabilityName string, input map[string]any) (*capabilities.Result, error) {
+	_ = ctx
+	operation := strings.TrimSpace(strings.TrimPrefix(capabilityName, "filesystem."))
+	if value := strings.ToLower(strings.TrimSpace(asString(input["operation"]))); value != "" {
+		operation = value
+	}
+	rawPath := strings.TrimSpace(asString(input["path"]))
+	if operation == "" || rawPath == "" {
+		return nil, fmt.Errorf("operation and path are required")
+	}
+	resolved, rel, err := resolveAllowedLocalPath(rawPath, s.Config.AllowedLocalRoots)
+	if err != nil {
+		return nil, err
+	}
+	switch operation {
+	case "read":
+		raw, err := os.ReadFile(resolved)
+		if err != nil {
+			return nil, err
+		}
+		text := string(raw)
+		return &capabilities.Result{
+			Status:  "success",
+			Summary: fmt.Sprintf("Read %s", rel),
+			Output:  map[string]any{"path": rel, "content": truncateForAPI(text, 4000)},
+			Artifacts: []capabilities.Artifact{{
+				ArtifactType: "filesystem_read",
+				Title:        "Filesystem read result",
+				MediaType:    "text/plain",
+				ContentText:  truncateForAPI(text, 4000),
+				Metadata:     map[string]any{"path": rel},
+			}},
+		}, nil
+	case "list":
+		info, err := os.Stat(resolved)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("list operation requires a directory path")
+		}
+		pattern := firstNonEmptyString(strings.TrimSpace(asString(input["pattern"])), "*")
+		items := make([]string, 0)
+		err = filepath.Walk(resolved, func(current string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if info.IsDir() {
+				return nil
+			}
+			matched, matchErr := filepath.Match(pattern, filepath.Base(current))
+			if matchErr != nil {
+				return matchErr
+			}
+			if !matched {
+				return nil
+			}
+			itemRel, err := filepath.Rel(resolved, current)
+			if err != nil {
+				return err
+			}
+			items = append(items, filepath.ToSlash(itemRel))
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		slices.Sort(items)
+		payload := map[string]any{"path": rel, "items": items}
+		return &capabilities.Result{
+			Status:  "success",
+			Summary: fmt.Sprintf("Listed %d file(s) under %s", len(items), rel),
+			Output:  payload,
+			Artifacts: []capabilities.Artifact{{
+				ArtifactType: "filesystem_list",
+				Title:        "Filesystem list result",
+				MediaType:    "application/json",
+				ContentText:  truncateForAPI(mustJSON(payload), 4000),
+				Metadata:     map[string]any{"path": rel, "pattern": pattern},
+			}},
+		}, nil
+	case "write":
+		content := asString(input["content"])
+		if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(resolved, []byte(content), 0o644); err != nil {
+			return nil, err
+		}
+		return &capabilities.Result{
+			Status:  "success",
+			Summary: fmt.Sprintf("Wrote %s", rel),
+			Output:  map[string]any{"path": rel},
+			Artifacts: []capabilities.Artifact{{
+				ArtifactType: "filesystem_write",
+				Title:        "Filesystem write result",
+				MediaType:    "text/plain",
+				ContentText:  truncateForAPI(content, 4000),
+				Metadata:     map[string]any{"path": rel},
+			}},
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported filesystem operation")
+	}
+}
+
+func (s *Server) executeResearchQueryCapability(ctx context.Context, input map[string]any) (*capabilities.Result, error) {
+	query := strings.TrimSpace(asString(input["query"]))
+	if query == "" {
+		return nil, fmt.Errorf("query is required")
+	}
+	response, err := s.Research.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	return &capabilities.Result{
+		Status:  "success",
+		Summary: response.Answer,
+		Output: map[string]any{
+			"answer":     response.Answer,
+			"intent":     response.Intent,
+			"confidence": response.Confidence,
+		},
+		SourceRefs: sourceRefsFromResearch(response.Sources),
+	}, nil
 }
 
 func (s *Server) webSearch(w http.ResponseWriter, r *http.Request) {
@@ -1985,6 +2441,107 @@ func stringPtr(value string) *string {
 	return &v
 }
 
+func normalizedStringPtr(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	return stringPtr(strings.TrimSpace(*value))
+}
+
+func authenticatedKeyName(ctx context.Context) *string {
+	record, _ := ctx.Value(authenticatedKeyContextKey).(*domain.APIKeyRecord)
+	if record == nil {
+		return nil
+	}
+	return stringPtr(record.Name)
+}
+
+func requireOperatorScope(w http.ResponseWriter, r *http.Request) bool {
+	record, _ := r.Context().Value(authenticatedKeyContextKey).(*domain.APIKeyRecord)
+	if record == nil {
+		writeDetail(w, http.StatusUnauthorized, "authentication is required")
+		return false
+	}
+	if record.Scope != domain.ScopeAdmin && record.Scope != domain.ScopeOperator {
+		writeDetail(w, http.StatusForbidden, "operator or admin scope is required")
+		return false
+	}
+	return true
+}
+
+func splitCommaValues(raw string) []string {
+	parts := strings.Split(raw, ",")
+	items := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if value := strings.TrimSpace(part); value != "" {
+			items = append(items, value)
+		}
+	}
+	return items
+}
+
+func asStringSlice(input any) []string {
+	switch raw := input.(type) {
+	case []string:
+		return append([]string{}, raw...)
+	case []any:
+		items := make([]string, 0, len(raw))
+		for _, item := range raw {
+			if value := strings.TrimSpace(asString(item)); value != "" {
+				items = append(items, value)
+			}
+		}
+		return items
+	default:
+		return nil
+	}
+}
+
+func summarizeInvocationMap(input map[string]any) string {
+	if len(input) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(input))
+	for key, value := range input {
+		text := strings.TrimSpace(asString(value))
+		if text == "" {
+			switch typed := value.(type) {
+			case []string:
+				text = strings.Join(typed, ",")
+			case []any:
+				text = fmt.Sprintf("%d item(s)", len(typed))
+			case map[string]any:
+				text = fmt.Sprintf("%d field(s)", len(typed))
+			}
+		}
+		if text == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s", key, truncateForAPI(text, 80)))
+	}
+	slices.Sort(parts)
+	return strings.Join(parts, "; ")
+}
+
+func sourceRefsFromResearch(items []research.Source) []capabilities.SourceRef {
+	result := make([]capabilities.SourceRef, 0, len(items))
+	for _, item := range items {
+		result = append(result, capabilities.SourceRef{
+			Title: item.Title,
+			URI:   item.URI,
+			Kind:  item.Kind,
+		})
+	}
+	return result
+}
+
+func nonNilMap(input map[string]any) map[string]any {
+	if input == nil {
+		return map[string]any{}
+	}
+	return input
+}
+
 func (s *Server) persistResearchArtifacts(ctx context.Context, entrypoint string, taskID *string, query string, result research.Result) ([]string, []string, error) {
 	sourceRefs := make([]domain.SourceRef, 0, len(result.Sources))
 	for _, src := range result.Sources {
@@ -2030,6 +2587,15 @@ func (s *Server) persistResearchArtifacts(ctx context.Context, entrypoint string
 }
 
 func (s *Server) persistCapabilityExecution(ctx context.Context, entrypoint string, taskID *string, capability string, inputPayload map[string]any, result *capabilities.Result) (map[string]any, error) {
+	return s.persistCapabilityExecutionDetailed(ctx, entrypoint, taskID, nil, domain.CapabilityCandidate{
+		Name:       capability,
+		BackendRef: capability,
+		Kind:       "internal",
+		Definition: domain.CapabilityDefinition{Name: capability, BackendRef: capability, Kind: "internal"},
+	}, "", "", nil, inputPayload, result)
+}
+
+func (s *Server) persistCapabilityExecutionDetailed(ctx context.Context, entrypoint string, taskID *string, agentType *string, candidate domain.CapabilityCandidate, repositoryURL, intent string, policy *domain.ProjectCapabilityPolicy, inputPayload map[string]any, result *capabilities.Result) (map[string]any, error) {
 	sourceRefs := make([]domain.SourceRef, 0, len(result.SourceRefs))
 	for _, item := range result.SourceRefs {
 		sourceRefs = append(sourceRefs, domain.SourceRef{
@@ -2048,12 +2614,29 @@ func (s *Server) persistCapabilityExecution(ctx context.Context, entrypoint stri
 			"artifacts":    result.Artifacts,
 		}, nil
 	}
+	metadata := map[string]any{
+		"capability_name":        candidate.Name,
+		"backend_kind":           firstNonEmptyString(candidate.Kind, candidate.Definition.Kind, "internal"),
+		"backend_ref":            firstNonEmptyString(candidate.BackendRef, candidate.Definition.BackendRef, candidate.Name),
+		"repository_url":         strings.TrimSpace(repositoryURL),
+		"intent":                 strings.TrimSpace(intent),
+		"input_summary":          summarizeInvocationMap(inputPayload),
+		"result_summary":         strings.TrimSpace(result.Summary),
+		"project_policy_mode":    "default",
+		"project_policy_version": "default",
+	}
+	if policy != nil {
+		metadata["project_policy_mode"] = firstNonEmptyString(policy.Mode, "discover_filter")
+		metadata["project_policy_version"] = policy.UpdatedAt.UTC().Format(time.RFC3339)
+	}
 	invocationID, err := s.Postgres.CreateToolInvocation(ctx, store.CreateToolInvocationParams{
 		TaskID:        taskID,
+		AgentType:     normalizedStringPtr(agentType),
 		Entrypoint:    entrypoint,
-		Capability:    capability,
+		Capability:    candidate.Name,
 		InputPayload:  inputPayload,
 		OutputPayload: map[string]any{"summary": result.Summary, "status": result.Status, "output": result.Output},
+		Metadata:      metadata,
 		Status:        result.Status,
 		DurationMS:    0,
 		SourceRefs:    sourceRefs,

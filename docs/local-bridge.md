@@ -11,6 +11,12 @@ The bridge is intentionally narrow:
 - it executes only allowed local tools
 - it persists results and artifacts back into the orchestrator
 
+The bridge is not the MCP registry.
+
+- capability definitions and project policies live on the server
+- the bridge only enforces the `allowed_capabilities` it receives with the task
+- if the server disables `filesystem.write` for a project, the bridge does not get to improvise a constitutional amendment
+
 No shell free-for-all. No arbitrary filesystem traversal. No fake autonomy with a loaded shotgun.
 
 ## Components
@@ -29,6 +35,9 @@ Supported local tools:
 | `read_file` | Read one file inside the registered workspace |
 | `list_files` | List files from a workspace-relative path |
 | `write_file` | Create or replace a file inside the workspace |
+| `filesystem.read` | Governed alias for file read inside the workspace |
+| `filesystem.list` | Governed alias for workspace file listing |
+| `filesystem.write` | Governed alias for file write inside the workspace |
 | `research_project` | Produce structured project constraints and validation context |
 | `scaffold_project` | Create a small test project boilerplate inside the workspace |
 | `review_project` | Validate the generated project structure and test command |
@@ -58,6 +67,7 @@ Allowed command prefixes for `run_command` and `run_tests`:
 - commands outside the allowlist
 - local tasks without `metadata.tool_request`
 - approval-gated tools before an approval is granted
+- capability aliases not present in `metadata.allowed_capabilities`
 
 ## Installation
 

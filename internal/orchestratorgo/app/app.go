@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
+	"github.com/stratecode/lab/internal/orchestratorgo/capabilitybroker"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
 	"github.com/stratecode/lab/internal/orchestratorgo/contextbuilder"
 	"github.com/stratecode/lab/internal/orchestratorgo/httpapi"
@@ -89,6 +90,32 @@ func New() (*Runtime, error) {
 		Now:             time.Now,
 		Version:         "0.1.0-go-runtime",
 		OpenAIToolsID:   cfg.OpenAIToolsModelID,
+	}
+	broker := capabilitybroker.New(capabilitybroker.Options{
+		Store: postgres,
+		Now:   time.Now,
+	})
+	for _, name := range []string{
+		"web.search",
+		"web.fetch",
+		"document.read",
+		"image.analyze",
+		"code.analysis",
+		"filesystem.read",
+		"filesystem.list",
+		"filesystem.write",
+		"research.query",
+	} {
+		capabilityName := name
+		broker.RegisterBackend(capabilityName, func(ctx context.Context, req capabilitybroker.ExecuteRequest) (*capabilities.Result, error) {
+			return server.ExecuteInternalCapability(ctx, req)
+		})
+	}
+	server.CapabilityBroker = broker
+	if err := broker.EnsureDefaults(ctx); err != nil {
+		_ = redisStore.Close()
+		postgres.Close()
+		return nil, err
 	}
 	auth := httpapi.NewAuthenticator(
 		postgres,

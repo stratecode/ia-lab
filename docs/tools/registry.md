@@ -6,6 +6,16 @@ Centralized registry of all internal and external tools available to platform ag
 
 The tool registry enforces a deny-by-default access model: agents may only invoke tools explicitly listed in their `authorized_agents` allow-list. Any invocation attempt against an unauthorized or non-existent tool is denied and emits a security violation System_Event.
 
+As of the current runtime, this is no longer only a design note. The registry is persisted in PostgreSQL and filtered at runtime by:
+
+- global capability definition
+- `repository_url` project policy
+- agent type
+- capability intent
+- allowed risk surface
+
+The intended selection model is `discover + filter`, not `LLM vibes + prayer`.
+
 Tools are classified as:
 
 - **Internal** — platform-native capabilities (filesystem, shell, docker, git)
@@ -79,6 +89,7 @@ tool:
 - `planner` can use `web.search`, `web.fetch`, and `document.read` when explicitly allowlisted.
 - `coder` consumes artifacts/context but does not gain general shell access through this router.
 - Results are persisted as invocation records plus artifacts and can be queried later through the API.
+- project-specific enable/disable and override policy is applied server-side before execution.
 
 ### filesystem
 

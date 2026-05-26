@@ -202,6 +202,7 @@ type SourceRef struct {
 type ToolInvocationResponse struct {
 	ID           string         `json:"id"`
 	TaskID       *string        `json:"task_id"`
+	AgentType    *string        `json:"agent_type,omitempty"`
 	EntryPoint   string         `json:"entrypoint"`
 	Capability   string         `json:"capability"`
 	Status       string         `json:"status"`
@@ -211,18 +212,19 @@ type ToolInvocationResponse struct {
 	SourceRefs   []SourceRef    `json:"source_refs"`
 	ArtifactIDs  []string       `json:"artifact_ids"`
 	ErrorMessage *string        `json:"error_message"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
 	CreatedAt    time.Time      `json:"created_at"`
 }
 
 type ArtifactResponse struct {
-	ID          string         `json:"id"`
-	ArtifactType string        `json:"artifact_type"`
-	Title       *string        `json:"title"`
-	URI         *string        `json:"uri"`
-	MediaType   *string        `json:"media_type"`
-	ContentText *string        `json:"content_text"`
-	Metadata    map[string]any `json:"metadata"`
-	CreatedAt   time.Time      `json:"created_at"`
+	ID           string         `json:"id"`
+	ArtifactType string         `json:"artifact_type"`
+	Title        *string        `json:"title"`
+	URI          *string        `json:"uri"`
+	MediaType    *string        `json:"media_type"`
+	ContentText  *string        `json:"content_text"`
+	Metadata     map[string]any `json:"metadata"`
+	CreatedAt    time.Time      `json:"created_at"`
 }
 
 type WorkerInfo struct {

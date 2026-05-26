@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,9 +13,31 @@ import (
 	"time"
 
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
+	"github.com/stratecode/lab/internal/orchestratorgo/capabilitybroker"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 )
+
+type capabilityTestStore struct {
+	definitions []domain.CapabilityDefinition
+	policies    map[string]*domain.ProjectCapabilityPolicy
+}
+
+func (m *capabilityTestStore) EnsureDefaultCapabilityDefinitions(_ context.Context, definitions []domain.CapabilityDefinition) error {
+	m.definitions = append([]domain.CapabilityDefinition{}, definitions...)
+	return nil
+}
+
+func (m *capabilityTestStore) ListCapabilityDefinitions(_ context.Context) ([]domain.CapabilityDefinition, error) {
+	return append([]domain.CapabilityDefinition{}, m.definitions...), nil
+}
+
+func (m *capabilityTestStore) GetProjectCapabilityPolicy(_ context.Context, repositoryURL string) (*domain.ProjectCapabilityPolicy, error) {
+	if m.policies == nil {
+		return nil, nil
+	}
+	return m.policies[repositoryURL], nil
+}
 
 func TestListModelsMatchesGoldenShape(t *testing.T) {
 	server := &Server{
@@ -129,6 +152,71 @@ func TestListCapabilitiesIncludesDocumentAndImage(t *testing.T) {
 	items, _ := payload["capabilities"].([]any)
 	if len(items) != 9 {
 		t.Fatalf("unexpected capabilities payload: %#v", payload)
+	}
+}
+
+func TestListCapabilitiesUsesDynamicBroker(t *testing.T) {
+	store := &capabilityTestStore{definitions: capabilitybroker.DefaultDefinitions()}
+	server := &Server{
+		CapabilityBroker: capabilitybroker.New(capabilitybroker.Options{Store: store}),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/capabilities?repository_url=https://github.com/example/repo&agent_type=reviewer&intent=needs_repo_static_analysis", nil)
+	rec := httptest.NewRecorder()
+
+	server.listCapabilities(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := payload["capabilities"].([]any)
+	if len(items) == 0 {
+		t.Fatalf("expected broker-backed capabilities, got %#v", payload)
+	}
+	first := items[0].(map[string]any)
+	if first["name"] != "code.analysis" {
+		t.Fatalf("expected code.analysis first, got %#v", first)
+	}
+}
+
+func TestGetProjectCapabilitiesRequiresOperatorAndReturnsEffectivePolicy(t *testing.T) {
+	store := &capabilityTestStore{
+		definitions: capabilitybroker.DefaultDefinitions(),
+		policies: map[string]*domain.ProjectCapabilityPolicy{
+			"https://github.com/example/repo": {
+				RepositoryURL:        "https://github.com/example/repo",
+				Mode:                 "discover_filter",
+				DisabledCapabilities: []string{"web.search"},
+				UpdatedAt:            time.Date(2026, 5, 26, 8, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+	server := &Server{
+		CapabilityBroker: capabilitybroker.New(capabilitybroker.Options{Store: store}),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/projects/capabilities?repository_url=https://github.com/example/repo&agent_type=researcher&intent=needs_external_evidence", nil)
+	req = req.WithContext(context.WithValue(req.Context(), authenticatedKeyContextKey, &domain.APIKeyRecord{Name: "operator", Scope: domain.ScopeOperator}))
+	rec := httptest.NewRecorder()
+
+	server.getProjectCapabilities(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	var payload domain.EffectiveProjectCapabilitiesResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.RepositoryURL != "https://github.com/example/repo" {
+		t.Fatalf("unexpected repository_url: %#v", payload)
+	}
+	for _, item := range payload.Capabilities {
+		if item.Name == "web.search" {
+			t.Fatalf("expected project policy to filter web.search, got %#v", payload.Capabilities)
+		}
 	}
 }
 

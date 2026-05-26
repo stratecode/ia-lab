@@ -27,6 +27,11 @@ The Go runtime covers the compatibility base and the first write-oriented lifecy
 - `POST /bridges/{bridge_id}/claim-next`
 - `POST /bridges/{bridge_id}/tasks/{task_id}/result`
 - `GET /capabilities`
+- `GET /capabilities/definitions`
+- `PUT /capabilities/definitions/{name}`
+- `GET /projects/capabilities`
+- `PUT /projects/capabilities`
+- `POST /capabilities/execute`
 - `POST /tools/web/search`
 - `POST /tools/web/fetch`
 - `POST /tools/filesystem`
@@ -67,11 +72,19 @@ Current write support is intentionally narrow:
 - `coder` tasks marked with `metadata.requires_approval=true` request approval once, pause in `waiting_approval`, and resume after approval.
 - `web.fetch` now fetches and strips HTML content in the Go core.
 - `code.analysis` now provides governed repository analysis findings for reviewer-grade validation without handing arbitrary filesystem write access to agents.
+- capabilities now live in a PostgreSQL-backed registry plus a project-scoped policy layer keyed by `repository_url`.
+- the runtime now resolves MCP-style capability usage through `discover + filter` instead of hardcoding every future integration path directly into `GET /capabilities`.
 - governed filesystem capability aliases now exist for agent workflows:
   - `filesystem.read`
   - `filesystem.list`
   - `filesystem.write`
 - `POST /tools/filesystem` now exposes the same workspace-scoped discipline for operator/API flows under allowed local roots.
+- `POST /capabilities/execute` now routes brokered capability execution with normalized tracing metadata:
+  - `backend_kind`
+  - `backend_ref`
+  - `repository_url`
+  - `intent`
+  - `project_policy_version`
 - `document.read` and `image.analyze` now run through HTTP sidecars so the Go core stops swallowing PDF/DOCX/OCR complexity whole.
 - `execution_target=local` is now serviced by Go binaries:
   - `lab-agent`

@@ -519,9 +519,11 @@ func fallbackRepoExecutionPlan(initiative *domain.InitiativeResponse, design map
 		projectRequest["benchmark_memory_strategy"] = profile.benchmarkMemoryPolicy
 	}
 	researchMetadata := map[string]any{
-		"initiative_goal": goal,
-		"project_request": projectRequest,
-		"workspace_root":  initiative.WorkspaceRoot,
+		"initiative_goal":           goal,
+		"project_request":           projectRequest,
+		"workspace_root":            initiative.WorkspaceRoot,
+		"capability_intent":         "needs_external_evidence",
+		"preferred_capability_tags": []string{"evidence", "search", "docs"},
 		"allowed_capabilities": []string{
 			"web.search",
 			"web.fetch",
@@ -550,9 +552,11 @@ func fallbackRepoExecutionPlan(initiative *domain.InitiativeResponse, design map
 		coderToolRequest["path"] = profile.patchTarget
 	}
 	coderMetadata := map[string]any{
-		"project_request":   projectRequest,
-		"workspace_root":    initiative.WorkspaceRoot,
-		"requires_approval": true,
+		"project_request":           projectRequest,
+		"workspace_root":            initiative.WorkspaceRoot,
+		"requires_approval":         true,
+		"capability_intent":         "needs_workspace_write",
+		"preferred_capability_tags": []string{"filesystem", "write", "workspace"},
 		"allowed_capabilities": []string{
 			"filesystem.write",
 		},
@@ -563,8 +567,10 @@ func fallbackRepoExecutionPlan(initiative *domain.InitiativeResponse, design map
 	applyBenchmarkMetadata(researchMetadata, profile)
 	applyBenchmarkMetadata(coderMetadata, profile)
 	reviewerMetadata := map[string]any{
-		"project_request": projectRequest,
-		"workspace_root":  initiative.WorkspaceRoot,
+		"project_request":           projectRequest,
+		"workspace_root":            initiative.WorkspaceRoot,
+		"capability_intent":         "needs_repo_static_analysis",
+		"preferred_capability_tags": []string{"review", "static-analysis", "code-quality", "validation"},
 		"allowed_capabilities": []string{
 			"code.analysis",
 		},
