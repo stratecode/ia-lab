@@ -499,6 +499,7 @@ func buildBoilerplatePlan(task *domain.TaskResponse, metadata map[string]any) (R
 		"capability_intent":         "needs_external_evidence",
 		"preferred_capability_tags": []string{"evidence", "search", "docs"},
 		"allowed_capabilities": []string{
+			"filesystem.read",
 			"web.search",
 			"web.fetch",
 			"document.read",
@@ -539,6 +540,7 @@ func buildBoilerplatePlan(task *domain.TaskResponse, metadata map[string]any) (R
 		"capability_intent":         "needs_repo_static_analysis",
 		"preferred_capability_tags": []string{"review", "static-analysis", "code-quality", "validation"},
 		"allowed_capabilities": []string{
+			"filesystem.read",
 			"code.analysis",
 		},
 		"tool_request": map[string]any{
@@ -660,6 +662,7 @@ func buildRepoWorkflowPlan(metadata map[string]any) (Result, bool) {
 		"capability_intent":         "needs_external_evidence",
 		"preferred_capability_tags": []string{"evidence", "search", "docs"},
 		"allowed_capabilities": []string{
+			"filesystem.read",
 			"web.search",
 			"web.fetch",
 			"document.read",
@@ -706,6 +709,7 @@ func buildRepoWorkflowPlan(metadata map[string]any) (Result, bool) {
 		"capability_intent":         "needs_repo_static_analysis",
 		"preferred_capability_tags": []string{"review", "static-analysis", "code-quality", "validation"},
 		"allowed_capabilities": []string{
+			"filesystem.read",
 			"code.analysis",
 		},
 		"tool_request": map[string]any{

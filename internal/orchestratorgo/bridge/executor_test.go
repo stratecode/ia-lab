@@ -306,6 +306,12 @@ func TestWorkspaceExecutorResearchAndReviewProject(t *testing.T) {
 	if researchResult.Status != "success" || len(researchResult.Artifacts) == 0 {
 		t.Fatalf("unexpected research result: %#v", researchResult)
 	}
+	if len(researchResult.CapabilityUsage) == 0 {
+		t.Fatalf("expected capability usage for research, got %#v", researchResult)
+	}
+	if len(researchResult.CapabilityHelped) == 0 || researchResult.CapabilityHelped[0] != "filesystem.read" {
+		t.Fatalf("expected filesystem.read helped for research, got %#v", researchResult.CapabilityHelped)
+	}
 
 	reviewResult, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
 		Metadata: map[string]any{
@@ -337,6 +343,12 @@ func TestWorkspaceExecutorResearchAndReviewProject(t *testing.T) {
 	if !foundAnalysis {
 		t.Fatalf("expected code analysis artifact, got %#v", reviewResult.Artifacts)
 	}
+	if len(reviewResult.CapabilityUsage) < 2 {
+		t.Fatalf("expected multiple capability usage entries for review, got %#v", reviewResult.CapabilityUsage)
+	}
+	if !strings.Contains(strings.Join(reviewResult.CapabilityHelped, ","), "filesystem.read") || !strings.Contains(strings.Join(reviewResult.CapabilityHelped, ","), "code.analysis") {
+		t.Fatalf("expected filesystem.read and code.analysis helped for review, got %#v", reviewResult.CapabilityHelped)
+	}
 }
 
 func TestWorkspaceExecutorCodeAnalysis(t *testing.T) {
@@ -365,6 +377,12 @@ func TestWorkspaceExecutorCodeAnalysis(t *testing.T) {
 	}
 	if result.Stdout == nil || !strings.Contains(*result.Stdout, "package.json present without") {
 		t.Fatalf("expected analysis output, got %#v", result)
+	}
+	if len(result.CapabilityUsage) != 1 || result.CapabilityUsage[0]["capability"] != "code.analysis" {
+		t.Fatalf("expected code.analysis capability usage, got %#v", result.CapabilityUsage)
+	}
+	if len(result.CapabilityHelped) != 1 || result.CapabilityHelped[0] != "code.analysis" {
+		t.Fatalf("expected code.analysis helped, got %#v", result.CapabilityHelped)
 	}
 }
 

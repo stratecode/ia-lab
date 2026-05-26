@@ -221,34 +221,60 @@ func (e *WorkspaceExecutor) researchProject(request map[string]any) (domain.Loca
 	goal := firstNonEmptyString(strings.TrimSpace(asString(projectRequest["goal"])), strings.TrimSpace(asString(request["goal"])))
 	testFocus := firstNonEmptyString(strings.TrimSpace(asString(projectRequest["test_focus"])), strings.TrimSpace(asString(request["test_focus"])))
 	testCommand := anyStringSliceDefault(request["test_command"], defaultBridgeTestCommand(projectType, stack))
+	inferredProjectRoot := strings.TrimSpace(asString(projectRequest["project_root"]))
+	if inferredProjectRoot == "" {
+		parentDirectory := strings.TrimSpace(asString(projectRequest["parent_directory"]))
+		projectName := strings.TrimSpace(asString(projectRequest["project_name"]))
+		if parentDirectory != "" && projectName != "" {
+			inferredProjectRoot = filepath.ToSlash(filepath.Join(parentDirectory, projectName))
+		}
+	}
+	projectRootValue := firstNonEmptyString(inferredProjectRoot, strings.TrimSpace(asString(request["project_root"])), ".")
+	evidence, capabilityUsage := e.collectProjectReadContext(projectRootValue)
+	recommendations := []string{
+		"Keep the project tiny and deterministic.",
+		"Expose one obvious entrypoint and one obvious validation path.",
+		"Prefer a test command with no external network dependency.",
+	}
+	if evidence["manifest_file"] != nil {
+		recommendations = append(recommendations, "Use the repository manifest as the primary contract before inventing extra assumptions.")
+	}
+	if evidence["readme_excerpt"] != nil {
+		recommendations = append(recommendations, "Prefer README-aligned constraints over generic repo folklore.")
+	}
 	payload := fmt.Sprintf(`{
   "project_type": %q,
   "runtime_or_stack": %q,
   "goal": %q,
   "test_focus": %q,
-  "recommendations": [
-    "Keep the project tiny and deterministic.",
-    "Expose one obvious entrypoint and one obvious validation path.",
-    "Prefer a test command with no external network dependency."
-  ],
+  "recommendations": %s,
   "checklist": [
     "README present",
     "At least one test file present",
     "Declared test command is runnable"
   ],
-  "test_command": %q
-}`, projectType, stack, goal, testFocus, strings.Join(testCommand, " "))
+  "test_command": %q,
+  "local_evidence": %s
+}`, projectType, stack, goal, testFocus, mustJSON(recommendations), strings.Join(testCommand, " "), mustJSON(evidence))
 	summary := fmt.Sprintf("Researched scaffold constraints for %s/%s", projectType, stack)
 	return domain.LocalBridgeResultRequest{
-		Status:  "success",
-		Summary: &summary,
-		Stdout:  &payload,
+		Status:           "success",
+		Summary:          &summary,
+		Stdout:           &payload,
+		CapabilityUsage:  capabilityUsage,
+		CapabilityHelped: uniqueCapabilities(capabilityUsage, true),
 		Artifacts: []map[string]any{
 			{
 				"type":         "research_context",
 				"title":        "Project research context",
 				"media_type":   "application/json",
 				"content_text": payload,
+			},
+			{
+				"type":         "research_evidence",
+				"title":        "Local repository evidence",
+				"media_type":   "application/json",
+				"content_text": mustJSON(evidence),
 			},
 		},
 	}, nil
@@ -327,9 +353,19 @@ func (e *WorkspaceExecutor) reviewProject(ctx context.Context, request map[strin
 	}
 	summary := fmt.Sprintf("Review passed for %s", rel)
 	analysisTypes := anyStringSliceDefault(request["analysis_types"], nil)
+	evidence, capabilityUsage := e.collectProjectReadContext(projectRootValue)
 	report := fmt.Sprintf("expected_files=%s\ntest_command=%s\n", strings.Join(expectedFiles, ","), strings.Join(testCommand, " "))
 	artifacts := []map[string]any{
 		{"type": "review_report", "title": "Project review report", "media_type": "text/plain", "content_text": report},
+	}
+	if len(evidence) > 0 {
+		report += fmt.Sprintf("manifest_file=%s\n", firstNonEmptyString(asString(evidence["manifest_file"]), ""))
+		artifacts = append(artifacts, map[string]any{
+			"type":         "review_evidence",
+			"title":        "Repository evidence snapshot",
+			"media_type":   "application/json",
+			"content_text": mustJSON(evidence),
+		})
 	}
 	if len(analysisTypes) > 0 {
 		analysis, analysisErr := codeanalysis.Analyze(projectRoot, analysisTypes)
@@ -343,6 +379,13 @@ func (e *WorkspaceExecutor) reviewProject(ctx context.Context, request map[strin
 			})
 		} else {
 			report += fmt.Sprintf("analysis_types=%s\nanalysis_findings=%d\n", strings.Join(analysisTypes, ","), analysis.Summary.TotalFindings)
+			capabilityUsage = append(capabilityUsage, map[string]any{
+				"capability":    "code.analysis",
+				"helped":        true,
+				"source":        rel,
+				"finding_count": analysis.Summary.TotalFindings,
+				"kind":          "static_analysis",
+			})
 			artifacts = append(artifacts, map[string]any{
 				"type":         "code_analysis_report",
 				"title":        "Code analysis report",
@@ -357,12 +400,14 @@ func (e *WorkspaceExecutor) reviewProject(ctx context.Context, request map[strin
 		artifacts[0]["content_text"] = report
 	}
 	return domain.LocalBridgeResultRequest{
-		Status:    "success",
-		Summary:   &summary,
-		Stdout:    stringPtr(stdout),
-		Stderr:    stringPtr(stderr),
-		ExitCode:  intPtr(exitCode),
-		Artifacts: artifacts,
+		Status:           "success",
+		Summary:          &summary,
+		Stdout:           stringPtr(stdout),
+		Stderr:           stringPtr(stderr),
+		ExitCode:         intPtr(exitCode),
+		Artifacts:        artifacts,
+		CapabilityUsage:  capabilityUsage,
+		CapabilityHelped: uniqueCapabilities(capabilityUsage, true),
 	}, nil
 }
 
@@ -380,9 +425,11 @@ func (e *WorkspaceExecutor) codeAnalysis(request map[string]any) (domain.LocalBr
 	summary := fmt.Sprintf("Analyzed %s with %d finding(s)", rel, result.Summary.TotalFindings)
 	stdout := mustJSON(result)
 	return domain.LocalBridgeResultRequest{
-		Status:  "success",
-		Summary: &summary,
-		Stdout:  &stdout,
+		Status:           "success",
+		Summary:          &summary,
+		Stdout:           &stdout,
+		CapabilityUsage:  []map[string]any{{"capability": "code.analysis", "helped": true, "source": rel, "kind": "static_analysis", "finding_count": result.Summary.TotalFindings}},
+		CapabilityHelped: []string{"code.analysis"},
 		Artifacts: []map[string]any{
 			{
 				"type":         "code_analysis_report",
@@ -395,6 +442,64 @@ func (e *WorkspaceExecutor) codeAnalysis(request map[string]any) (domain.LocalBr
 			},
 		},
 	}, nil
+}
+
+func (e *WorkspaceExecutor) collectProjectReadContext(projectRootValue string) (map[string]any, []map[string]any) {
+	projectRoot, _, err := e.resolveWithDefault(projectRootValue, ".")
+	if err != nil {
+		return map[string]any{}, nil
+	}
+	usage := make([]map[string]any, 0)
+	evidence := map[string]any{}
+	readCandidate := func(relPath string, key string, maxChars int) {
+		target := filepath.Join(projectRoot, relPath)
+		raw, err := os.ReadFile(target)
+		if err != nil {
+			return
+		}
+		text := string(raw)
+		if len(text) > maxChars {
+			text = text[:maxChars]
+		}
+		evidence[key] = text
+		usage = append(usage, map[string]any{
+			"capability": "filesystem.read",
+			"helped":     true,
+			"source":     filepath.ToSlash(filepath.Join(strings.TrimSpace(projectRootValue), relPath)),
+			"kind":       "local_repo_context",
+		})
+	}
+	readCandidate("README.md", "readme_excerpt", 600)
+	for _, name := range []string{"package.json", "composer.json", "pyproject.toml", "go.mod"} {
+		target := filepath.Join(projectRoot, name)
+		if _, err := os.Stat(target); err == nil {
+			evidence["manifest_file"] = name
+			readCandidate(name, "manifest_excerpt", 600)
+			break
+		}
+	}
+	return evidence, usage
+}
+
+func uniqueCapabilities(items []map[string]any, helpedOnly bool) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0)
+	for _, item := range items {
+		if helpedOnly && !asBool(item["helped"]) {
+			continue
+		}
+		name := strings.TrimSpace(asString(item["capability"]))
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func (e *WorkspaceExecutor) applyPatch(ctx context.Context, request map[string]any) (domain.LocalBridgeResultRequest, error) {

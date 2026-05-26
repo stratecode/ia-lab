@@ -69,4 +69,8 @@ type LocalBridgeResultRequest struct {
 	SemanticContextSources    []string         `json:"semantic_context_sources"`
 	SemanticContextChunkCount int              `json:"semantic_context_chunk_count"`
 	SemanticContextHits       []map[string]any `json:"semantic_context_hits"`
+	CapabilityUsage           []map[string]any `json:"capability_usage"`
+	CapabilityHelped          []string         `json:"capability_helped"`
+	CapabilityNoise           []string         `json:"capability_noise"`
+	CapabilityDenied          []string         `json:"capability_denied"`
 }

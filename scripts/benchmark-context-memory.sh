@@ -731,6 +731,10 @@ for row in runs:
         slot["forbidden_total"] += int(row.get("forbidden_hit_count", 0) or 0)
         slot["score_delta_vs_first_total"] += int(row.get("score_delta_vs_first_run", 0) or 0)
         slot["score_delta_vs_previous_total"] += int(row.get("score_delta_vs_previous_run", 0) or 0)
+        slot["capability_usage_total"] += int(row.get("capability_usage_count", 0) or 0)
+        slot["capability_helped_total"] += int(row.get("capability_helped_count", 0) or 0)
+        slot["capability_noise_total"] += int(row.get("capability_noise_count", 0) or 0)
+        slot["capability_denied_total"] += int(row.get("capability_denied_count", 0) or 0)
         slot["agent_score_total"] += float(row.get("agent_score", 0) or 0)
         slot["handoff_score_total"] += float(row.get("handoff_score", 0) or 0)
         slot["system_score_total"] += float(row.get("system_score", 0) or 0)
@@ -743,6 +747,8 @@ for row in runs:
             slot["resolved_commit"] = row.get("resolved_commit") or ""
         if not slot.get("maturity_block"):
             slot["maturity_block"] = row.get("maturity_block") or ""
+        for capability_name, count in (row.get("capability_counts") or {}).items():
+            slot["capability_counts"][capability_name] = slot["capability_counts"].get(capability_name, 0) + int(count or 0)
 
     default_slot = lambda: {
         "run_count": 0,
@@ -756,12 +762,17 @@ for row in runs:
         "forbidden_total": 0,
         "score_delta_vs_first_total": 0,
         "score_delta_vs_previous_total": 0,
+        "capability_usage_total": 0,
+        "capability_helped_total": 0,
+        "capability_noise_total": 0,
+        "capability_denied_total": 0,
         "agent_score_total": 0.0,
         "handoff_score_total": 0.0,
         "system_score_total": 0.0,
         "reference_score_total": 0.0,
         "delta_vs_reference_total": 0.0,
         "effects": {},
+        "capability_counts": {},
         "resolved_commit": "",
         "maturity_block": "",
     }
@@ -850,13 +861,20 @@ def avg(slot, field):
     runs = max(1, int(slot.get("run_count", 0) or 1))
     return (int(slot.get(field, 0) or 0) / runs) if slot else 0.0
 
+def top_capabilities(slot, limit=3):
+    counts = (slot or {}).get("capability_counts") or {}
+    if not counts:
+        return "-"
+    ordered = sorted(counts.items(), key=lambda item: (-int(item[1]), item[0]))
+    return ", ".join(f"{name}:{count}" for name, count in ordered[:limit])
+
 repo_lines = [
     "# Benchmark Summary",
     "",
     "## By Repo",
     "",
-    "| Repo | League | Maturity | Runs | Off Avg | On Avg | Ref Avg | Delta | Delta vs Ref | Agent | Handoff | System | On Hits Avg | Experience | Repo Hits | Tech Hits | Pattern Hits | Forbidden | On Success | Effect | Commit |",
-    "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
+    "| Repo | League | Maturity | Runs | Off Avg | On Avg | Ref Avg | Delta | Delta vs Ref | Agent | Handoff | System | On Hits Avg | Experience | Cap Use | Cap Helped | Cap Noise | Cap Denied | Top Capabilities | Repo Hits | Tech Hits | Pattern Hits | Forbidden | On Success | Effect | Commit |",
+    "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---|---|",
 ]
 for repo, modes in sorted(aggregates.items()):
     off = modes.get("memory_off", {})
@@ -881,6 +899,7 @@ for repo, modes in sorted(aggregates.items()):
         f"| {repo} | {league} | {maturity} | {runs_count} | {off_avg:.1f} | {on_avg:.1f} | {ref_avg:.1f} | {delta:+.1f} | {avg(on, 'delta_vs_reference_total') if on else 0:.1f} | "
         f"{avg(on, 'agent_score_total') if on else 0:.1f} | {avg(on, 'handoff_score_total') if on else 0:.1f} | {avg(on, 'system_score_total') if on else 0:.1f} | "
         f"{avg(on, 'hit_total') if on else 0:.1f} | {avg(on, 'experience_source_total') if on else 0:.1f} | "
+        f"{avg(on, 'capability_usage_total') if on else 0:.1f} | {avg(on, 'capability_helped_total') if on else 0:.1f} | {avg(on, 'capability_noise_total') if on else 0:.1f} | {avg(on, 'capability_denied_total') if on else 0:.1f} | {top_capabilities(on)} | "
         f"{avg(on, 'repo_specific_hit_total') if on else 0:.1f} | {avg(on, 'technology_hit_total') if on else 0:.1f} | "
         f"{avg(on, 'pattern_hit_total') if on else 0:.1f} | {avg(on, 'forbidden_total') if on else 0:.1f} | "
         f"{int(on.get('success_count', 0) or 0)}/{int(on.get('run_count', 0) or 0) if on else 0} | {effect_summary} | {commit} |"
@@ -890,8 +909,8 @@ league_lines = [
     "",
     "## By League",
     "",
-    "| League | Runs | Off Avg | On Avg | Ref Avg | Delta | Delta vs Ref | Agent | Handoff | System | On Hits Avg | Repo Hits | Tech Hits | Pattern Hits | Forbidden | Effect |",
-    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+    "| League | Runs | Off Avg | On Avg | Ref Avg | Delta | Delta vs Ref | Agent | Handoff | System | On Hits Avg | Cap Use | Cap Helped | Top Capabilities | Repo Hits | Tech Hits | Pattern Hits | Forbidden | Effect |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---|",
 ]
 for league, modes in sorted(league_aggregates.items()):
     off = modes.get("memory_off", {})
@@ -903,7 +922,7 @@ for league, modes in sorted(league_aggregates.items()):
     league_lines.append(
         f"| {league} | {int(on.get('run_count', 0) or off.get('run_count', 0) or 0)} | {off_avg:.1f} | {on_avg:.1f} | {avg(ref, 'score_total') if ref else 0:.1f} | {on_avg - off_avg:+.1f} | {avg(on, 'delta_vs_reference_total') if on else 0:.1f} | "
         f"{avg(on, 'agent_score_total') if on else 0:.1f} | {avg(on, 'handoff_score_total') if on else 0:.1f} | {avg(on, 'system_score_total') if on else 0:.1f} | "
-        f"{avg(on, 'hit_total') if on else 0:.1f} | {avg(on, 'repo_specific_hit_total') if on else 0:.1f} | "
+        f"{avg(on, 'hit_total') if on else 0:.1f} | {avg(on, 'capability_usage_total') if on else 0:.1f} | {avg(on, 'capability_helped_total') if on else 0:.1f} | {top_capabilities(on)} | {avg(on, 'repo_specific_hit_total') if on else 0:.1f} | "
         f"{avg(on, 'technology_hit_total') if on else 0:.1f} | {avg(on, 'pattern_hit_total') if on else 0:.1f} | "
         f"{avg(on, 'forbidden_total') if on else 0:.1f} | {effect_summary} |"
     )
@@ -912,8 +931,8 @@ sequence_lines = [
     "",
     "## By Sequence",
     "",
-    "| Sequence | League | Maturity | Runs | Off Avg | On Avg | Ref Avg | Delta | Delta vs Ref | On Delta vs First | On Delta vs Previous | On Trend | On Stability | On Spread | Agent | Handoff | System | Repo Hits | Tech Hits | Pattern Hits | Forbidden |",
-    "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    "| Sequence | League | Maturity | Runs | Off Avg | On Avg | Ref Avg | Delta | Delta vs Ref | On Delta vs First | On Delta vs Previous | On Trend | On Stability | On Spread | Agent | Handoff | System | Cap Use | Cap Helped | Top Capabilities | Repo Hits | Tech Hits | Pattern Hits | Forbidden |",
+    "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|",
 ]
 for sequence_id, modes in sorted(sequence_aggregates.items()):
     off = modes.get("memory_off", {})
@@ -929,6 +948,7 @@ for sequence_id, modes in sorted(sequence_aggregates.items()):
         f"{avg(on, 'score_delta_vs_first_total') if on else 0:.1f} | {avg(on, 'score_delta_vs_previous_total') if on else 0:.1f} | "
         f"{on.get('progression_label', '-') if on else '-'} | {on.get('stability_label', '-') if on else '-'} | {float(on.get('score_stddev', 0) or 0):.2f} | "
         f"{avg(on, 'agent_score_total') if on else 0:.1f} | {avg(on, 'handoff_score_total') if on else 0:.1f} | {avg(on, 'system_score_total') if on else 0:.1f} | "
+        f"{avg(on, 'capability_usage_total') if on else 0:.1f} | {avg(on, 'capability_helped_total') if on else 0:.1f} | {top_capabilities(on)} | "
         f"{avg(on, 'repo_specific_hit_total') if on else 0:.1f} | {avg(on, 'technology_hit_total') if on else 0:.1f} | "
         f"{avg(on, 'pattern_hit_total') if on else 0:.1f} | {avg(on, 'forbidden_total') if on else 0:.1f} |"
     )
@@ -939,8 +959,8 @@ root.joinpath("agent_maturity_summary.md").write_text("\n".join(repo_lines + lea
 progress_lines = [
     "# Benchmark Progression",
     "",
-    "| Sequence | League | Iteration | Off Avg | On Avg | Delta | On Delta vs First | On Delta vs Previous | Repo Hits | Tech Hits | Pattern Hits | Effect |",
-    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+    "| Sequence | League | Iteration | Off Avg | On Avg | Delta | On Delta vs First | On Delta vs Previous | Cap Use | Cap Helped | Top Capabilities | Repo Hits | Tech Hits | Pattern Hits | Effect |",
+    "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---|",
 ]
 for sequence_id, iterations in sorted(progression.items()):
     for iteration, modes in sorted(iterations.items(), key=lambda item: int(item[0])):
@@ -952,7 +972,7 @@ for sequence_id, iterations in sorted(progression.items()):
             f"| {sequence_id} | {league} | {iteration} | {avg(off, 'score_total') if off else 0:.1f} | "
             f"{avg(on, 'score_total') if on else 0:.1f} | {((avg(on, 'score_total') if on else 0) - (avg(off, 'score_total') if off else 0)):+.1f} | "
             f"{avg(on, 'score_delta_vs_first_total') if on else 0:.1f} | {avg(on, 'score_delta_vs_previous_total') if on else 0:.1f} | "
-            f"{avg(on, 'repo_specific_hit_total') if on else 0:.1f} | {avg(on, 'technology_hit_total') if on else 0:.1f} | "
+            f"{avg(on, 'capability_usage_total') if on else 0:.1f} | {avg(on, 'capability_helped_total') if on else 0:.1f} | {top_capabilities(on)} | {avg(on, 'repo_specific_hit_total') if on else 0:.1f} | {avg(on, 'technology_hit_total') if on else 0:.1f} | "
             f"{avg(on, 'pattern_hit_total') if on else 0:.1f} | {effect_summary} |"
         )
 
@@ -1759,6 +1779,33 @@ for stage_name, task in (("researcher", researcher), ("coder", coder), ("reviewe
         if stage_name not in hit_map[key]["stages"]:
             hit_map[key]["stages"].append(stage_name)
 hits = list(hit_map.values())
+capability_usage = []
+capability_helped = set()
+capability_noise = set()
+capability_denied = set()
+capability_counter = {}
+for task in (researcher, coder, reviewer):
+    results = task.get("results") or {}
+    for usage in (results.get("capability_usage") or []):
+        if not isinstance(usage, dict):
+            continue
+        capability_usage.append(usage)
+        capability_name = usage.get("capability")
+        if capability_name:
+            capability_counter[capability_name] = capability_counter.get(capability_name, 0) + 1
+            if usage.get("helped") is True:
+                capability_helped.add(capability_name)
+            if usage.get("helped") is False:
+                capability_noise.add(capability_name)
+    for capability_name in (results.get("capability_helped") or []):
+        if capability_name:
+            capability_helped.add(capability_name)
+    for capability_name in (results.get("capability_noise") or []):
+        if capability_name:
+            capability_noise.add(capability_name)
+    for capability_name in (results.get("capability_denied") or []):
+        if capability_name:
+            capability_denied.add(capability_name)
 forbidden_types = set(json.loads('''$forbidden_match_types_json'''))
 forbidden_hits = [hit for hit in hits if hit.get("match_type") in forbidden_types]
 repo_specific_hits = [hit for hit in hits if hit.get("match_type") == "repo_specific"]
@@ -1905,11 +1952,20 @@ print(json.dumps({
     "coder_task_id": "$coder_task_id",
     "reviewer_task_id": "$reviewer_task_id",
     "memory_hits": hits,
+    "capability_usage": capability_usage,
+    "capability_usage_count": len(capability_usage),
+    "capability_counts": capability_counter,
+    "capability_helped": sorted(capability_helped),
+    "capability_noise": sorted(capability_noise),
+    "capability_denied": sorted(capability_denied),
     "experience_source_count": len(unique_sources),
     "repo_specific_hit_count": len(repo_specific_hits),
     "technology_hit_count": len(technology_hits),
     "pattern_hit_count": len(pattern_hits),
     "forbidden_hit_count": len(forbidden_hits),
+    "capability_helped_count": len(capability_helped),
+    "capability_noise_count": len(capability_noise),
+    "capability_denied_count": len(capability_denied),
     "memory_effect": memory_effect,
     "retrieval_precision_label": memory_effect,
     "artifact_count": len(artifacts),

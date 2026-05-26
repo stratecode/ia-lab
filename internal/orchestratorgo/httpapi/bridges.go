@@ -178,6 +178,10 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 		"semantic_context_sources":     result.SemanticContextSources,
 		"semantic_context_chunk_count": result.SemanticContextChunkCount,
 		"semantic_context_hits":        result.SemanticContextHits,
+		"capability_usage":             result.CapabilityUsage,
+		"capability_helped":            result.CapabilityHelped,
+		"capability_noise":             result.CapabilityNoise,
+		"capability_denied":            result.CapabilityDenied,
 	}
 	invocationID, err := s.Postgres.CreateToolInvocation(ctx, store.CreateToolInvocationParams{
 		TaskID:        taskIDPtr,
@@ -277,6 +281,10 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 		"semantic_context_sources":     result.SemanticContextSources,
 		"semantic_context_chunk_count": result.SemanticContextChunkCount,
 		"semantic_context_hits":        result.SemanticContextHits,
+		"capability_usage":             result.CapabilityUsage,
+		"capability_helped":            result.CapabilityHelped,
+		"capability_noise":             result.CapabilityNoise,
+		"capability_denied":            result.CapabilityDenied,
 	}
 	return results, invocationID, artifactIDs, nil
 }
