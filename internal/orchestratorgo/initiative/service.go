@@ -550,9 +550,12 @@ func fallbackRepoExecutionPlan(initiative *domain.InitiativeResponse, design map
 		coderToolRequest["path"] = profile.patchTarget
 	}
 	coderMetadata := map[string]any{
-		"project_request":    projectRequest,
-		"workspace_root":     initiative.WorkspaceRoot,
-		"requires_approval":  true,
+		"project_request":   projectRequest,
+		"workspace_root":    initiative.WorkspaceRoot,
+		"requires_approval": true,
+		"allowed_capabilities": []string{
+			"filesystem.write",
+		},
 		"tool_request":       coderToolRequest,
 		"repo_workflow":      "repo_workflow_v1",
 		"repo_workflow_goal": profile.coderSummary,
@@ -647,7 +650,7 @@ func detectRepoWorkflowProfile(workspaceRoot, initiativeGoal string) repoWorkflo
 		testFocus:     "existing repository review",
 		testCommand:   []string{},
 		expected:      []string{"README.md"},
-		coderTool:     "write_file",
+		coderTool:     "filesystem.write",
 		patchTarget:   ".lab/repo-workflow-marker.txt",
 		writeContent:  "repo workflow marker\n",
 		coderSummary:  "Write a deterministic marker file inside the repository workspace.",
@@ -793,7 +796,7 @@ func decodeBenchmarkRepoWorkflowProfile(raw []byte, workspaceRoot string) (repoW
 		expected:              cloneStrings(payload.ExpectedFiles),
 		patch:                 payload.Patch,
 		patchTarget:           strings.TrimSpace(payload.PatchTarget),
-		coderTool:             firstNonEmptyString(strings.TrimSpace(payload.CoderTool), "write_file"),
+		coderTool:             firstNonEmptyString(strings.TrimSpace(payload.CoderTool), "filesystem.write"),
 		writeContent:          payload.WriteContent,
 		coderSummary:          firstNonEmptyString(strings.TrimSpace(payload.CoderSummary), "Apply benchmark-defined repository change."),
 		benchmarkCaseID:       strings.TrimSpace(payload.ID),

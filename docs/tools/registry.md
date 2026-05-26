@@ -132,6 +132,10 @@ tool:
 - `reviewer` agent has read-only access (write operations denied at permission layer)
 - `coder` and `infra` agents have full read/write access within workspace scope
 - Path access is further restricted by the permissions model per agent type
+- governed aliases used by the runtime are:
+  - `filesystem.read`
+  - `filesystem.list`
+  - `filesystem.write`
 
 ### shell
 

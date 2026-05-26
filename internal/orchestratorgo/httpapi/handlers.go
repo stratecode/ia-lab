@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -107,6 +108,7 @@ func (s *Server) Router(auth *Authenticator) http.Handler {
 	})
 	r.Post("/tools/web/search", s.webSearch)
 	r.Post("/tools/web/fetch", s.webFetch)
+	r.Post("/tools/filesystem", s.filesystemTool)
 	r.Post("/tools/code/analyze", s.codeAnalyze)
 	r.Post("/tools/documents/read", s.documentRead)
 	r.Post("/tools/images/analyze", s.imageAnalyze)
@@ -210,8 +212,8 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listCapabilities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"capabilities": []string{"web.search", "web.fetch", "code.analysis", "document.read", "image.analyze", "research.query"},
-		"total":        6,
+		"capabilities": []string{"web.search", "web.fetch", "filesystem.read", "filesystem.list", "filesystem.write", "code.analysis", "document.read", "image.analyze", "research.query"},
+		"total":        9,
 	})
 }
 
@@ -942,6 +944,145 @@ func (s *Server) codeAnalyze(w http.ResponseWriter, r *http.Request) {
 		"analysis_type":  strings.TrimSpace(body.AnalysisType),
 		"analysis_types": analysisTypes,
 		"language":       strings.TrimSpace(body.Language),
+	}, capResult)
+	if err != nil {
+		writeDetail(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) filesystemTool(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Operation string  `json:"operation"`
+		Path      string  `json:"path"`
+		Content   string  `json:"content"`
+		Pattern   string  `json:"pattern"`
+		TaskID    *string `json:"task_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	body.Operation = strings.ToLower(strings.TrimSpace(body.Operation))
+	body.Path = strings.TrimSpace(body.Path)
+	if body.Operation == "" || body.Path == "" {
+		writeDetail(w, http.StatusBadRequest, "operation and path are required")
+		return
+	}
+	resolved, rel, err := resolveAllowedLocalPath(body.Path, s.Config.AllowedLocalRoots)
+	if err != nil {
+		writeDetail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var capResult *capabilities.Result
+	switch body.Operation {
+	case "read":
+		raw, err := os.ReadFile(resolved)
+		if err != nil {
+			writeDetail(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		text := string(raw)
+		capResult = &capabilities.Result{
+			Status:  "success",
+			Summary: fmt.Sprintf("Read %s", rel),
+			Output: map[string]any{
+				"path":    rel,
+				"content": truncateForAPI(text, 4000),
+			},
+			Artifacts: []capabilities.Artifact{{
+				ArtifactType: "filesystem_read",
+				Title:        "Filesystem read result",
+				MediaType:    "text/plain",
+				ContentText:  truncateForAPI(text, 4000),
+				Metadata:     map[string]any{"path": rel},
+			}},
+		}
+	case "list":
+		info, err := os.Stat(resolved)
+		if err != nil {
+			writeDetail(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		if !info.IsDir() {
+			writeDetail(w, http.StatusBadRequest, "list operation requires a directory path")
+			return
+		}
+		pattern := firstNonEmptyString(strings.TrimSpace(body.Pattern), "*")
+		items := make([]string, 0)
+		err = filepath.Walk(resolved, func(current string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if info.IsDir() {
+				return nil
+			}
+			matched, matchErr := filepath.Match(pattern, filepath.Base(current))
+			if matchErr != nil {
+				return matchErr
+			}
+			if !matched {
+				return nil
+			}
+			itemRel, err := filepath.Rel(resolved, current)
+			if err != nil {
+				return err
+			}
+			items = append(items, filepath.ToSlash(itemRel))
+			return nil
+		})
+		if err != nil {
+			writeDetail(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		slices.Sort(items)
+		capResult = &capabilities.Result{
+			Status:  "success",
+			Summary: fmt.Sprintf("Listed %d file(s) under %s", len(items), rel),
+			Output: map[string]any{
+				"path":  rel,
+				"items": items,
+			},
+			Artifacts: []capabilities.Artifact{{
+				ArtifactType: "filesystem_list",
+				Title:        "Filesystem list result",
+				MediaType:    "application/json",
+				ContentText:  truncateForAPI(mustJSON(map[string]any{"path": rel, "items": items}), 4000),
+				Metadata:     map[string]any{"path": rel, "pattern": pattern},
+			}},
+		}
+	case "write":
+		if err := os.MkdirAll(filepath.Dir(resolved), 0o755); err != nil {
+			writeDetail(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		if err := os.WriteFile(resolved, []byte(body.Content), 0o644); err != nil {
+			writeDetail(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		capResult = &capabilities.Result{
+			Status:  "success",
+			Summary: fmt.Sprintf("Wrote %s", rel),
+			Output: map[string]any{
+				"path": rel,
+			},
+			Artifacts: []capabilities.Artifact{{
+				ArtifactType: "filesystem_write",
+				Title:        "Filesystem write result",
+				MediaType:    "text/plain",
+				ContentText:  truncateForAPI(body.Content, 4000),
+				Metadata:     map[string]any{"path": rel},
+			}},
+		}
+	default:
+		writeDetail(w, http.StatusBadRequest, "unsupported filesystem operation")
+		return
+	}
+	response, err := s.persistCapabilityExecution(r.Context(), "api", body.TaskID, "filesystem."+body.Operation, map[string]any{
+		"operation": body.Operation,
+		"path":      rel,
+		"pattern":   strings.TrimSpace(body.Pattern),
 	}, capResult)
 	if err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
@@ -1896,6 +2037,16 @@ func (s *Server) persistCapabilityExecution(ctx context.Context, entrypoint stri
 			URI:   item.URI,
 			Kind:  item.Kind,
 		})
+	}
+	if s == nil || s.Postgres == nil {
+		return map[string]any{
+			"status":       result.Status,
+			"summary":      result.Summary,
+			"output":       result.Output,
+			"source_refs":  sourceRefs,
+			"artifact_ids": []string{},
+			"artifacts":    result.Artifacts,
+		}, nil
 	}
 	invocationID, err := s.Postgres.CreateToolInvocation(ctx, store.CreateToolInvocationParams{
 		TaskID:        taskID,

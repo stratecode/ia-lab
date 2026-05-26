@@ -51,8 +51,9 @@ func TestCoderWriteFileFallbackStaysAvailable(t *testing.T) {
 		AssignedAgent: &coderAgent,
 		WorkspacePath: &workspace,
 		Metadata: map[string]any{
+			"allowed_capabilities": []any{"filesystem.write"},
 			"tool_request": map[string]any{
-				"tool":    "write_file",
+				"tool":    "filesystem.write",
 				"path":    "notes/out.txt",
 				"content": "hello from runner test",
 			},
@@ -69,6 +70,30 @@ func TestCoderWriteFileFallbackStaysAvailable(t *testing.T) {
 	}
 	if strings.TrimSpace(string(body)) != "hello from runner test" {
 		t.Fatalf("unexpected file content: %q", string(body))
+	}
+}
+
+func TestCoderFilesystemWriteDeniedWhenAllowlistDoesNotPermitIt(t *testing.T) {
+	coderAgent := domain.AgentTypeCoder
+	workspace := t.TempDir()
+	task := &domain.TaskResponse{
+		ID:            "task-2b",
+		Description:   "Write a file",
+		AssignedAgent: &coderAgent,
+		WorkspacePath: &workspace,
+		Metadata: map[string]any{
+			"allowed_capabilities": []any{"code.analysis"},
+			"tool_request": map[string]any{
+				"tool":    "filesystem.write",
+				"path":    "notes/out.txt",
+				"content": "hello from runner test",
+			},
+		},
+	}
+	r := New(config.Config{DefaultGitBranch: "main"}, nil)
+	result := r.Execute(task)
+	if result.Status != "error" || !strings.Contains(result.ErrorMessage, "filesystem.write") {
+		t.Fatalf("expected capability denial, got %#v", result)
 	}
 }
 

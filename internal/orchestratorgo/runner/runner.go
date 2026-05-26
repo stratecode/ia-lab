@@ -31,6 +31,11 @@ type Result struct {
 	Approval     *ApprovalRequest
 }
 
+var runnerToolCapabilityMap = map[string]string{
+	"write_file":       "filesystem.write",
+	"filesystem.write": "filesystem.write",
+}
+
 type TaskRunner struct {
 	cfg            config.Config
 	planner        *planner.Service
@@ -336,7 +341,7 @@ func (r *TaskRunner) executeCoder(task *domain.TaskResponse) Result {
 	}
 
 	if toolRequest != nil {
-		if result, handled := r.executeToolRequest(workspaceRoot, toolRequest); handled {
+		if result, handled := r.executeToolRequest(workspaceRoot, metadata, toolRequest); handled {
 			return result
 		}
 	}
@@ -504,6 +509,9 @@ func buildBoilerplatePlan(task *domain.TaskResponse, metadata map[string]any) (R
 	coderMetadata := map[string]any{
 		"project_request": projectRequest,
 		"workspace_root":  firstNonEmptyMetadata(metadata, "workspace_root"),
+		"allowed_capabilities": []string{
+			"filesystem.write",
+		},
 		"tool_request": map[string]any{
 			"tool":             "scaffold_project",
 			"project_name":     projectName,
@@ -676,7 +684,10 @@ func buildRepoWorkflowPlan(metadata map[string]any) (Result, bool) {
 		"workspace_root":    workspaceRoot,
 		"requires_approval": true,
 		"repo_workflow":     "repo_workflow_v1",
-		"tool_request":      coderToolRequest,
+		"allowed_capabilities": []string{
+			"filesystem.write",
+		},
+		"tool_request": coderToolRequest,
 	}
 	applyRunnerBenchmarkMetadata(coderMetadata, profile)
 	reviewerMetadata := map[string]any{
@@ -806,13 +817,16 @@ func (r *TaskRunner) executeAiderTask(task *domain.TaskResponse, repo string) Re
 	}
 }
 
-func (r *TaskRunner) executeToolRequest(workspaceRoot string, request map[string]any) (Result, bool) {
+func (r *TaskRunner) executeToolRequest(workspaceRoot string, metadata map[string]any, request map[string]any) (Result, bool) {
 	tool := strings.TrimSpace(asString(request["tool"]))
+	if err := ensureRunnerToolCapabilityAllowed(metadata, tool); err != nil {
+		return Result{Status: "error", ErrorMessage: err.Error()}, true
+	}
 	switch tool {
-	case "write_file":
+	case "write_file", "filesystem.write":
 		rawPath := strings.TrimSpace(asString(request["path"]))
 		if rawPath == "" {
-			return Result{Status: "error", ErrorMessage: "tool_request.path is required for write_file"}, true
+			return Result{Status: "error", ErrorMessage: "tool_request.path is required for filesystem write"}, true
 		}
 		content := asString(request["content"])
 		path, err := safeResolve(workspaceRoot, rawPath)
@@ -873,6 +887,46 @@ func (r *TaskRunner) executeToolRequest(workspaceRoot string, request map[string
 	default:
 		return Result{}, false
 	}
+}
+
+func ensureRunnerToolCapabilityAllowed(metadata map[string]any, tool string) error {
+	capability := strings.TrimSpace(runnerToolCapabilityMap[tool])
+	if capability == "" {
+		return nil
+	}
+	allowed := runnerAllowedCapabilities(metadata)
+	if len(allowed) == 0 {
+		return nil
+	}
+	if allowed[capability] {
+		return nil
+	}
+	if strings.HasPrefix(capability, "filesystem.") && allowed["filesystem"] {
+		return nil
+	}
+	return fmt.Errorf("tool %s requires allowed capability %s", tool, capability)
+}
+
+func runnerAllowedCapabilities(metadata map[string]any) map[string]bool {
+	out := map[string]bool{}
+	if metadata == nil {
+		return out
+	}
+	switch raw := metadata["allowed_capabilities"].(type) {
+	case []string:
+		for _, item := range raw {
+			if text := strings.TrimSpace(item); text != "" {
+				out[text] = true
+			}
+		}
+	case []any:
+		for _, item := range raw {
+			if text := strings.TrimSpace(asString(item)); text != "" {
+				out[text] = true
+			}
+		}
+	}
+	return out
 }
 
 func safeResolve(workspaceRoot, rawPath string) (string, error) {
@@ -1058,7 +1112,7 @@ func detectRunnerRepoWorkflowProfile(workspaceRoot string) runnerRepoWorkflowPro
 		testFocus:     "existing repository review",
 		testCommand:   []string{},
 		expectedFiles: []string{"README.md"},
-		coderTool:     "write_file",
+		coderTool:     "filesystem.write",
 		patchTarget:   ".lab/repo-workflow-marker.txt",
 		writeContent:  "repo workflow marker\n",
 		coderSummary:  "Write a deterministic marker file inside the repository workspace.",
@@ -1187,7 +1241,7 @@ func loadRunnerBenchmarkRepoWorkflowProfile(workspaceRoot string) (runnerRepoWor
 		testFocus:             firstNonEmptyString(strings.TrimSpace(payload.TestFocus), "benchmark workflow"),
 		testCommand:           cloneRunnerStrings(payload.TestCommand),
 		expectedFiles:         cloneRunnerStrings(payload.ExpectedFiles),
-		coderTool:             firstNonEmptyString(strings.TrimSpace(payload.CoderTool), "write_file"),
+		coderTool:             firstNonEmptyString(strings.TrimSpace(payload.CoderTool), "filesystem.write"),
 		patchTarget:           strings.TrimSpace(payload.PatchTarget),
 		patch:                 payload.Patch,
 		writeContent:          payload.WriteContent,

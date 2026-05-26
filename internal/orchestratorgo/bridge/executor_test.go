@@ -86,6 +86,27 @@ func TestWorkspaceExecutorWriteFileCollectsArtifacts(t *testing.T) {
 	}
 }
 
+func TestWorkspaceExecutorFilesystemWriteRequiresCapabilityWhenAllowlistPresent(t *testing.T) {
+	root := initGitWorkspace(t)
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"allowed_capabilities": []any{"code.analysis"},
+			"tool_request": map[string]any{
+				"tool":    "filesystem.write",
+				"path":    "notes/output.txt",
+				"content": "denied\n",
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires allowed capability filesystem.write") {
+		t.Fatalf("expected capability denial, got %v", err)
+	}
+}
+
 func TestWorkspaceExecutorIgnoresParentRepoArtifactsWhenWorkspaceIsNested(t *testing.T) {
 	root := initGitWorkspace(t)
 	workspace := filepath.Join(root, "nested-workspace")

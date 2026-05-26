@@ -178,8 +178,11 @@ func bridgeCapabilities() map[string]any {
 	return map[string]any{
 		"tools": []string{
 			"read_file",
+			"filesystem.read",
 			"list_files",
+			"filesystem.list",
 			"write_file",
+			"filesystem.write",
 			"research_project",
 			"scaffold_project",
 			"review_project",

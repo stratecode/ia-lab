@@ -127,8 +127,33 @@ func TestListCapabilitiesIncludesDocumentAndImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	items, _ := payload["capabilities"].([]any)
-	if len(items) != 6 {
+	if len(items) != 9 {
 		t.Fatalf("unexpected capabilities payload: %#v", payload)
+	}
+}
+
+func TestFilesystemToolWritePersistsArtifact(t *testing.T) {
+	server := &Server{
+		Config: config.Config{
+			AllowedLocalRoots: []string{t.TempDir()},
+		},
+	}
+	root := server.Config.AllowedLocalRoots[0]
+	target := filepath.Join(root, "notes.txt")
+	req := httptest.NewRequest(http.MethodPost, "/tools/filesystem", bytes.NewBufferString(`{"operation":"write","path":"`+target+`","content":"hello"}`))
+	rec := httptest.NewRecorder()
+	server.filesystemTool(rec, req)
+	if rec.Code != http.StatusInternalServerError && rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Code == http.StatusOK {
+		raw, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(raw) != "hello" {
+			t.Fatalf("unexpected content: %q", string(raw))
+		}
 	}
 }
 

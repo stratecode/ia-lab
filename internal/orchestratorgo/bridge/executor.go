@@ -42,6 +42,16 @@ type WorkspaceExecutor struct {
 	workspaceRoot string
 }
 
+var toolCapabilityMap = map[string]string{
+	"read_file":        "filesystem.read",
+	"filesystem.read":  "filesystem.read",
+	"list_files":       "filesystem.list",
+	"filesystem.list":  "filesystem.list",
+	"write_file":       "filesystem.write",
+	"filesystem.write": "filesystem.write",
+	"code_analysis":    "code.analysis",
+}
+
 func NewWorkspaceExecutor(workspaceRoot string) (*WorkspaceExecutor, error) {
 	root, err := filepath.Abs(strings.TrimSpace(workspaceRoot))
 	if err != nil {
@@ -69,6 +79,9 @@ func (e *WorkspaceExecutor) Execute(ctx context.Context, claim domain.LocalBridg
 	if tool == "" {
 		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: "tool_request.tool is required"}
 	}
+	if err := ensureToolCapabilityAllowed(metadata, tool); err != nil {
+		return domain.LocalBridgeResultRequest{}, err
+	}
 	approvalRequired := asBool(metadata["requires_approval"]) || asBool(toolRequest["requires_approval"])
 	approvalGranted := asBool(metadata["approval_granted"])
 	if approvalRequired && !approvalGranted {
@@ -88,11 +101,11 @@ func (e *WorkspaceExecutor) Execute(ctx context.Context, claim domain.LocalBridg
 	var result domain.LocalBridgeResultRequest
 	var err error
 	switch tool {
-	case "read_file":
+	case "read_file", "filesystem.read":
 		result, err = e.readFile(toolRequest)
-	case "list_files":
+	case "list_files", "filesystem.list":
 		result, err = e.listFiles(toolRequest)
-	case "write_file":
+	case "write_file", "filesystem.write":
 		result, err = e.writeFile(toolRequest)
 	case "research_project":
 		result, err = e.researchProject(toolRequest)
@@ -611,6 +624,46 @@ func mustJSON(value any) string {
 		return "{}"
 	}
 	return string(raw)
+}
+
+func ensureToolCapabilityAllowed(metadata map[string]any, tool string) error {
+	capability := strings.TrimSpace(toolCapabilityMap[tool])
+	if capability == "" {
+		return nil
+	}
+	allowed := allowedCapabilities(metadata)
+	if len(allowed) == 0 {
+		return nil
+	}
+	if allowed[capability] {
+		return nil
+	}
+	if strings.HasPrefix(capability, "filesystem.") && allowed["filesystem"] {
+		return nil
+	}
+	return LocalExecutionError{Message: fmt.Sprintf("tool %s requires allowed capability %s", tool, capability)}
+}
+
+func allowedCapabilities(metadata map[string]any) map[string]bool {
+	out := map[string]bool{}
+	if metadata == nil {
+		return out
+	}
+	switch raw := metadata["allowed_capabilities"].(type) {
+	case []string:
+		for _, item := range raw {
+			if text := strings.TrimSpace(item); text != "" {
+				out[text] = true
+			}
+		}
+	case []any:
+		for _, item := range raw {
+			if text := strings.TrimSpace(asString(item)); text != "" {
+				out[text] = true
+			}
+		}
+	}
+	return out
 }
 
 func withSemanticRefs(result domain.LocalBridgeResultRequest, sources []string, hits []map[string]any, chunkCount int) domain.LocalBridgeResultRequest {
