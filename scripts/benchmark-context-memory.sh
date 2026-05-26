@@ -1240,6 +1240,42 @@ def task_evidence(task):
         "approval_granted": metadata.get("approval_granted"),
     }
 
+def count_matches(hits):
+    counts = {"repo_specific": 0, "technology_similar": 0, "pattern_similar": 0, "forbidden": 0}
+    for hit in hits or []:
+        match_type = hit.get("match_type") or ""
+        if match_type in counts:
+            counts[match_type] += 1
+        if hit.get("forbidden"):
+            counts["forbidden"] += 1
+    return counts
+
+def initiative_task_order(detail):
+    ordered = []
+    for task in detail.get("tasks") or []:
+        agent = task.get("agent")
+        if agent:
+            ordered.append(agent)
+    return ordered
+
+def success_contract_observed(case, initiative, execution_summary, planner_results, coder_results, reviewer_results, memory_counts):
+    expected_agents = case.get("success_contract", {}).get("required_agents") or []
+    observed_order = initiative_task_order(initiative_detail)
+    return {
+        "initiative_completed": initiative.get("status") == "completed",
+        "required_agents_expected": expected_agents,
+        "required_agents_observed": observed_order,
+        "launch_order_expected": case.get("success_contract", {}).get("expected_launch_order") or [],
+        "launch_order_observed": observed_order,
+        "coder_tool_expected": case.get("success_contract", {}).get("expected_coder_tool"),
+        "coder_tool_observed": planner_results.get("coder_tool"),
+        "coder_approval_required": bool((coder.get("metadata") or {}).get("approval_required") or (coder.get("metadata") or {}).get("requires_approval")),
+        "coder_approval_granted": bool((coder.get("metadata") or {}).get("approval_granted")),
+        "review_passed": (reviewer_results.get("status") == "success"),
+        "aggregated_status": execution_summary.get("aggregated_status"),
+        "memory_provenance": memory_counts,
+    }
+
 planner_results = planner.get("results") or {}
 researcher_results = (researcher.get("results") or {})
 coder_results = (coder.get("results") or {})
@@ -1248,6 +1284,9 @@ initiative = initiative_detail.get("initiative") or {}
 execution_summary = initiative_detail.get("execution_summary") or {}
 reviews = initiative_detail.get("reviews") or []
 review_decisions = [{"phase": item.get("phase"), "decision": item.get("decision")} for item in reviews]
+memory_hits = run.get("memory_hits") or []
+memory_counts = count_matches(memory_hits)
+observed_contract = success_contract_observed(case, initiative, execution_summary, planner_results, coder_results, reviewer_results, memory_counts)
 
 if mode == "plan_quality":
     orchestrator_answer = compact({
@@ -1260,6 +1299,7 @@ if mode == "plan_quality":
         "fallback_detected": planner_results.get("fallback_detected"),
         "initiative_status": initiative.get("status"),
         "review_decisions": review_decisions,
+        "success_contract_observed": observed_contract,
     })
 elif mode == "review_quality":
     orchestrator_answer = compact({
@@ -1267,6 +1307,13 @@ elif mode == "review_quality":
         "coder_evidence": task_evidence(coder),
         "initiative_status": initiative.get("status"),
         "execution_summary": execution_summary,
+        "memory_provenance": memory_counts,
+        "success_contract_observed": observed_contract,
+        "review_claims": {
+            "uses_reusable_memory": memory_counts["technology_similar"] + memory_counts["pattern_similar"] > 0,
+            "avoids_repo_specific_dependency": memory_counts["repo_specific"] == 0,
+            "review_passed": reviewer_results.get("status") == "success",
+        },
     })
 elif mode == "execution_quality":
     orchestrator_answer = compact({
@@ -1276,6 +1323,8 @@ elif mode == "execution_quality":
         "initiative_status": initiative.get("status"),
         "execution_summary": execution_summary,
         "review_decisions": review_decisions,
+        "memory_provenance": memory_counts,
+        "success_contract_observed": observed_contract,
     })
 else:
     orchestrator_answer = compact({
@@ -1283,15 +1332,17 @@ else:
         "researcher_evidence": task_evidence(researcher),
         "coder_evidence": task_evidence(coder),
         "reviewer_evidence": task_evidence(reviewer),
-        "memory_hits": run.get("memory_hits"),
+        "memory_hits": memory_hits,
+        "memory_provenance": memory_counts,
         "handoff_chain": case.get("expected_handoffs") or [],
         "initiative_status": initiative.get("status"),
         "execution_summary": execution_summary,
         "review_decisions": review_decisions,
+        "success_contract_observed": observed_contract,
     })
 
 sources = []
-for hit in run.get("memory_hits") or []:
+for hit in memory_hits:
     ref = hit.get("source_ref") or "benchmark-artifact"
     sources.append({"title": ref, "uri": "", "kind": hit.get("match_type") or "benchmark_memory"})
 

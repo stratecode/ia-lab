@@ -1640,8 +1640,26 @@ func (s *Server) callOpenAIJudge(ctx context.Context, query, orchestratorAnswer,
 	content, err := s.callOpenAIChat(
 		ctx,
 		s.Config.OpenAIJudgeModel,
-		`Eres un juez riguroso. Devuelve SOLO JSON válido con esta forma exacta:
-{"accuracy_score":0.0,"coverage_score":0.0,"source_use_score":0.0,"usefulness_score":0.0,"hallucination_risk_score":0.0,"winner":"orchestrator|reference|tie","reasoning":"..."}`,
+		`Eres un juez técnico y severo. Evalúa la RESPUESTA DEL ORQUESTADOR contra la pregunta original y el contrato de éxito. Usa la respuesta de referencia solo como punto de comparación, no como verdad absoluta.
+
+Reglas obligatorias:
+- Devuelve SOLO JSON válido.
+- "winner" debe ser exactamente uno de: "orchestrator", "reference", "tie".
+- Todas las puntuaciones van de 0.0 a 1.0.
+- Reserva 0.0 para ausencia casi total de evidencia útil o incumplimiento claro.
+- Si la respuesta del orquestador aporta evidencia concreta verificable de ejecución, aprobaciones, revisión o memoria relevante, no devuelvas todas las puntuaciones a 0.0.
+- Penaliza respuestas vagas, genéricas o que no conecten con el contrato de éxito.
+- "hallucination_risk_score" es 0.0 cuando el riesgo es bajo y 1.0 cuando el riesgo es alto.
+
+Rubrica mínima:
+- accuracy_score: ¿describe correctamente el resultado observado?
+- coverage_score: ¿cubre los requisitos importantes del contrato?
+- source_use_score: ¿usa bien la evidencia y memoria disponible?
+- usefulness_score: ¿sirve para decidir si el caso pasó o falló?
+- hallucination_risk_score: ¿hay riesgo de afirmaciones no sustentadas?
+
+Forma exacta:
+{"accuracy_score":0.0,"coverage_score":0.0,"source_use_score":0.0,"usefulness_score":0.0,"hallucination_risk_score":0.0,"winner":"tie","reasoning":"..."}`,
 		userPrompt,
 	)
 	if err != nil {
@@ -1702,6 +1720,9 @@ func parseJudgeVerdict(content string) (*judgeVerdict, error) {
 		Raw:                    raw,
 	}
 	if verdict.Winner == "" {
+		verdict.Winner = "tie"
+	}
+	if verdict.Winner != "orchestrator" && verdict.Winner != "reference" && verdict.Winner != "tie" {
 		verdict.Winner = "tie"
 	}
 	return verdict, nil
