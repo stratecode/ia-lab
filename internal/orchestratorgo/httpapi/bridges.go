@@ -65,7 +65,7 @@ func (s *Server) heartbeatBridge(w http.ResponseWriter, r *http.Request) {
 		if body.LeaseTTLSeconds != nil && *body.LeaseTTLSeconds > 0 {
 			ttl = *body.LeaseTTLSeconds
 		}
-		if err := s.Postgres.TouchLocalBridgeTaskLease(r.Context(), strings.TrimSpace(*body.CurrentTaskID), chi.URLParam(r, "bridgeID"), ttl, "active"); err != nil {
+		if err := s.Postgres.TouchLocalBridgeTaskLease(r.Context(), strings.TrimSpace(*body.CurrentTaskID), chi.URLParam(r, "bridgeID"), ttl, "active", body.CurrentStage, body.CurrentTool, body.CurrentSummary); err != nil {
 			writeDetail(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -122,7 +122,7 @@ func (s *Server) submitBridgeTaskResult(w http.ResponseWriter, r *http.Request) 
 	status := strings.ToLower(strings.TrimSpace(body.Status))
 	switch status {
 	case "waiting_approval":
-		_ = s.Postgres.FinalizeLocalBridgeTaskLease(r.Context(), taskID, bridgeID, "waiting_approval")
+		_ = s.Postgres.FinalizeLocalBridgeTaskLease(r.Context(), taskID, bridgeID, "waiting_approval", stringPtr("waiting_approval"), nil, body.Summary)
 		timeout := 300
 		if body.TimeoutSeconds != nil && *body.TimeoutSeconds > 0 {
 			timeout = *body.TimeoutSeconds
@@ -134,7 +134,7 @@ func (s *Server) submitBridgeTaskResult(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	case "success":
-		_ = s.Postgres.FinalizeLocalBridgeTaskLease(r.Context(), taskID, bridgeID, "completed")
+		_ = s.Postgres.FinalizeLocalBridgeTaskLease(r.Context(), taskID, bridgeID, "completed", stringPtr("completed"), nil, body.Summary)
 		if completed, err := s.Postgres.CompleteTask(r.Context(), taskID, "bridge:"+bridgeID, firstNonEmptyString(derefStringPtr(body.Summary), "Local bridge execution completed"), results); err != nil {
 			writeDetail(w, http.StatusInternalServerError, err.Error())
 			return
@@ -143,7 +143,7 @@ func (s *Server) submitBridgeTaskResult(w http.ResponseWriter, r *http.Request) 
 		}
 		s.reconcileRootTask(r.Context(), taskID)
 	default:
-		_ = s.Postgres.FinalizeLocalBridgeTaskLease(r.Context(), taskID, bridgeID, "failed")
+		_ = s.Postgres.FinalizeLocalBridgeTaskLease(r.Context(), taskID, bridgeID, "failed", stringPtr("failed"), nil, body.Summary)
 		errorMessage := firstNonEmptyString(derefStringPtr(body.ErrorMessage), derefStringPtr(body.Stderr), derefStringPtr(body.Stdout), "Local bridge execution failed")
 		if failed, err := s.Postgres.FailTask(r.Context(), taskID, "bridge:"+bridgeID, errorMessage, errorMessage, results); err != nil {
 			writeDetail(w, http.StatusInternalServerError, err.Error())

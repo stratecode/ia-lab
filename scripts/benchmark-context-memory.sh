@@ -781,13 +781,18 @@ for row in runs:
     update_slot(prog_slot)
 
 def score_series(sequence_id, mode):
-    values = []
+    values_by_iteration = {}
     for row in runs:
         if (row.get("sequence_id") or row.get("case_id") or "unknown") != sequence_id:
             continue
         if (row.get("mode") or "unknown") != mode:
             continue
-        values.append(float(row.get("score", 0) or 0))
+        iteration = int(row.get("iteration", 1) or 1)
+        values_by_iteration.setdefault(iteration, []).append(float(row.get("score", 0) or 0))
+    values = []
+    for iteration in sorted(values_by_iteration):
+        bucket = values_by_iteration[iteration]
+        values.append(sum(bucket) / max(1, len(bucket)))
     return values
 
 def calc_stddev(values):
@@ -803,12 +808,14 @@ def progression_label(values):
     if len(values) == 1:
         return "single_run"
     diffs = [values[i] - values[i - 1] for i in range(1, len(values))]
-    if all(diff == 0 for diff in diffs):
+    if all(abs(diff) < 1e-9 for diff in diffs):
         return "flat"
     if all(diff > 0 for diff in diffs):
         return "improving"
     if all(diff >= 0 for diff in diffs):
         return "non_decreasing"
+    if all(abs(diff) <= 1 for diff in diffs):
+        return "stable_drift"
     if all(diff <= 0 for diff in diffs):
         return "degrading"
     return "mixed"

@@ -1,0 +1,51 @@
+{
+  "id": "agent-maturity-reviewer-httpx-pattern",
+  "repo_id": "httpx",
+  "case_type": "review_only",
+  "goal": "Review a deterministic HTTPX repository change and show that reviewer quality improves from reusable HTTP-client validation memory, not from repo-specific history.",
+  "repo_profile": "python_http_client_library",
+  "project_type": "existing_repo",
+  "runtime_or_stack": "python",
+  "language": "python",
+  "problem_domain": "http_client",
+  "validation_pattern": "manifest_integrity",
+  "project_root": ".",
+  "test_focus": "reviewer validation quality for less-curated HTTP client repositories",
+  "test_command": [
+    "docker",
+    "run",
+    "--rm",
+    "-v",
+    "{{ project_root_abs }}:/src",
+    "-w",
+    "/src",
+    "python:3.12",
+    "/bin/bash",
+    "-lc",
+    "python - <<'PY'\nfrom pathlib import Path\nimport tomllib\nmanifest = Path('pyproject.toml')\nif not manifest.exists():\n    raise SystemExit(1)\ndata = tomllib.loads(manifest.read_text())\nproject = data.get('project') or {}\nname = project.get('name') or 'unknown'\nprint(name)\nPY"
+  ],
+  "expected_files": ["pyproject.toml"],
+  "coder_tool": "write_file",
+  "patch_target": ".lab/reviewer-pattern-marker.txt",
+  "write_content": "reviewer pattern marker\n",
+  "coder_summary": "Write a deterministic reviewer pattern marker file before repository review.",
+  "benchmark_memory_strategy": "pattern_first",
+  "benchmark_league": "pattern_transfer",
+  "sequence_id": "agent_maturity_reviewer_http_clients",
+  "sequence_position": 2,
+  "maturity_block": "execution_maturity",
+  "primary_agent": "reviewer",
+  "expected_handoffs": [
+    "coder->reviewer"
+  ],
+  "success_contract": {
+    "required_agents": ["researcher", "coder", "reviewer"],
+    "expected_launch_order": ["researcher", "coder", "reviewer"],
+    "requires_coder_approval": true,
+    "expected_coder_tool": "write_file",
+    "initiative_must_complete": true,
+    "review_must_pass": true,
+    "reject_toolchain_confusion": true
+  },
+  "reference_eval_mode": "review_quality"
+}

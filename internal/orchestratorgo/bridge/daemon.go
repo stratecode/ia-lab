@@ -35,6 +35,9 @@ type Daemon struct {
 	pollInterval   time.Duration
 	heartbeatEvery time.Duration
 	currentTaskID  *string
+	currentStage   *string
+	currentTool    *string
+	currentSummary *string
 }
 
 func NewDaemon(opts DaemonOptions) (*Daemon, error) {
@@ -85,7 +88,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 		if time.Since(lastHeartbeat) >= d.heartbeatEvery {
-			if _, err := d.client.Heartbeat(ctx, d.bridgeID, "active", d.currentTaskID, intPtr(int(d.heartbeatEvery.Seconds())*3)); err != nil {
+			if _, err := d.client.Heartbeat(ctx, d.bridgeID, "active", d.currentTaskID, intPtr(int(d.heartbeatEvery.Seconds())*3), d.currentStage, d.currentTool, d.currentSummary); err != nil {
 				return err
 			}
 			lastHeartbeat = time.Now()
@@ -103,7 +106,36 @@ func (d *Daemon) Run(ctx context.Context) error {
 			}
 		}
 		d.currentTaskID = &claim.TaskID
-		result, execErr := d.executor.Execute(ctx, *claim)
+		d.currentStage = stringPtr("executing")
+		d.currentTool = stringPtr(currentClaimTool(*claim))
+		d.currentSummary = stringPtr(currentClaimSummary(*claim))
+		type execOutcome struct {
+			result  domain.LocalBridgeResultRequest
+			execErr error
+		}
+		outcomeCh := make(chan execOutcome, 1)
+		go func() {
+			result, execErr := d.executor.Execute(ctx, *claim)
+			outcomeCh <- execOutcome{result: result, execErr: execErr}
+		}()
+		var result domain.LocalBridgeResultRequest
+		var execErr error
+		executing := true
+		for executing {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case outcome := <-outcomeCh:
+				result = outcome.result
+				execErr = outcome.execErr
+				executing = false
+			case <-time.After(d.heartbeatEvery):
+				if _, err := d.client.Heartbeat(ctx, d.bridgeID, "active", d.currentTaskID, intPtr(int(d.heartbeatEvery.Seconds())*3), d.currentStage, d.currentTool, d.currentSummary); err != nil {
+					return err
+				}
+				lastHeartbeat = time.Now()
+			}
+		}
 		if execErr != nil {
 			msg := execErr.Error()
 			result = domain.LocalBridgeResultRequest{
@@ -117,8 +149,29 @@ func (d *Daemon) Run(ctx context.Context) error {
 			return fmt.Errorf("submit result for task %s: %w", claim.TaskID, err)
 		}
 		d.currentTaskID = nil
+		d.currentStage = nil
+		d.currentTool = nil
+		d.currentSummary = nil
 		log.Info().Str("bridge_id", d.bridgeID).Str("task_id", claim.TaskID).Str("status", result.Status).Msg("local bridge processed task")
 	}
+}
+
+func currentClaimTool(claim domain.LocalBridgeTaskClaimResponse) string {
+	toolRequest, ok := claim.Metadata["tool_request"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(asString(toolRequest["tool"]))
+}
+
+func currentClaimSummary(claim domain.LocalBridgeTaskClaimResponse) string {
+	if summary := strings.TrimSpace(asString(claim.Metadata["coder_summary"])); summary != "" {
+		return summary
+	}
+	if summary := strings.TrimSpace(asString(claim.Metadata["review_summary"])); summary != "" {
+		return summary
+	}
+	return strings.TrimSpace(claim.Description)
 }
 
 func bridgeCapabilities() map[string]any {

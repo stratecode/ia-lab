@@ -35,7 +35,7 @@ func RunRegister(ctx context.Context, opts CLIOptions) error {
 
 func RunHeartbeat(ctx context.Context, opts CLIOptions) error {
 	client := NewClient(opts.BaseURL, opts.APIKey, 20*time.Second)
-	record, err := client.Heartbeat(ctx, normalizedBridgeID(opts.BridgeID), "active", nil, nil)
+	record, err := client.Heartbeat(ctx, normalizedBridgeID(opts.BridgeID), "active", nil, nil, nil, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -65,7 +65,7 @@ func RunSmoke(ctx context.Context, opts CLIOptions) error {
 	if _, err := client.Register(ctx, registerPayload(opts)); err != nil {
 		return err
 	}
-	if _, err := client.Heartbeat(ctx, normalizedBridgeID(opts.BridgeID), "active", nil, nil); err != nil {
+	if _, err := client.Heartbeat(ctx, normalizedBridgeID(opts.BridgeID), "active", nil, nil, nil, nil, nil); err != nil {
 		return err
 	}
 	claim, err := client.ClaimNext(ctx, normalizedBridgeID(opts.BridgeID))

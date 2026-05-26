@@ -98,6 +98,7 @@ Objective: move from controlled workflow to useful engineering work on existing 
   - individual capability
   - handoff quality
   - end-to-end system usefulness
+- extend `agent_maturity` beyond repo-local recall so reviewer quality is measured on `pattern_transfer` sequences too, not only on same-repo memory
 - run official maturity campaigns with `runs_per_case=3` so progression claims are based on repeated evidence instead of a lucky first pass
 - use three baselines for curated maturity cases:
   - `memory_off`

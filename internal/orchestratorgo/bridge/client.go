@@ -43,12 +43,15 @@ func (c *Client) Register(ctx context.Context, body domain.LocalBridgeRegisterRe
 	return &out, nil
 }
 
-func (c *Client) Heartbeat(ctx context.Context, bridgeID, status string, currentTaskID *string, leaseTTLSeconds *int) (*domain.LocalBridgeResponse, error) {
+func (c *Client) Heartbeat(ctx context.Context, bridgeID, status string, currentTaskID *string, leaseTTLSeconds *int, currentStage *string, currentTool *string, currentSummary *string) (*domain.LocalBridgeResponse, error) {
 	var out domain.LocalBridgeResponse
 	if err := c.requestJSON(ctx, http.MethodPost, "/bridges/"+bridgeID+"/heartbeat", domain.LocalBridgeHeartbeatRequest{
 		Status:          status,
 		CurrentTaskID:   currentTaskID,
 		LeaseTTLSeconds: leaseTTLSeconds,
+		CurrentStage:    currentStage,
+		CurrentTool:     currentTool,
+		CurrentSummary:  currentSummary,
 	}, &out); err != nil {
 		return nil, err
 	}

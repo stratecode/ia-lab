@@ -388,7 +388,7 @@ func (s *PostgresStore) HeartbeatLocalBridge(ctx context.Context, bridgeID, stat
 	return s.GetLocalBridge(ctx, bridgeID)
 }
 
-func (s *PostgresStore) TouchLocalBridgeTaskLease(ctx context.Context, taskID, bridgeID string, ttlSeconds int, status string) error {
+func (s *PostgresStore) TouchLocalBridgeTaskLease(ctx context.Context, taskID, bridgeID string, ttlSeconds int, status string, stage *string, tool *string, summary *string) error {
 	taskID = strings.TrimSpace(taskID)
 	bridgeID = strings.TrimSpace(bridgeID)
 	if taskID == "" || bridgeID == "" {
@@ -399,49 +399,65 @@ func (s *PostgresStore) TouchLocalBridgeTaskLease(ctx context.Context, taskID, b
 	}
 	now := time.Now().UTC()
 	expiresAt := now.Add(time.Duration(ttlSeconds) * time.Second)
-	stage := nonEmptyBridgeLeaseStatus(status, "active")
+	checkpointStage := strings.TrimSpace(firstNonEmptyString(derefString(stage), nonEmptyBridgeLeaseStatus(status, "active")))
 	patch := map[string]any{
 		"local_bridge_lease": map[string]any{
 			"bridge_id":         bridgeID,
-			"status":            stage,
+			"status":            nonEmptyBridgeLeaseStatus(status, "active"),
 			"last_heartbeat_at": now.Format(time.RFC3339),
 			"lease_expires_at":  expiresAt.Format(time.RFC3339),
 		},
 		"recovery_checkpoint": map[string]any{
-			"stage":            stage,
+			"stage":            checkpointStage,
 			"bridge_id":        bridgeID,
 			"updated_at":       now.Format(time.RFC3339),
 			"lease_expires_at": expiresAt.Format(time.RFC3339),
 			"execution_target": "local",
 		},
 	}
+	if value := strings.TrimSpace(derefString(tool)); value != "" {
+		patch["local_bridge_lease"].(map[string]any)["tool"] = value
+		patch["recovery_checkpoint"].(map[string]any)["tool"] = value
+	}
+	if value := strings.TrimSpace(derefString(summary)); value != "" {
+		patch["local_bridge_lease"].(map[string]any)["summary"] = value
+		patch["recovery_checkpoint"].(map[string]any)["summary"] = value
+	}
 	return s.PatchTaskMetadata(ctx, taskID, patch)
 }
 
-func (s *PostgresStore) FinalizeLocalBridgeTaskLease(ctx context.Context, taskID, bridgeID, status string) error {
+func (s *PostgresStore) FinalizeLocalBridgeTaskLease(ctx context.Context, taskID, bridgeID, status string, stage *string, tool *string, summary *string) error {
 	taskID = strings.TrimSpace(taskID)
 	bridgeID = strings.TrimSpace(bridgeID)
 	if taskID == "" || bridgeID == "" {
 		return nil
 	}
 	now := time.Now().UTC()
-	stage := nonEmptyBridgeLeaseStatus(status, "completed")
+	checkpointStage := strings.TrimSpace(firstNonEmptyString(derefString(stage), nonEmptyBridgeLeaseStatus(status, "completed")))
 	patch := map[string]any{
 		"local_bridge_lease": map[string]any{
 			"bridge_id":         bridgeID,
-			"status":            stage,
+			"status":            nonEmptyBridgeLeaseStatus(status, "completed"),
 			"last_heartbeat_at": now.Format(time.RFC3339),
 			"lease_expires_at":  now.Format(time.RFC3339),
 			"released_at":       now.Format(time.RFC3339),
 		},
 		"recovery_checkpoint": map[string]any{
-			"stage":            stage,
+			"stage":            checkpointStage,
 			"bridge_id":        bridgeID,
 			"updated_at":       now.Format(time.RFC3339),
 			"lease_expires_at": now.Format(time.RFC3339),
 			"released_at":      now.Format(time.RFC3339),
 			"execution_target": "local",
 		},
+	}
+	if value := strings.TrimSpace(derefString(tool)); value != "" {
+		patch["local_bridge_lease"].(map[string]any)["tool"] = value
+		patch["recovery_checkpoint"].(map[string]any)["tool"] = value
+	}
+	if value := strings.TrimSpace(derefString(summary)); value != "" {
+		patch["local_bridge_lease"].(map[string]any)["summary"] = value
+		patch["recovery_checkpoint"].(map[string]any)["summary"] = value
 	}
 	return s.PatchTaskMetadata(ctx, taskID, patch)
 }
@@ -510,7 +526,7 @@ func (s *PostgresStore) ClaimNextLocalBridgeTask(ctx context.Context, bridgeID s
 		if err := tx.Commit(ctx); err != nil {
 			return nil, err
 		}
-		if err := s.TouchLocalBridgeTaskLease(ctx, task.ID, bridgeID, 45, "resumed"); err != nil {
+		if err := s.TouchLocalBridgeTaskLease(ctx, task.ID, bridgeID, 45, "resumed", nil, nil, nil); err != nil {
 			return nil, err
 		}
 		return buildLocalBridgeClaim(task, bridge), nil
@@ -574,7 +590,7 @@ func (s *PostgresStore) ClaimNextLocalBridgeTask(ctx context.Context, bridgeID s
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	if err := s.TouchLocalBridgeTaskLease(ctx, task.ID, bridgeID, 45, "claimed"); err != nil {
+	if err := s.TouchLocalBridgeTaskLease(ctx, task.ID, bridgeID, 45, "claimed", nil, nil, nil); err != nil {
 		return nil, err
 	}
 	return buildLocalBridgeClaim(task, bridge), nil
@@ -2043,6 +2059,22 @@ func asString(input any) string {
 	default:
 		return ""
 	}
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 type approvalScanner interface {

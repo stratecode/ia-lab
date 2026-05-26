@@ -15,6 +15,9 @@ type LocalBridgeHeartbeatRequest struct {
 	Status          string  `json:"status"`
 	CurrentTaskID   *string `json:"current_task_id,omitempty"`
 	LeaseTTLSeconds *int    `json:"lease_ttl_seconds,omitempty"`
+	CurrentStage    *string `json:"current_stage,omitempty"`
+	CurrentTool     *string `json:"current_tool,omitempty"`
+	CurrentSummary  *string `json:"current_summary,omitempty"`
 }
 
 type LocalBridgeResponse struct {

@@ -1727,7 +1727,7 @@ func (m *TUIModel) heartbeatBridgeCmd() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		_, err := m.client.Heartbeat(ctx, normalizedBridgeID(m.opts.BridgeID), "active", nil, nil)
+		_, err := m.client.Heartbeat(ctx, normalizedBridgeID(m.opts.BridgeID), "active", nil, nil, nil, nil, nil)
 		return tuiActionMsg{text: "Heartbeat sent", err: err}
 	}
 }

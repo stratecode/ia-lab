@@ -6,6 +6,8 @@
     "agent-maturity-researcher-monolog",
     "agent-maturity-coder-python-slugify",
     "agent-maturity-reviewer-click",
+    "agent-maturity-reviewer-axios-pattern",
+    "agent-maturity-reviewer-httpx-pattern",
     "agent-maturity-coordination-python-slugify"
   ],
   "repo_ids": [],
