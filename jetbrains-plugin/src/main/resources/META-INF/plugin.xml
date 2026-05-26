@@ -1,0 +1,38 @@
+<idea-plugin>
+    <id>com.stratecode.lab.jetbrains</id>
+    <name>StrateCode Agents</name>
+    <vendor email="support@stratecode.com" url="https://stratecode.com">StrateCode</vendor>
+
+    <description><![CDATA[
+    Governed JetBrains console for initiatives, bridge-backed local execution, approvals, and patch workflows.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <notificationGroup
+                id="StrateCode Agents"
+                displayType="BALLOON"
+                isLogByDefault="true"/>
+        <toolWindow
+                id="Agents"
+                anchor="right"
+                factoryClass="com.stratecode.lab.jetbrains.ui.AgentsToolWindowFactory"
+                canCloseContents="false"
+                secondary="true"/>
+        <projectConfigurable
+                id="com.stratecode.lab.jetbrains.settings"
+                displayName="StrateCode Agents"
+                instance="com.stratecode.lab.jetbrains.settings.PluginSettingsConfigurable"/>
+    </extensions>
+
+    <actions>
+        <action
+                id="com.stratecode.lab.jetbrains.CreateInitiativeFromSelectionAction"
+                class="com.stratecode.lab.jetbrains.actions.CreateInitiativeFromSelectionAction"
+                text="Create Initiative from Selection"
+                description="Create a governed initiative from the current editor selection">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
