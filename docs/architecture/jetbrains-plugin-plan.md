@@ -20,7 +20,11 @@ Implemented now:
   - project-scoped capability visibility
   - initiative creation
   - recent initiative listing scoped to the current workspace
-  - raw initiative detail fetch
+  - typed initiative detail, review timeline, and task backlog rendering
+  - phase actions:
+    - advance requirements/design drafts
+    - approve/reject requirements/design/plan
+    - generate plan backlog
 - editor popup action: `Create Initiative from Selection`
 - Gradle wrapper, tests, and distributable plugin zip build
 

@@ -12,7 +12,9 @@ import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import com.stratecode.lab.jetbrains.bridge.BridgeResolver
+import com.stratecode.lab.jetbrains.client.InitiativeDetailResponseRecord
 import com.stratecode.lab.jetbrains.client.InitiativeSummary
+import com.stratecode.lab.jetbrains.client.InitiativeTaskLinkRecord
 import com.stratecode.lab.jetbrains.client.OrchestratorClient
 import com.stratecode.lab.jetbrains.project.ProjectContext
 import com.stratecode.lab.jetbrains.project.ProjectContextResolver
@@ -53,7 +55,14 @@ class AgentsToolWindowPanel(
     private val scopeSummaryLabel = htmlLabel("Initiatives will be scoped to the current workspace.")
 
     private val capabilitiesArea = infoArea(12)
-    private val initiativeDetailArea = infoArea(18)
+    private val initiativeSummaryArea = infoArea(15)
+    private val initiativeReviewsArea = infoArea(8)
+    private val tasksArea = infoArea(14)
+    private val feedbackArea = JBTextArea(4, 60).apply {
+        lineWrap = true
+        wrapStyleWord = true
+        border = JBUI.Borders.empty(8)
+    }
 
     private val initiativesModel = DefaultListModel<InitiativeSummary>()
     private val initiativesList = JBList(initiativesModel).apply {
@@ -68,10 +77,21 @@ class AgentsToolWindowPanel(
         border = JBUI.Borders.empty(8)
     }
 
+    private val advanceButton = JButton("Advance Draft")
+    private val approveButton = JButton("Approve Phase")
+    private val rejectButton = JButton("Reject Phase")
+    private val generateTasksButton = JButton("Generate Task Backlog")
+    private val refreshDetailButton = JButton("Refresh Detail")
+
+    private var selectedInitiative: InitiativeSummary? = null
+    private var selectedDetail: InitiativeDetailResponseRecord? = null
+
     init {
         border = JBUI.Borders.empty(12)
         add(buildHeader(), BorderLayout.NORTH)
         add(buildTabs(), BorderLayout.CENTER)
+        bindActions()
+        updateActionState()
         loadStatus()
         loadInitiatives()
     }
@@ -106,12 +126,11 @@ class AgentsToolWindowPanel(
         }
     }
 
-    private fun buildTabs(): JComponent {
-        return JBTabbedPane().apply {
+    private fun buildTabs(): JComponent =
+        JBTabbedPane().apply {
             addTab("Overview", buildOverviewTab())
             addTab("Initiatives", buildInitiativesTab())
         }
-    }
 
     private fun buildOverviewTab(): JComponent {
         val statusGrid = JPanel(GridLayout(3, 1, 0, 10)).apply {
@@ -153,35 +172,88 @@ class AgentsToolWindowPanel(
             add(JBScrollPane(initiativeGoalArea))
         }
 
-        val controls = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+        val createControls = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
             isOpaque = false
             add(JButton("Create Initiative").apply { addActionListener { createInitiative() } })
             add(JButton("Refresh Project Initiatives").apply { addActionListener { loadInitiatives() } })
         }
 
-        val formSection = JPanel(BorderLayout()).apply {
+        val leftTop = JPanel(BorderLayout()).apply {
             add(section("New Initiative", form), BorderLayout.CENTER)
-            add(controls, BorderLayout.SOUTH)
+            add(createControls, BorderLayout.SOUTH)
         }
 
         initiativesList.addListSelectionListener {
             val selected = initiativesList.selectedValue ?: return@addListSelectionListener
+            selectedInitiative = selected
             loadInitiativeDetail(selected.id)
         }
 
-        val listSection = section("Project Initiatives", JBScrollPane(initiativesList))
-        val detailSection = section("Initiative Detail", JBScrollPane(initiativeDetailArea))
-
-        val bottom = JBSplitter(false, 0.34f).apply {
-            firstComponent = listSection
-            secondComponent = detailSection
+        val detailTabs = JBTabbedPane().apply {
+            addTab("Summary", section("Initiative Summary", JBScrollPane(initiativeSummaryArea)))
+            addTab("Reviews", section("Phase Reviews", JBScrollPane(initiativeReviewsArea)))
+            addTab("Tasks", section("Task Backlog", JBScrollPane(tasksArea)))
         }
 
-        return JBSplitter(true, 0.34f).apply {
+        val feedbackSection = section("Action Feedback", JBScrollPane(feedbackArea))
+        val actionControls = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+            isOpaque = false
+            add(advanceButton)
+            add(approveButton)
+            add(rejectButton)
+            add(generateTasksButton)
+            add(refreshDetailButton)
+        }
+
+        val rightTop = JPanel(BorderLayout()).apply {
+            add(detailTabs, BorderLayout.CENTER)
+            add(actionControls, BorderLayout.SOUTH)
+        }
+
+        val right = JBSplitter(true, 0.78f).apply {
+            firstComponent = rightTop
+            secondComponent = feedbackSection
+        }
+
+        val bottom = JBSplitter(false, 0.32f).apply {
+            firstComponent = section("Project Initiatives", JBScrollPane(initiativesList))
+            secondComponent = right
+        }
+
+        return JBSplitter(true, 0.30f).apply {
             border = JBUI.Borders.emptyTop(12)
-            firstComponent = formSection
+            firstComponent = leftTop
             secondComponent = bottom
         }
+    }
+
+    private fun bindActions() {
+        advanceButton.addActionListener { advanceSelectedInitiative() }
+        approveButton.addActionListener { resolveSelectedInitiative(true) }
+        rejectButton.addActionListener { resolveSelectedInitiative(false) }
+        generateTasksButton.addActionListener { generateSelectedInitiativeTasks() }
+        refreshDetailButton.addActionListener {
+            selectedInitiative?.let { loadInitiativeDetail(it.id) }
+        }
+    }
+
+    private fun updateActionState() {
+        val detail = selectedDetail
+        if (detail == null) {
+            advanceButton.isEnabled = false
+            approveButton.isEnabled = false
+            rejectButton.isEnabled = false
+            generateTasksButton.isEnabled = false
+            refreshDetailButton.isEnabled = false
+            return
+        }
+        refreshDetailButton.isEnabled = true
+        val phase = detail.initiative.currentPhase
+        val status = detail.initiative.status
+        advanceButton.isEnabled = phase in setOf("requirements", "design") && status.endsWith("_draft")
+        approveButton.isEnabled = phase in setOf("requirements", "design", "plan") && status.endsWith("_review")
+        rejectButton.isEnabled = phase in setOf("requirements", "design", "plan") && status.endsWith("_review")
+        generateTasksButton.isEnabled = phase == "plan" && status == "plan_draft"
     }
 
     private fun loadStatus() {
@@ -191,7 +263,7 @@ class AgentsToolWindowPanel(
         updateProjectSummary(context)
 
         if (apiKey.isBlank()) {
-            backendBadge.setText("Backend  missing key")
+            backendBadge.text = "Backend  missing key"
             setBadgeColor(backendBadge, Color(0x8B5E3C))
             capabilitiesArea.text = "Configure the API key in Settings > StrateCode Agents."
             return
@@ -207,9 +279,9 @@ class AgentsToolWindowPanel(
                 val projectCaps = context.repositoryUrl?.let { client.getProjectCapabilities(it, "needs_repo_static_analysis", "reviewer") }
                 StrateCodeProjectStore.write(context, bridgeName = settings.currentState.bridgeName)
                 SwingUtilities.invokeLater {
-                    backendBadge.setText("Backend  ${if (ready.ready) "ready" else "not ready"}")
+                    backendBadge.text = "Backend  ${if (ready.ready) "ready" else "not ready"}"
                     setBadgeColor(backendBadge, if (ready.ready) Color(0x1F7A4C) else Color(0x8B5E3C))
-                    bridgeBadge.setText("Bridge  ${bridge.status}")
+                    bridgeBadge.text = "Bridge  ${bridge.status}"
                     setBadgeColor(bridgeBadge, when (bridge.status) {
                         "online", "idle", "busy", "ready" -> Color(0x1F7A4C)
                         "missing" -> Color(0x8B5E3C)
@@ -220,9 +292,9 @@ class AgentsToolWindowPanel(
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
-                    backendBadge.setText("Backend  error")
+                    backendBadge.text = "Backend  error"
                     setBadgeColor(backendBadge, Color(0x8B2E2E))
-                    bridgeBadge.setText("Bridge  unresolved")
+                    bridgeBadge.text = "Bridge  unresolved"
                     setBadgeColor(bridgeBadge, Color(0x8B5E3C))
                     capabilitiesArea.text = error.message ?: error.toString()
                     notify("Status refresh failed", error.message ?: error.toString(), NotificationType.ERROR)
@@ -285,7 +357,7 @@ class AgentsToolWindowPanel(
                     initiativeGoalArea.text = ""
                     initiativeTitleField.text = it.title
                     loadStatus()
-                    loadInitiatives()
+                    loadInitiatives(selectInitiativeId = it.id)
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
@@ -295,7 +367,7 @@ class AgentsToolWindowPanel(
         }
     }
 
-    private fun loadInitiatives() {
+    private fun loadInitiatives(selectInitiativeId: String? = null) {
         val settings = settings()
         val apiKey = settings.getApiKey()
         val context = ProjectContextResolver.resolve(project)
@@ -309,13 +381,26 @@ class AgentsToolWindowPanel(
                 SwingUtilities.invokeLater {
                     initiativesModel.clear()
                     response.items.forEach(initiativesModel::addElement)
+                    val targetId = selectInitiativeId ?: context.metadata?.lastInitiativeId
+                    if (targetId != null) {
+                        val target = response.items.firstOrNull { it.id == targetId }
+                        if (target != null) {
+                            initiativesList.setSelectedValue(target, true)
+                        }
+                    }
                     if (response.items.isEmpty()) {
-                        initiativeDetailArea.text = "No initiatives found for:\n${context.workspaceRoot}\n\nThis panel is scoped to the current project only."
+                        initiativeSummaryArea.text = "No initiatives found for:\n${context.workspaceRoot}\n\nThis panel is scoped to the current project only."
+                        initiativeReviewsArea.text = ""
+                        tasksArea.text = ""
+                        selectedDetail = null
+                        updateActionState()
                     }
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
-                    initiativeDetailArea.text = error.message ?: error.toString()
+                    initiativeSummaryArea.text = error.message ?: error.toString()
+                    selectedDetail = null
+                    updateActionState()
                 }
             }
         }
@@ -329,21 +414,92 @@ class AgentsToolWindowPanel(
         }
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                OrchestratorClient(settings.currentState.baseUrl, apiKey).getInitiativeDetailRaw(initiativeId)
-            }.onSuccess { detail ->
+                val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
+                val detail = client.getInitiativeDetail(initiativeId)
+                val tasks = client.listInitiativeTasks(initiativeId)
+                detail to tasks.items
+            }.onSuccess { (detail, tasks) ->
+                val context = ProjectContextResolver.resolve(project)
+                StrateCodeProjectStore.write(
+                    context,
+                    bridgeName = settings.currentState.bridgeName,
+                    lastInitiativeId = detail.initiative.id,
+                    lastInitiativeTitle = detail.initiative.title,
+                )
                 SwingUtilities.invokeLater {
-                    initiativeDetailArea.text = detail
+                    selectedDetail = detail
+                    initiativeSummaryArea.text = renderInitiativeSummary(detail)
+                    initiativeReviewsArea.text = renderReviews(detail)
+                    tasksArea.text = renderTasks(tasks)
+                    updateActionState()
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
-                    initiativeDetailArea.text = error.message ?: error.toString()
+                    initiativeSummaryArea.text = error.message ?: error.toString()
+                    initiativeReviewsArea.text = ""
+                    tasksArea.text = ""
+                    selectedDetail = null
+                    updateActionState()
+                }
+            }
+        }
+    }
+
+    private fun advanceSelectedInitiative() {
+        val detail = selectedDetail ?: return
+        runInitiativeMutation("Draft advanced") { client ->
+            client.advanceInitiative(detail.initiative.id, feedbackArea.text.trim())
+        }
+    }
+
+    private fun resolveSelectedInitiative(approve: Boolean) {
+        val detail = selectedDetail ?: return
+        val phase = detail.initiative.currentPhase
+        val action = if (approve) "Phase approved" else "Phase rejected"
+        runInitiativeMutation(action) { client ->
+            if (approve) {
+                client.approveInitiativePhase(detail.initiative.id, phase, "jetbrains-plugin", feedbackArea.text.trim())
+            } else {
+                client.rejectInitiativePhase(detail.initiative.id, phase, "jetbrains-plugin", feedbackArea.text.trim())
+            }
+        }
+    }
+
+    private fun generateSelectedInitiativeTasks() {
+        val detail = selectedDetail ?: return
+        runInitiativeMutation("Task backlog generated") { client ->
+            client.generateInitiativeTasks(detail.initiative.id, feedbackArea.text.trim()).initiative
+        }
+    }
+
+    private fun runInitiativeMutation(successTitle: String, action: (OrchestratorClient) -> Any) {
+        val settings = settings()
+        val apiKey = settings.getApiKey()
+        val selected = selectedInitiative ?: return
+        if (apiKey.isBlank()) {
+            notify("Action blocked", "Configure an API key first.", NotificationType.WARNING)
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                action(OrchestratorClient(settings.currentState.baseUrl, apiKey))
+            }.onSuccess {
+                SwingUtilities.invokeLater {
+                    notify(successTitle, selected.title, NotificationType.INFORMATION)
+                    feedbackArea.text = ""
+                    loadInitiatives(selectInitiativeId = selected.id)
+                    loadInitiativeDetail(selected.id)
+                }
+            }.onFailure { error ->
+                SwingUtilities.invokeLater {
+                    notify("Initiative action failed", error.message ?: error.toString(), NotificationType.ERROR)
                 }
             }
         }
     }
 
     private fun updateProjectSummary(context: ProjectContext) {
-        projectBadge.setText("Project  ${context.projectName}")
+        projectBadge.text = "Project  ${context.projectName}"
         setBadgeColor(projectBadge, if (context.degraded) Color(0x8B5E3C) else Color(0x365A7C))
         projectSummaryLabel.text = """
             <html>
@@ -356,7 +512,7 @@ class AgentsToolWindowPanel(
         metadataSummaryLabel.text = metadataSummaryHtml(context)
         scopeSummaryLabel.text = """
             <html>
-            This plugin now scopes initiative visibility to the current workspace root.<br/>
+            This plugin scopes initiative visibility to the current workspace root.<br/>
             Only initiatives with <code>workspace_root=${escape(context.workspaceRoot)}</code> are listed.
             </html>
         """.trimIndent()
@@ -403,6 +559,77 @@ class AgentsToolWindowPanel(
             }
         }
         return builder.toString()
+    }
+
+    private fun renderInitiativeSummary(detail: InitiativeDetailResponseRecord): String {
+        val initiative = detail.initiative
+        val builder = StringBuilder()
+        builder.appendLine("Title: ${initiative.title}")
+        builder.appendLine("Status: ${initiative.status}")
+        builder.appendLine("Current phase: ${initiative.currentPhase}")
+        builder.appendLine("Execution mode: ${initiative.executionMode}")
+        builder.appendLine("Workspace: ${initiative.workspaceRoot}")
+        builder.appendLine("Created by: ${initiative.createdBy}")
+        builder.appendLine("Updated: ${initiative.updatedAt}")
+        builder.appendLine()
+        builder.appendLine("Goal")
+        builder.appendLine("====")
+        builder.appendLine(initiative.goal)
+        builder.appendLine()
+        builder.appendLine("Execution summary")
+        builder.appendLine("=================")
+        builder.appendLine("Backlog materialized: ${detail.executionSummary.backlogMaterialized}")
+        builder.appendLine("Aggregated status: ${detail.executionSummary.aggregatedStatus}")
+        builder.appendLine("Task count: ${detail.executionSummary.taskCount}")
+        builder.appendLine("Pending manual: ${detail.executionSummary.pendingManual}")
+        builder.appendLine()
+        builder.appendLine("Execution policy")
+        builder.appendLine("================")
+        builder.appendLine("Scope: ${detail.executionPolicy.scope}")
+        builder.appendLine("Allowed modes: ${detail.executionPolicy.allowedModes.joinToString(", ")}")
+        builder.appendLine("Approval modes: ${detail.executionPolicy.approvalRequiredModes.joinToString(", ")}")
+        builder.appendLine()
+        builder.appendLine("Phase history")
+        builder.appendLine("=============")
+        detail.histories.forEach { history ->
+            builder.appendLine("• ${history.phase} v${history.activeVersion} (${history.items.size} entries)")
+        }
+        return builder.toString()
+    }
+
+    private fun renderReviews(detail: InitiativeDetailResponseRecord): String {
+        if (detail.reviews.isEmpty()) {
+            return "No reviews recorded yet."
+        }
+        return buildString {
+            detail.reviews.forEach { review ->
+                appendLine("${review.phase} / ${review.decision} / ${review.createdAt}")
+                appendLine("by: ${review.generatedBy ?: "-"}")
+                if (!review.feedback.isNullOrBlank()) {
+                    appendLine("feedback: ${review.feedback}")
+                }
+                appendLine()
+            }
+        }.trim()
+    }
+
+    private fun renderTasks(tasks: List<InitiativeTaskLinkRecord>): String {
+        if (tasks.isEmpty()) {
+            return "No tasks materialized yet."
+        }
+        return buildString {
+            tasks.sortedBy { it.launchOrder }.forEach { link ->
+                appendLine("#${link.launchOrder} ${link.task.description}")
+                appendLine("agent=${link.task.assignedAgent ?: link.task.plannedAgent ?: "-"} mode=${link.executionMode} target=${link.task.executionTarget} state=${link.task.state}")
+                if (!link.epic.isNullOrBlank()) {
+                    appendLine("epic=${link.epic}")
+                }
+                if (!link.launchGroup.isNullOrBlank()) {
+                    appendLine("group=${link.launchGroup}")
+                }
+                appendLine()
+            }
+        }.trim()
     }
 
     private fun badge(title: String, value: String, color: Color): JLabel =

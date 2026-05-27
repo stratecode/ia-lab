@@ -12,6 +12,11 @@ Current scope:
 - project-scoped capability visibility
 - recent initiative listing and detail fetch, scoped to the current `workspace_root`
 - initiative creation from the tool window or editor selection
+- initiative phase actions from the IDE:
+  - advance requirements/design drafts
+  - approve or reject requirements/design/plan reviews
+  - generate the execution-plan task backlog
+- typed initiative summary, review timeline, and task backlog rendering
 - packaged plugin zip generation via Gradle
 
 Useful commands:

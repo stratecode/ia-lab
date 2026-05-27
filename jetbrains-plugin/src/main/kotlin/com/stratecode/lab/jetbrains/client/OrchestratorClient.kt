@@ -95,6 +95,113 @@ data class InitiativeCreateRequest(
     @SerialName("execution_mode") val executionMode: String = "selective",
 )
 
+@Serializable
+data class InitiativeActionRequest(
+    val feedback: String = "",
+    val operator: String? = null,
+)
+
+@Serializable
+data class InitiativeRecord(
+    val id: String,
+    val title: String,
+    @SerialName("workspace_root") val workspaceRoot: String,
+    val goal: String,
+    val status: String,
+    @SerialName("current_phase") val currentPhase: String,
+    @SerialName("created_by") val createdBy: String,
+    @SerialName("execution_mode") val executionMode: String,
+    @SerialName("created_at") val createdAt: String,
+    @SerialName("updated_at") val updatedAt: String,
+)
+
+@Serializable
+data class InitiativePhaseReviewRecord(
+    val id: String,
+    @SerialName("initiative_id") val initiativeId: String,
+    val phase: String,
+    val decision: String,
+    val feedback: String? = null,
+    @SerialName("generated_by") val generatedBy: String? = null,
+    @SerialName("created_at") val createdAt: String,
+)
+
+@Serializable
+data class InitiativeHistoryEntryRecord(
+    val version: Int,
+    @SerialName("diff_summary") val diffSummary: String? = null,
+    @SerialName("artifact_type") val artifactType: String? = null,
+    @SerialName("created_at") val createdAt: String,
+)
+
+@Serializable
+data class InitiativePhaseHistoryRecord(
+    val phase: String,
+    @SerialName("active_version") val activeVersion: Int,
+    val items: List<InitiativeHistoryEntryRecord> = emptyList(),
+)
+
+@Serializable
+data class InitiativeExecutionSummaryRecord(
+    @SerialName("backlog_materialized") val backlogMaterialized: Boolean = false,
+    @SerialName("aggregated_status") val aggregatedStatus: String = "",
+    @SerialName("task_count") val taskCount: Int = 0,
+    @SerialName("pending_manual") val pendingManual: Int = 0,
+)
+
+@Serializable
+data class InitiativeExecutionPolicyRecord(
+    @SerialName("workspace_root") val workspaceRoot: String = "",
+    val scope: String = "",
+    @SerialName("allowed_modes") val allowedModes: List<String> = emptyList(),
+    @SerialName("approval_required_modes") val approvalRequiredModes: List<String> = emptyList(),
+)
+
+@Serializable
+data class InitiativeTaskRecord(
+    val id: String,
+    val state: String,
+    val description: String,
+    @SerialName("assigned_agent") val assignedAgent: String? = null,
+    @SerialName("planned_agent") val plannedAgent: String? = null,
+    val priority: String,
+    @SerialName("execution_target") val executionTarget: String,
+)
+
+@Serializable
+data class InitiativeTaskLinkRecord(
+    @SerialName("initiative_id") val initiativeId: String,
+    @SerialName("task_id") val taskId: String,
+    @SerialName("phase_origin") val phaseOrigin: String,
+    val epic: String? = null,
+    @SerialName("launch_group") val launchGroup: String? = null,
+    @SerialName("execution_mode") val executionMode: String,
+    @SerialName("launch_order") val launchOrder: Int,
+    val task: InitiativeTaskRecord,
+)
+
+@Serializable
+data class InitiativeTaskListResponseRecord(
+    val items: List<InitiativeTaskLinkRecord> = emptyList(),
+    val total: Int = 0,
+)
+
+@Serializable
+data class InitiativeDetailResponseRecord(
+    val initiative: InitiativeRecord,
+    val reviews: List<InitiativePhaseReviewRecord> = emptyList(),
+    val histories: List<InitiativePhaseHistoryRecord> = emptyList(),
+    @SerialName("execution_summary") val executionSummary: InitiativeExecutionSummaryRecord = InitiativeExecutionSummaryRecord(),
+    @SerialName("execution_policy") val executionPolicy: InitiativeExecutionPolicyRecord = InitiativeExecutionPolicyRecord(),
+)
+
+@Serializable
+data class InitiativeGenerateTasksResponse(
+    val initiative: InitiativeRecord,
+    val tasks: List<InitiativeTaskLinkRecord> = emptyList(),
+    val total: Int = 0,
+)
+
 class OrchestratorClient(
     private val baseUrl: String,
     private val apiKey: String,
@@ -159,6 +266,12 @@ class OrchestratorClient(
     fun getInitiativeDetailRaw(initiativeId: String): String =
         getRaw("/initiatives/$initiativeId")
 
+    fun getInitiativeDetail(initiativeId: String): InitiativeDetailResponseRecord =
+        get("/initiatives/$initiativeId")
+
+    fun listInitiativeTasks(initiativeId: String): InitiativeTaskListResponseRecord =
+        get("/initiatives/$initiativeId/tasks")
+
     fun createInitiative(title: String, goal: String, workspaceRoot: String): InitiativeSummary {
         val created = post<InitiativeCreateRequest, JsonElement>(
             "/initiatives",
@@ -171,6 +284,24 @@ class OrchestratorClient(
         )
         return json.decodeFromString(created.toString())
     }
+
+    fun advanceInitiative(initiativeId: String, feedback: String = ""): InitiativeRecord =
+        post("/initiatives/$initiativeId/advance", InitiativeActionRequest(feedback = feedback))
+
+    fun approveInitiativePhase(initiativeId: String, phase: String, operator: String, feedback: String = ""): InitiativeRecord =
+        post(
+            "/initiatives/$initiativeId/approve/$phase",
+            InitiativeActionRequest(feedback = feedback, operator = operator),
+        )
+
+    fun rejectInitiativePhase(initiativeId: String, phase: String, operator: String, feedback: String = ""): InitiativeRecord =
+        post(
+            "/initiatives/$initiativeId/reject/$phase",
+            InitiativeActionRequest(feedback = feedback, operator = operator),
+        )
+
+    fun generateInitiativeTasks(initiativeId: String, feedback: String = ""): InitiativeGenerateTasksResponse =
+        post("/initiatives/$initiativeId/tasks/generate", InitiativeActionRequest(feedback = feedback))
 
     private inline fun <reified T> get(path: String, query: Map<String, String> = emptyMap()): T =
         json.decodeFromString(getRaw(path, query))
