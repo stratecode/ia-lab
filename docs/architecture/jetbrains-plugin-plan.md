@@ -190,6 +190,9 @@ Required:
 - advance and review phases
 - generate tasks
 - view task backlog
+- launch selected tasks
+- resolve pending approvals
+- inspect initiative artifacts
 
 ### Phase 3
 
@@ -248,6 +251,7 @@ V1 tabs:
 - `Initiatives`
 - `Approvals`
 - `Bridge`
+- `Artifacts` (embedded in initiative detail)
 
 Phase 4+ additions:
 

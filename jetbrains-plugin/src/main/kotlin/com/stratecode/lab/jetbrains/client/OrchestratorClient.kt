@@ -187,6 +187,24 @@ data class InitiativeTaskListResponseRecord(
 )
 
 @Serializable
+data class InitiativeArtifactRecord(
+    val id: String,
+    @SerialName("artifact_type") val artifactType: String,
+    val title: String? = null,
+    val uri: String? = null,
+    @SerialName("media_type") val mediaType: String? = null,
+    @SerialName("content_text") val contentText: String? = null,
+    val metadata: Map<String, JsonElement> = emptyMap(),
+    @SerialName("created_at") val createdAt: String,
+)
+
+@Serializable
+data class InitiativeArtifactListResponseRecord(
+    val items: List<InitiativeArtifactRecord> = emptyList(),
+    val total: Int = 0,
+)
+
+@Serializable
 data class InitiativeDetailResponseRecord(
     val initiative: InitiativeRecord,
     val reviews: List<InitiativePhaseReviewRecord> = emptyList(),
@@ -316,6 +334,9 @@ class OrchestratorClient(
 
     fun listInitiativeTasks(initiativeId: String): InitiativeTaskListResponseRecord =
         get("/initiatives/$initiativeId/tasks")
+
+    fun listInitiativeArtifacts(initiativeId: String): InitiativeArtifactListResponseRecord =
+        get("/initiatives/$initiativeId/artifacts")
 
     fun createInitiative(title: String, goal: String, workspaceRoot: String): InitiativeSummary {
         val created = post<InitiativeCreateRequest, JsonElement>(

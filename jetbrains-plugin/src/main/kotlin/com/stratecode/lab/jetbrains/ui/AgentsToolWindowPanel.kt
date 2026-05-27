@@ -14,6 +14,7 @@ import com.intellij.util.ui.JBUI
 import com.stratecode.lab.jetbrains.bridge.BridgeResolver
 import com.stratecode.lab.jetbrains.client.InitiativeDetailResponseRecord
 import com.stratecode.lab.jetbrains.client.InitiativeSummary
+import com.stratecode.lab.jetbrains.client.InitiativeArtifactRecord
 import com.stratecode.lab.jetbrains.client.InitiativeTaskLinkRecord
 import com.stratecode.lab.jetbrains.client.OrchestratorClient
 import com.stratecode.lab.jetbrains.client.ApprovalRecord
@@ -60,6 +61,7 @@ class AgentsToolWindowPanel(
     private val initiativeSummaryArea = infoArea(15)
     private val initiativeReviewsArea = infoArea(8)
     private val tasksArea = infoArea(14)
+    private val artifactsArea = infoArea(16)
     private val approvalsArea = infoArea(14)
     private val feedbackArea = JBTextArea(4, 60).apply {
         lineWrap = true
@@ -74,8 +76,13 @@ class AgentsToolWindowPanel(
     }
     private val taskLinksModel = DefaultListModel<InitiativeTaskLinkRecord>()
     private val taskLinksList = JBList(taskLinksModel).apply {
-        selectionMode = ListSelectionModel.SINGLE_SELECTION
+        selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
         cellRenderer = InitiativeTaskCellRenderer()
+    }
+    private val artifactsModel = DefaultListModel<InitiativeArtifactRecord>()
+    private val artifactsList = JBList(artifactsModel).apply {
+        selectionMode = ListSelectionModel.SINGLE_SELECTION
+        cellRenderer = InitiativeArtifactCellRenderer()
     }
     private val approvalsModel = DefaultListModel<ApprovalRecord>()
     private val approvalsList = JBList(approvalsModel).apply {
@@ -96,7 +103,7 @@ class AgentsToolWindowPanel(
     private val generateTasksButton = JButton("Generate Task Backlog")
     private val refreshDetailButton = JButton("Refresh Detail")
     private val setTaskModeButton = JButton("Set Task Mode")
-    private val launchTaskButton = JButton("Launch Selected Task")
+    private val launchTaskButton = JButton("Launch Selected Tasks")
     private val refreshApprovalsButton = JButton("Refresh Approvals")
     private val approveApprovalButton = JButton("Approve Approval")
     private val rejectApprovalButton = JButton("Reject Approval")
@@ -104,6 +111,7 @@ class AgentsToolWindowPanel(
     private var selectedInitiative: InitiativeSummary? = null
     private var selectedDetail: InitiativeDetailResponseRecord? = null
     private var selectedTaskLink: InitiativeTaskLinkRecord? = null
+    private var selectedArtifact: InitiativeArtifactRecord? = null
     private var selectedApproval: ApprovalRecord? = null
 
     init {
@@ -212,6 +220,12 @@ class AgentsToolWindowPanel(
         }
         taskLinksList.addListSelectionListener {
             selectedTaskLink = taskLinksList.selectedValue
+            tasksArea.text = renderTaskSelection(taskLinksList.selectedValuesList)
+            updateActionState()
+        }
+        artifactsList.addListSelectionListener {
+            selectedArtifact = artifactsList.selectedValue
+            artifactsArea.text = renderArtifactDetail(selectedArtifact)
             updateActionState()
         }
 
@@ -223,6 +237,13 @@ class AgentsToolWindowPanel(
                 JBSplitter(false, 0.42f).apply {
                     firstComponent = section("Task Backlog", JBScrollPane(taskLinksList))
                     secondComponent = section("Task Detail", JBScrollPane(tasksArea))
+                },
+            )
+            addTab(
+                "Artifacts",
+                JBSplitter(false, 0.34f).apply {
+                    firstComponent = section("Initiative Artifacts", JBScrollPane(artifactsList))
+                    secondComponent = section("Artifact Detail", JBScrollPane(artifactsArea))
                 },
             )
         }
@@ -324,9 +345,9 @@ class AgentsToolWindowPanel(
         approveButton.isEnabled = phase in setOf("requirements", "design", "plan") && status.endsWith("_review")
         rejectButton.isEnabled = phase in setOf("requirements", "design", "plan") && status.endsWith("_review")
         generateTasksButton.isEnabled = phase == "plan" && status == "plan_draft"
-        val hasTask = selectedTaskLink != null
-        setTaskModeButton.isEnabled = hasTask
-        launchTaskButton.isEnabled = hasTask && detail.executionSummary.taskCount > 0
+        val selectedTasks = taskLinksList.selectedValuesList
+        setTaskModeButton.isEnabled = selectedTasks.size == 1
+        launchTaskButton.isEnabled = selectedTasks.isNotEmpty() && detail.executionSummary.taskCount > 0
         val hasApproval = selectedApproval != null
         refreshApprovalsButton.isEnabled = true
         approveApprovalButton.isEnabled = hasApproval
@@ -497,8 +518,9 @@ class AgentsToolWindowPanel(
                 val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
                 val detail = client.getInitiativeDetail(initiativeId)
                 val tasks = client.listInitiativeTasks(initiativeId)
-                detail to tasks.items
-            }.onSuccess { (detail, tasks) ->
+                val artifacts = client.listInitiativeArtifacts(initiativeId)
+                Triple(detail, tasks.items, artifacts.items)
+            }.onSuccess { (detail, tasks, artifacts) ->
                 val context = ProjectContextResolver.resolve(project)
                 StrateCodeProjectStore.write(
                     context,
@@ -510,15 +532,27 @@ class AgentsToolWindowPanel(
                     selectedDetail = detail
                     taskLinksModel.clear()
                     tasks.forEach(taskLinksModel::addElement)
+                    artifactsModel.clear()
+                    artifacts.forEach(artifactsModel::addElement)
                     if (selectedTaskLink != null) {
                         val target = tasks.firstOrNull { it.taskId == selectedTaskLink?.taskId }
                         if (target != null) {
                             taskLinksList.setSelectedValue(target, true)
                         }
                     }
+                    if (selectedArtifact != null) {
+                        val targetArtifact = artifacts.firstOrNull { it.id == selectedArtifact?.id }
+                        if (targetArtifact != null) {
+                            artifactsList.setSelectedValue(targetArtifact, true)
+                        }
+                    }
                     initiativeSummaryArea.text = renderInitiativeSummary(detail)
                     initiativeReviewsArea.text = renderReviews(detail)
-                    tasksArea.text = renderTasks(tasks)
+                    tasksArea.text = renderTaskSelection(taskLinksList.selectedValuesList)
+                    if (artifacts.isEmpty()) {
+                        artifactsArea.text = "No artifacts generated yet."
+                        selectedArtifact = null
+                    }
                     updateActionState()
                 }
             }.onFailure { error ->
@@ -526,9 +560,12 @@ class AgentsToolWindowPanel(
                     initiativeSummaryArea.text = error.message ?: error.toString()
                     initiativeReviewsArea.text = ""
                     tasksArea.text = ""
+                    artifactsArea.text = ""
                     taskLinksModel.clear()
+                    artifactsModel.clear()
                     selectedDetail = null
                     selectedTaskLink = null
+                    selectedArtifact = null
                     updateActionState()
                 }
             }
@@ -583,9 +620,12 @@ class AgentsToolWindowPanel(
 
     private fun launchSelectedTask() {
         val detail = selectedDetail ?: return
-        val link = selectedTaskLink ?: return
+        val selectedTasks = taskLinksList.selectedValuesList
+        if (selectedTasks.isEmpty()) {
+            return
+        }
         runInitiativeMutation("Task launch queued") { client ->
-            client.launchInitiativeTasks(detail.initiative.id, listOf(link.taskId))
+            client.launchInitiativeTasks(detail.initiative.id, selectedTasks.map { it.taskId })
         }
     }
 
@@ -813,6 +853,58 @@ class AgentsToolWindowPanel(
         }.trim()
     }
 
+    private fun renderTaskSelection(selectedTasks: List<InitiativeTaskLinkRecord>): String {
+        if (selectedTasks.isEmpty()) {
+            return if (taskLinksModel.isEmpty) {
+                "No tasks materialized yet."
+            } else {
+                "Select one or more tasks to inspect or launch."
+            }
+        }
+        if (selectedTasks.size == 1) {
+            return renderTasks(selectedTasks)
+        }
+        return buildString {
+            appendLine("${selectedTasks.size} tasks selected")
+            appendLine("====================")
+            selectedTasks.sortedBy { it.launchOrder }.forEach { link ->
+                appendLine("#${link.launchOrder} ${link.task.description}")
+                appendLine("mode=${link.executionMode} state=${link.task.state} target=${link.task.executionTarget}")
+                appendLine()
+            }
+        }.trim()
+    }
+
+    private fun renderArtifactDetail(artifact: InitiativeArtifactRecord?): String {
+        if (artifact == null) {
+            return if (artifactsModel.isEmpty) {
+                "No artifacts generated yet."
+            } else {
+                "Select an artifact to inspect its payload."
+            }
+        }
+        return buildString {
+            appendLine("Artifact: ${artifact.id}")
+            appendLine("Type: ${artifact.artifactType}")
+            appendLine("Title: ${artifact.title ?: "-"}")
+            appendLine("Media type: ${artifact.mediaType ?: "-"}")
+            appendLine("URI: ${artifact.uri ?: "-"}")
+            appendLine("Created: ${artifact.createdAt}")
+            appendLine()
+            if (artifact.metadata.isNotEmpty()) {
+                appendLine("Metadata")
+                appendLine("========")
+                artifact.metadata.toSortedMap().forEach { (key, value) ->
+                    appendLine("$key: $value")
+                }
+                appendLine()
+            }
+            appendLine("Content")
+            appendLine("=======")
+            appendLine(artifact.contentText?.take(12000) ?: "(no textual content)")
+        }
+    }
+
     private fun renderApprovalDetail(approval: ApprovalRecord?): String {
         if (approval == null) {
             return "Select a pending approval."
@@ -940,6 +1032,29 @@ private class ApprovalCellRenderer : DefaultListCellRenderer() {
                 <html>
                 <b>${escape(value.actionType)}</b><br/>
                 <span style='color:#6B7280'>${escape(value.taskId)} / ${escape(value.targetResource)} / ${escape(value.status)}</span>
+                </html>
+            """.trimIndent()
+        }
+    }
+
+    private fun escape(value: String): String =
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+}
+
+private class InitiativeArtifactCellRenderer : DefaultListCellRenderer() {
+    override fun getListCellRendererComponent(
+        list: JList<*>,
+        value: Any?,
+        index: Int,
+        isSelected: Boolean,
+        cellHasFocus: Boolean,
+    ) = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus).also {
+        if (value is InitiativeArtifactRecord && it is JLabel) {
+            it.border = JBUI.Borders.empty(8)
+            it.text = """
+                <html>
+                <b>${escape(value.title ?: value.artifactType)}</b><br/>
+                <span style='color:#6B7280'>${escape(value.artifactType)} / ${escape(value.createdAt)}</span>
                 </html>
             """.trimIndent()
         }

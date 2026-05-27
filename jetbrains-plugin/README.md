@@ -18,11 +18,11 @@ Current scope:
   - generate the execution-plan task backlog
 - task execution controls from the IDE:
   - set `execution_mode` per task
-  - launch selected tasks
+  - launch one or many selected tasks
 - pending approvals tab:
   - list pending approvals
   - approve or reject them
-- typed initiative summary, review timeline, and task backlog rendering
+- typed initiative summary, review timeline, task backlog, and artifact rendering
 - packaged plugin zip generation via Gradle
 
 Useful commands:
