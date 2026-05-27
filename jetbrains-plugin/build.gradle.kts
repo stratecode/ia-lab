@@ -30,7 +30,6 @@ intellij {
 
 tasks.patchPluginXml {
     sinceBuild.set("233")
-    untilBuild.set("233.*")
     pluginDescription.set(
         """
         JetBrains operational console for governed StrateCode initiatives, bridge validation, approvals, and patch application.
