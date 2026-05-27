@@ -8,16 +8,18 @@ import java.util.UUID
 object ProjectContextResolver {
     fun resolve(project: Project): ProjectContext {
         val basePath = project.basePath.orEmpty()
+        val metadata = StrateCodeProjectStore.read(basePath)
         val branch = readGitValue(basePath, "rev-parse", "--abbrev-ref", "HEAD")
         val remote = readGitValue(basePath, "config", "--get", "remote.origin.url")
-        val normalized = normalizeRepositoryUrl(remote)
+        val normalized = normalizeRepositoryUrl(remote) ?: metadata?.repositoryUrl
         return ProjectContext(
             projectName = project.name,
             workspaceRoot = basePath,
-            branch = branch,
+            branch = branch ?: metadata?.branch,
             repositoryUrl = normalized,
             stableBridgeId = stableBridgeId(basePath),
             degraded = normalized == null,
+            metadata = metadata,
         )
     }
 

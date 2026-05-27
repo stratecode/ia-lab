@@ -24,6 +24,7 @@ type CreateInitiativeParams struct {
 type InitiativeListFilter struct {
 	IncludeArchived bool
 	Limit           int
+	WorkspaceRoot   string
 }
 
 type UpdateInitiativeParams struct {
@@ -96,6 +97,8 @@ func (s *PostgresStore) ListInitiatives(ctx context.Context, filter InitiativeLi
 	if limit <= 0 {
 		limit = 100
 	}
+	whereParts := make([]string, 0, 2)
+	args := make([]any, 0, 2)
 	query := `
 		SELECT id::text, title, workspace_root, goal, status, current_phase,
 		       active_requirements_artifact_id::text, active_design_artifact_id::text,
@@ -104,10 +107,18 @@ func (s *PostgresStore) ListInitiatives(ctx context.Context, filter InitiativeLi
 		FROM initiatives
 	`
 	if !filter.IncludeArchived {
-		query += ` WHERE archived_at IS NULL`
+		whereParts = append(whereParts, "archived_at IS NULL")
 	}
-	query += ` ORDER BY updated_at DESC, id ASC LIMIT $1`
-	rows, err := s.pool.Query(ctx, query, limit)
+	if workspaceRoot := strings.TrimSpace(filter.WorkspaceRoot); workspaceRoot != "" {
+		whereParts = append(whereParts, fmt.Sprintf("workspace_root = $%d", len(args)+1))
+		args = append(args, workspaceRoot)
+	}
+	if len(whereParts) > 0 {
+		query += " WHERE " + strings.Join(whereParts, " AND ")
+	}
+	args = append(args, limit)
+	query += fmt.Sprintf(" ORDER BY updated_at DESC, id ASC LIMIT $%d", len(args))
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

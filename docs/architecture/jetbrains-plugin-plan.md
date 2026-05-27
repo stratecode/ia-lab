@@ -12,13 +12,14 @@ Implemented now:
 - IntelliJ Platform plugin scaffold in Kotlin under `/jetbrains-plugin`
 - secure settings for orchestrator `base_url`, `api_key`, `bridge_name`, and policy mode
 - project context resolution for `workspace_root`, branch, and normalized `repository_url`
+- local project metadata persisted in `.stratecode/project.json`
 - `Agents` tool window with:
   - backend readiness
   - bridge resolution
   - capability visibility
   - project-scoped capability visibility
   - initiative creation
-  - recent initiative listing
+  - recent initiative listing scoped to the current workspace
   - raw initiative detail fetch
 - editor popup action: `Create Initiative from Selection`
 - Gradle wrapper, tests, and distributable plugin zip build

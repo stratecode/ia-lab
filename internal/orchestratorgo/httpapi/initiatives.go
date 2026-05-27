@@ -40,6 +40,7 @@ func (s *Server) listInitiatives(w http.ResponseWriter, r *http.Request) {
 	items, err := s.Postgres.ListInitiatives(r.Context(), store.InitiativeListFilter{
 		IncludeArchived: strings.EqualFold(r.URL.Query().Get("archived"), "include"),
 		Limit:           parseIntDefault(r.URL.Query().Get("limit"), 100),
+		WorkspaceRoot:   strings.TrimSpace(r.URL.Query().Get("workspace_root")),
 	})
 	if err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())

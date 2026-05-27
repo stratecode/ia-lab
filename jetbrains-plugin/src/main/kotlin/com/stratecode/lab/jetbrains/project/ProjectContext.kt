@@ -7,4 +7,5 @@ data class ProjectContext(
     val repositoryUrl: String?,
     val stableBridgeId: String,
     val degraded: Boolean,
+    val metadata: StrateCodeProjectMetadata? = null,
 )

@@ -147,6 +147,15 @@ class OrchestratorClient(
     fun listInitiatives(limit: Int = 20): InitiativeListResponse =
         get("/initiatives", mapOf("limit" to limit.toString()))
 
+    fun listInitiatives(workspaceRoot: String, limit: Int = 20): InitiativeListResponse =
+        get(
+            "/initiatives",
+            mapOf(
+                "limit" to limit.toString(),
+                "workspace_root" to workspaceRoot,
+            ),
+        )
+
     fun getInitiativeDetailRaw(initiativeId: String): String =
         getRaw("/initiatives/$initiativeId")
 
