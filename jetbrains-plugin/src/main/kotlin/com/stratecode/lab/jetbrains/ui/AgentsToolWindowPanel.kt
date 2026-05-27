@@ -16,6 +16,7 @@ import com.stratecode.lab.jetbrains.client.InitiativeDetailResponseRecord
 import com.stratecode.lab.jetbrains.client.InitiativeSummary
 import com.stratecode.lab.jetbrains.client.InitiativeTaskLinkRecord
 import com.stratecode.lab.jetbrains.client.OrchestratorClient
+import com.stratecode.lab.jetbrains.client.ApprovalRecord
 import com.stratecode.lab.jetbrains.project.ProjectContext
 import com.stratecode.lab.jetbrains.project.ProjectContextResolver
 import com.stratecode.lab.jetbrains.project.StrateCodeProjectStore
@@ -37,6 +38,7 @@ import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JPanel
 import javax.swing.ListSelectionModel
+import javax.swing.JOptionPane
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
 
@@ -58,6 +60,7 @@ class AgentsToolWindowPanel(
     private val initiativeSummaryArea = infoArea(15)
     private val initiativeReviewsArea = infoArea(8)
     private val tasksArea = infoArea(14)
+    private val approvalsArea = infoArea(14)
     private val feedbackArea = JBTextArea(4, 60).apply {
         lineWrap = true
         wrapStyleWord = true
@@ -68,6 +71,16 @@ class AgentsToolWindowPanel(
     private val initiativesList = JBList(initiativesModel).apply {
         selectionMode = ListSelectionModel.SINGLE_SELECTION
         cellRenderer = InitiativeCellRenderer()
+    }
+    private val taskLinksModel = DefaultListModel<InitiativeTaskLinkRecord>()
+    private val taskLinksList = JBList(taskLinksModel).apply {
+        selectionMode = ListSelectionModel.SINGLE_SELECTION
+        cellRenderer = InitiativeTaskCellRenderer()
+    }
+    private val approvalsModel = DefaultListModel<ApprovalRecord>()
+    private val approvalsList = JBList(approvalsModel).apply {
+        selectionMode = ListSelectionModel.SINGLE_SELECTION
+        cellRenderer = ApprovalCellRenderer()
     }
 
     private val initiativeTitleField = JBTextField()
@@ -82,9 +95,16 @@ class AgentsToolWindowPanel(
     private val rejectButton = JButton("Reject Phase")
     private val generateTasksButton = JButton("Generate Task Backlog")
     private val refreshDetailButton = JButton("Refresh Detail")
+    private val setTaskModeButton = JButton("Set Task Mode")
+    private val launchTaskButton = JButton("Launch Selected Task")
+    private val refreshApprovalsButton = JButton("Refresh Approvals")
+    private val approveApprovalButton = JButton("Approve Approval")
+    private val rejectApprovalButton = JButton("Reject Approval")
 
     private var selectedInitiative: InitiativeSummary? = null
     private var selectedDetail: InitiativeDetailResponseRecord? = null
+    private var selectedTaskLink: InitiativeTaskLinkRecord? = null
+    private var selectedApproval: ApprovalRecord? = null
 
     init {
         border = JBUI.Borders.empty(12)
@@ -94,6 +114,7 @@ class AgentsToolWindowPanel(
         updateActionState()
         loadStatus()
         loadInitiatives()
+        loadApprovals()
     }
 
     private fun buildHeader(): JComponent {
@@ -130,6 +151,7 @@ class AgentsToolWindowPanel(
         JBTabbedPane().apply {
             addTab("Overview", buildOverviewTab())
             addTab("Initiatives", buildInitiativesTab())
+            addTab("Approvals", buildApprovalsTab())
         }
 
     private fun buildOverviewTab(): JComponent {
@@ -188,11 +210,21 @@ class AgentsToolWindowPanel(
             selectedInitiative = selected
             loadInitiativeDetail(selected.id)
         }
+        taskLinksList.addListSelectionListener {
+            selectedTaskLink = taskLinksList.selectedValue
+            updateActionState()
+        }
 
         val detailTabs = JBTabbedPane().apply {
             addTab("Summary", section("Initiative Summary", JBScrollPane(initiativeSummaryArea)))
             addTab("Reviews", section("Phase Reviews", JBScrollPane(initiativeReviewsArea)))
-            addTab("Tasks", section("Task Backlog", JBScrollPane(tasksArea)))
+            addTab(
+                "Tasks",
+                JBSplitter(false, 0.42f).apply {
+                    firstComponent = section("Task Backlog", JBScrollPane(taskLinksList))
+                    secondComponent = section("Task Detail", JBScrollPane(tasksArea))
+                },
+            )
         }
 
         val feedbackSection = section("Action Feedback", JBScrollPane(feedbackArea))
@@ -203,6 +235,8 @@ class AgentsToolWindowPanel(
             add(rejectButton)
             add(generateTasksButton)
             add(refreshDetailButton)
+            add(setTaskModeButton)
+            add(launchTaskButton)
         }
 
         val rightTop = JPanel(BorderLayout()).apply {
@@ -227,6 +261,32 @@ class AgentsToolWindowPanel(
         }
     }
 
+    private fun buildApprovalsTab(): JComponent {
+        approvalsList.addListSelectionListener {
+            selectedApproval = approvalsList.selectedValue
+            approvalsArea.text = renderApprovalDetail(selectedApproval)
+            updateActionState()
+        }
+
+        val controls = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+            isOpaque = false
+            add(refreshApprovalsButton)
+            add(approveApprovalButton)
+            add(rejectApprovalButton)
+        }
+
+        val splitter = JBSplitter(false, 0.40f).apply {
+            firstComponent = section("Pending Approvals", JBScrollPane(approvalsList))
+            secondComponent = section("Approval Detail", JBScrollPane(approvalsArea))
+        }
+
+        return JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.emptyTop(12)
+            add(splitter, BorderLayout.CENTER)
+            add(controls, BorderLayout.SOUTH)
+        }
+    }
+
     private fun bindActions() {
         advanceButton.addActionListener { advanceSelectedInitiative() }
         approveButton.addActionListener { resolveSelectedInitiative(true) }
@@ -235,6 +295,11 @@ class AgentsToolWindowPanel(
         refreshDetailButton.addActionListener {
             selectedInitiative?.let { loadInitiativeDetail(it.id) }
         }
+        setTaskModeButton.addActionListener { setSelectedTaskMode() }
+        launchTaskButton.addActionListener { launchSelectedTask() }
+        refreshApprovalsButton.addActionListener { loadApprovals() }
+        approveApprovalButton.addActionListener { resolveSelectedApproval(true) }
+        rejectApprovalButton.addActionListener { resolveSelectedApproval(false) }
     }
 
     private fun updateActionState() {
@@ -245,6 +310,11 @@ class AgentsToolWindowPanel(
             rejectButton.isEnabled = false
             generateTasksButton.isEnabled = false
             refreshDetailButton.isEnabled = false
+            setTaskModeButton.isEnabled = false
+            launchTaskButton.isEnabled = false
+            refreshApprovalsButton.isEnabled = true
+            approveApprovalButton.isEnabled = selectedApproval != null
+            rejectApprovalButton.isEnabled = selectedApproval != null
             return
         }
         refreshDetailButton.isEnabled = true
@@ -254,6 +324,13 @@ class AgentsToolWindowPanel(
         approveButton.isEnabled = phase in setOf("requirements", "design", "plan") && status.endsWith("_review")
         rejectButton.isEnabled = phase in setOf("requirements", "design", "plan") && status.endsWith("_review")
         generateTasksButton.isEnabled = phase == "plan" && status == "plan_draft"
+        val hasTask = selectedTaskLink != null
+        setTaskModeButton.isEnabled = hasTask
+        launchTaskButton.isEnabled = hasTask && detail.executionSummary.taskCount > 0
+        val hasApproval = selectedApproval != null
+        refreshApprovalsButton.isEnabled = true
+        approveApprovalButton.isEnabled = hasApproval
+        rejectApprovalButton.isEnabled = hasApproval
     }
 
     private fun loadStatus() {
@@ -356,8 +433,9 @@ class AgentsToolWindowPanel(
                     notify("Initiative created", "${it.title} (${it.id})", NotificationType.INFORMATION)
                     initiativeGoalArea.text = ""
                     initiativeTitleField.text = it.title
-                    loadStatus()
-                    loadInitiatives(selectInitiativeId = it.id)
+        loadStatus()
+        loadInitiatives(selectInitiativeId = it.id)
+        loadApprovals()
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
@@ -392,7 +470,9 @@ class AgentsToolWindowPanel(
                         initiativeSummaryArea.text = "No initiatives found for:\n${context.workspaceRoot}\n\nThis panel is scoped to the current project only."
                         initiativeReviewsArea.text = ""
                         tasksArea.text = ""
+                        taskLinksModel.clear()
                         selectedDetail = null
+                        selectedTaskLink = null
                         updateActionState()
                     }
                 }
@@ -428,6 +508,14 @@ class AgentsToolWindowPanel(
                 )
                 SwingUtilities.invokeLater {
                     selectedDetail = detail
+                    taskLinksModel.clear()
+                    tasks.forEach(taskLinksModel::addElement)
+                    if (selectedTaskLink != null) {
+                        val target = tasks.firstOrNull { it.taskId == selectedTaskLink?.taskId }
+                        if (target != null) {
+                            taskLinksList.setSelectedValue(target, true)
+                        }
+                    }
                     initiativeSummaryArea.text = renderInitiativeSummary(detail)
                     initiativeReviewsArea.text = renderReviews(detail)
                     tasksArea.text = renderTasks(tasks)
@@ -438,7 +526,9 @@ class AgentsToolWindowPanel(
                     initiativeSummaryArea.text = error.message ?: error.toString()
                     initiativeReviewsArea.text = ""
                     tasksArea.text = ""
+                    taskLinksModel.clear()
                     selectedDetail = null
+                    selectedTaskLink = null
                     updateActionState()
                 }
             }
@@ -469,6 +559,97 @@ class AgentsToolWindowPanel(
         val detail = selectedDetail ?: return
         runInitiativeMutation("Task backlog generated") { client ->
             client.generateInitiativeTasks(detail.initiative.id, feedbackArea.text.trim()).initiative
+        }
+    }
+
+    private fun setSelectedTaskMode() {
+        val detail = selectedDetail ?: return
+        val link = selectedTaskLink ?: return
+        val choice = JOptionPane.showInputDialog(
+            this,
+            "Execution mode for selected task:",
+            link.executionMode,
+        )?.trim().orEmpty()
+        if (choice !in setOf("manual", "agent_local", "agent_remote")) {
+            if (choice.isNotBlank()) {
+                notify("Invalid execution mode", "Use manual, agent_local, or agent_remote.", NotificationType.WARNING)
+            }
+            return
+        }
+        runInitiativeMutation("Task mode updated") { client ->
+            client.updateInitiativeTaskMode(detail.initiative.id, link.taskId, choice)
+        }
+    }
+
+    private fun launchSelectedTask() {
+        val detail = selectedDetail ?: return
+        val link = selectedTaskLink ?: return
+        runInitiativeMutation("Task launch queued") { client ->
+            client.launchInitiativeTasks(detail.initiative.id, listOf(link.taskId))
+        }
+    }
+
+    private fun loadApprovals() {
+        val settings = settings()
+        val apiKey = settings.getApiKey()
+        if (apiKey.isBlank()) {
+            approvalsArea.text = "Configure an API key first."
+            approvalsModel.clear()
+            selectedApproval = null
+            updateActionState()
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                OrchestratorClient(settings.currentState.baseUrl, apiKey).listApprovals()
+            }.onSuccess { response ->
+                SwingUtilities.invokeLater {
+                    approvalsModel.clear()
+                    response.items.forEach(approvalsModel::addElement)
+                    if (response.items.isEmpty()) {
+                        approvalsArea.text = "No pending approvals."
+                        selectedApproval = null
+                    }
+                    updateActionState()
+                }
+            }.onFailure { error ->
+                SwingUtilities.invokeLater {
+                    approvalsArea.text = error.message ?: error.toString()
+                    approvalsModel.clear()
+                    selectedApproval = null
+                    updateActionState()
+                }
+            }
+        }
+    }
+
+    private fun resolveSelectedApproval(approve: Boolean) {
+        val approval = selectedApproval ?: return
+        val settings = settings()
+        val apiKey = settings.getApiKey()
+        if (apiKey.isBlank()) {
+            notify("Approval blocked", "Configure an API key first.", NotificationType.WARNING)
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
+                if (approve) {
+                    client.approveApproval(approval.id, "jetbrains-plugin")
+                } else {
+                    client.rejectApproval(approval.id, "jetbrains-plugin")
+                }
+            }.onSuccess {
+                SwingUtilities.invokeLater {
+                    notify(if (approve) "Approval granted" else "Approval rejected", approval.id, NotificationType.INFORMATION)
+                    loadApprovals()
+                    selectedInitiative?.let { loadInitiativeDetail(it.id) }
+                }
+            }.onFailure { error ->
+                SwingUtilities.invokeLater {
+                    notify("Approval resolution failed", error.message ?: error.toString(), NotificationType.ERROR)
+                }
+            }
         }
     }
 
@@ -632,6 +813,24 @@ class AgentsToolWindowPanel(
         }.trim()
     }
 
+    private fun renderApprovalDetail(approval: ApprovalRecord?): String {
+        if (approval == null) {
+            return "Select a pending approval."
+        }
+        return buildString {
+            appendLine("Approval: ${approval.id}")
+            appendLine("Task: ${approval.taskId}")
+            appendLine("Action: ${approval.actionType}")
+            appendLine("Target: ${approval.targetResource}")
+            appendLine("Status: ${approval.status}")
+            appendLine("Requested: ${approval.requestedAt}")
+            appendLine("Timeout at: ${approval.timeoutAt}")
+            appendLine("Timeout seconds: ${approval.timeoutSeconds}")
+            appendLine("Escalation: ${approval.escalationLevel}")
+            appendLine("Operator: ${approval.operator ?: "-"}")
+        }
+    }
+
     private fun badge(title: String, value: String, color: Color): JLabel =
         JLabel("$title  $value", SwingConstants.CENTER).apply {
             isOpaque = true
@@ -695,6 +894,52 @@ private class InitiativeCellRenderer : DefaultListCellRenderer() {
                 <html>
                 <b>${escape(value.title)}</b><br/>
                 <span style='color:#6B7280'>${escape(value.status)} / ${escape(value.currentPhase)}<br/>${escape(value.workspaceRoot)}</span>
+                </html>
+            """.trimIndent()
+        }
+    }
+
+    private fun escape(value: String): String =
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+}
+
+private class InitiativeTaskCellRenderer : DefaultListCellRenderer() {
+    override fun getListCellRendererComponent(
+        list: JList<*>,
+        value: Any?,
+        index: Int,
+        isSelected: Boolean,
+        cellHasFocus: Boolean,
+    ) = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus).also {
+        if (value is InitiativeTaskLinkRecord && it is JLabel) {
+            it.border = JBUI.Borders.empty(8)
+            it.text = """
+                <html>
+                <b>${escape(value.task.description)}</b><br/>
+                <span style='color:#6B7280'>${escape(value.task.state)} / ${escape(value.executionMode)} / ${escape(value.task.executionTarget)}</span>
+                </html>
+            """.trimIndent()
+        }
+    }
+
+    private fun escape(value: String): String =
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+}
+
+private class ApprovalCellRenderer : DefaultListCellRenderer() {
+    override fun getListCellRendererComponent(
+        list: JList<*>,
+        value: Any?,
+        index: Int,
+        isSelected: Boolean,
+        cellHasFocus: Boolean,
+    ) = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus).also {
+        if (value is ApprovalRecord && it is JLabel) {
+            it.border = JBUI.Borders.empty(8)
+            it.text = """
+                <html>
+                <b>${escape(value.actionType)}</b><br/>
+                <span style='color:#6B7280'>${escape(value.taskId)} / ${escape(value.targetResource)} / ${escape(value.status)}</span>
                 </html>
             """.trimIndent()
         }

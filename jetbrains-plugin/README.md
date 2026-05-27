@@ -16,6 +16,12 @@ Current scope:
   - advance requirements/design drafts
   - approve or reject requirements/design/plan reviews
   - generate the execution-plan task backlog
+- task execution controls from the IDE:
+  - set `execution_mode` per task
+  - launch selected tasks
+- pending approvals tab:
+  - list pending approvals
+  - approve or reject them
 - typed initiative summary, review timeline, and task backlog rendering
 - packaged plugin zip generation via Gradle
 

@@ -25,6 +25,10 @@ Implemented now:
     - advance requirements/design drafts
     - approve/reject requirements/design/plan
     - generate plan backlog
+  - task execution controls:
+    - set execution mode per task
+    - launch selected tasks
+  - pending approvals visibility and resolution
 - editor popup action: `Create Initiative from Selection`
 - Gradle wrapper, tests, and distributable plugin zip build
 

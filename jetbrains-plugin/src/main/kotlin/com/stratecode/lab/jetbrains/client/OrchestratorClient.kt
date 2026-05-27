@@ -202,6 +202,51 @@ data class InitiativeGenerateTasksResponse(
     val total: Int = 0,
 )
 
+@Serializable
+data class InitiativeLaunchTasksRequest(
+    @SerialName("task_ids") val taskIds: List<String> = emptyList(),
+    val groups: List<String> = emptyList(),
+    @SerialName("mode_overrides") val modeOverrides: Map<String, String> = emptyMap(),
+)
+
+@Serializable
+data class InitiativeTaskModeRequest(
+    @SerialName("execution_mode") val executionMode: String,
+)
+
+@Serializable
+data class InitiativeLaunchTasksResponse(
+    val initiative: InitiativeRecord,
+    val tasks: List<InitiativeTaskRecord> = emptyList(),
+    val total: Int = 0,
+)
+
+@Serializable
+data class ApprovalRecord(
+    val id: String,
+    @SerialName("task_id") val taskId: String,
+    @SerialName("action_type") val actionType: String,
+    @SerialName("target_resource") val targetResource: String,
+    val status: String,
+    val operator: String? = null,
+    @SerialName("timeout_seconds") val timeoutSeconds: Int = 0,
+    @SerialName("escalation_level") val escalationLevel: Int = 0,
+    @SerialName("requested_at") val requestedAt: String,
+    @SerialName("resolved_at") val resolvedAt: String? = null,
+    @SerialName("timeout_at") val timeoutAt: String,
+)
+
+@Serializable
+data class ApprovalListResponseRecord(
+    val items: List<ApprovalRecord> = emptyList(),
+    val total: Int = 0,
+)
+
+@Serializable
+data class ApprovalResolveRequest(
+    val operator: String,
+)
+
 class OrchestratorClient(
     private val baseUrl: String,
     private val apiKey: String,
@@ -302,6 +347,37 @@ class OrchestratorClient(
 
     fun generateInitiativeTasks(initiativeId: String, feedback: String = ""): InitiativeGenerateTasksResponse =
         post("/initiatives/$initiativeId/tasks/generate", InitiativeActionRequest(feedback = feedback))
+
+    fun launchInitiativeTasks(
+        initiativeId: String,
+        taskIds: List<String>,
+        modeOverrides: Map<String, String> = emptyMap(),
+    ): InitiativeLaunchTasksResponse =
+        post(
+            "/initiatives/$initiativeId/tasks/launch",
+            InitiativeLaunchTasksRequest(taskIds = taskIds, modeOverrides = modeOverrides),
+        )
+
+    fun updateInitiativeTaskMode(initiativeId: String, taskId: String, executionMode: String): InitiativeTaskLinkRecord =
+        post(
+            "/initiatives/$initiativeId/tasks/$taskId/mode",
+            InitiativeTaskModeRequest(executionMode),
+        )
+
+    fun listApprovals(statusFilter: String = "pending", limit: Int = 50): ApprovalListResponseRecord =
+        get(
+            "/approvals",
+            mapOf(
+                "status_filter" to statusFilter,
+                "limit" to limit.toString(),
+            ),
+        )
+
+    fun approveApproval(approvalId: String, operator: String): ApprovalRecord =
+        post("/approvals/$approvalId/approve", ApprovalResolveRequest(operator))
+
+    fun rejectApproval(approvalId: String, operator: String): ApprovalRecord =
+        post("/approvals/$approvalId/reject", ApprovalResolveRequest(operator))
 
     private inline fun <reified T> get(path: String, query: Map<String, String> = emptyMap()): T =
         json.decodeFromString(getRaw(path, query))
