@@ -1168,24 +1168,12 @@ class AgentsToolWindowPanel(
         approvalsBadge.text = "Approvals  ${state.approvalsLabel}"
         setBadgeTone(projectBadge, if (state.degraded) StatusTone.WARNING else StatusTone.NEUTRAL)
         setBadgeTone(approvalsBadge, state.approvalsTone)
-        val refreshingStatus = currentOperationStatus?.startsWith("Refreshing workspace status") == true
-        if (refreshingStatus && backendReady == null) {
-            backendBadge.text = "Backend  loading"
-            setBadgeTone(backendBadge, StatusTone.NEUTRAL)
-        } else {
-            backendBadge.text = "Backend  ${state.backendLabel}"
-            setBadgeTone(backendBadge, state.backendTone)
-        }
-        if (currentOperationStatus?.startsWith("Auto-registering bridge") == true) {
-            bridgeBadge.text = "Bridge  repairing"
-            setBadgeTone(bridgeBadge, StatusTone.NEUTRAL)
-        } else if (refreshingStatus && currentBridgeResolution == null) {
-            bridgeBadge.text = "Bridge  loading"
-            setBadgeTone(bridgeBadge, StatusTone.NEUTRAL)
-        } else {
-            bridgeBadge.text = "Bridge  ${state.bridgeLabel}"
-            setBadgeTone(bridgeBadge, state.bridgeTone)
-        }
+        val backendBadgeState = WorkbenchStateMapper.buildBackendBadgeState(state, backendReady, currentOperationStatus)
+        backendBadge.text = "Backend  ${backendBadgeState.label}"
+        setBadgeTone(backendBadge, backendBadgeState.tone)
+        val bridgeBadgeState = WorkbenchStateMapper.buildBridgeBadgeState(state, currentBridgeResolution, currentOperationStatus)
+        bridgeBadge.text = "Bridge  ${bridgeBadgeState.label}"
+        setBadgeTone(bridgeBadge, bridgeBadgeState.tone)
         val currentGoal = selectedDetailOrNull()?.initiative?.goal?.take(180)
         if (!currentGoal.isNullOrBlank()) {
             goalLabel.text = selectedDetailOrNull()?.initiative?.title ?: state.projectName

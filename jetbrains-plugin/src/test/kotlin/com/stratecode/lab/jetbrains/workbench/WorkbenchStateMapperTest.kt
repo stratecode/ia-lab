@@ -118,6 +118,57 @@ class WorkbenchStateMapperTest {
         assertTrue(header.degraded)
     }
 
+    @Test
+    fun `backend badge shows loading while status refresh is in progress`() {
+        val header = WorkbenchStateMapper.buildHeaderState(
+            context = ProjectContext(
+                projectName = "lab",
+                workspaceRoot = "/repo",
+                branch = "main",
+                repositoryUrl = null,
+                stableBridgeId = "bridge",
+                degraded = false,
+            ),
+            backendReady = null,
+            bridge = null,
+            approvalCount = 0,
+        )
+
+        val badge = WorkbenchStateMapper.buildBackendBadgeState(header, backendReady = null, operationStatus = "Refreshing workspace status…")
+
+        assertEquals("loading", badge.label)
+        assertEquals(StatusTone.NEUTRAL, badge.tone)
+    }
+
+    @Test
+    fun `bridge badge shows repairing during auto register`() {
+        val header = WorkbenchStateMapper.buildHeaderState(
+            context = ProjectContext(
+                projectName = "lab",
+                workspaceRoot = "/repo",
+                branch = "main",
+                repositoryUrl = null,
+                stableBridgeId = "bridge",
+                degraded = false,
+            ),
+            backendReady = true,
+            bridge = BridgeResolution(
+                matched = null,
+                status = "missing",
+                detail = "missing",
+                consistency = BridgeConsistency.MISSING,
+                stale = false,
+                executable = false,
+            ),
+            approvalCount = 0,
+        )
+
+        val badge = WorkbenchStateMapper.buildBridgeBadgeState(header, bridge = null, operationStatus = "Auto-registering bridge…")
+
+        assertEquals("repairing", badge.label)
+        assertEquals(StatusTone.NEUTRAL, badge.tone)
+    }
+
     private fun initiativeDetail(
         status: String,
         currentPhase: String,

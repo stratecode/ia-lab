@@ -39,6 +39,11 @@ data class HeaderStatusViewState(
     val metadataSummary: String,
 )
 
+data class BadgeViewState(
+    val label: String,
+    val tone: StatusTone,
+)
+
 data class InitiativeWorkbenchItem(
     val id: String,
     val title: String,

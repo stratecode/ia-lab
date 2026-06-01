@@ -61,6 +61,31 @@ object WorkbenchStateMapper {
         )
     }
 
+    fun buildBackendBadgeState(
+        state: HeaderStatusViewState,
+        backendReady: Boolean?,
+        operationStatus: String?,
+    ): BadgeViewState =
+        if (operationStatus?.startsWith("Refreshing workspace status") == true && backendReady == null) {
+            BadgeViewState("loading", StatusTone.NEUTRAL)
+        } else {
+            BadgeViewState(state.backendLabel, state.backendTone)
+        }
+
+    fun buildBridgeBadgeState(
+        state: HeaderStatusViewState,
+        bridge: BridgeResolution?,
+        operationStatus: String?,
+    ): BadgeViewState =
+        when {
+            operationStatus?.startsWith("Auto-registering bridge") == true ->
+                BadgeViewState("repairing", StatusTone.NEUTRAL)
+            operationStatus?.startsWith("Refreshing workspace status") == true && bridge == null ->
+                BadgeViewState("loading", StatusTone.NEUTRAL)
+            else ->
+                BadgeViewState(state.bridgeLabel, state.bridgeTone)
+        }
+
     fun buildInitiatives(
         initiatives: List<InitiativeSummary>,
         detailById: Map<String, InitiativeDetailResponseRecord>,

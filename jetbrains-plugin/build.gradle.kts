@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.2.1"
+version = "0.2.2"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Improved startup status signaling with loading/repairing bridge badges, plus retryable auto-registration, HTTP tracing, and clearer diagnostics around goal creation and backend connectivity.
+        Extracted and tested startup badge state logic, keeping loading/repairing bridge signaling consistent alongside retryable auto-registration and richer diagnostics.
         """.trimIndent()
     )
 }
