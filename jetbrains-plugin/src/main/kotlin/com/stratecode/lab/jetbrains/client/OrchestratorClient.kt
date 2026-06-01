@@ -50,6 +50,8 @@ data class LocalBridgeResponse(
     @SerialName("workspace_root") val workspaceRoot: String = "",
     val status: String = "",
     @SerialName("last_heartbeat") val lastHeartbeat: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("updated_at") val updatedAt: String? = null,
 )
 
 @Serializable

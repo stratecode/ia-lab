@@ -52,7 +52,7 @@ object BridgeResolver {
         runCatching { java.io.File(path.trim()).canonicalPath }.getOrElse { java.io.File(path.trim()).absolutePath }
 
     private fun classify(bridge: LocalBridgeResponse, detail: String, consistency: BridgeConsistency): BridgeResolution {
-        val age = heartbeatAgeSeconds(bridge.lastHeartbeat)
+        val age = heartbeatAgeSeconds(bridge.lastHeartbeat, bridge.updatedAt, bridge.createdAt)
         val stale = age == null || age > staleThresholdSeconds
         val healthyStatus = bridge.status in setOf("online", "idle", "busy", "ready", "active")
         val executable = consistency != BridgeConsistency.MISMATCH && !stale && healthyStatus
@@ -67,13 +67,16 @@ object BridgeResolver {
         )
     }
 
-    private fun heartbeatAgeSeconds(raw: String?): Long? {
-        val value = raw?.trim().orEmpty()
-        if (value.isBlank()) {
-            return null
+    private fun heartbeatAgeSeconds(vararg rawValues: String?): Long? {
+        for (raw in rawValues) {
+            val value = raw?.trim().orEmpty()
+            if (value.isBlank()) {
+                continue
+            }
+            val instant = parseInstant(value) ?: continue
+            return Duration.between(instant, Instant.now()).seconds.coerceAtLeast(0)
         }
-        val instant = parseInstant(value) ?: return null
-        return Duration.between(instant, Instant.now()).seconds.coerceAtLeast(0)
+        return null
     }
 
     private fun parseInstant(value: String): Instant? =

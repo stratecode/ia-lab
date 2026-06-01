@@ -86,4 +86,23 @@ class BridgeResolverTest {
         assertEquals(BridgeConsistency.MATCHED, resolution.consistency)
         assertTrue(resolution.executable)
     }
+
+    @Test
+    fun `recently registered bridge is considered fresh from updated at`() {
+        val bridge = LocalBridgeResponse(
+            id = "bridge-1",
+            name = "jetbrains-bridge",
+            hostname = "devbox",
+            workspaceRoot = "/repo",
+            status = "active",
+            lastHeartbeat = null,
+            updatedAt = Instant.now().minusSeconds(10).toString(),
+        )
+
+        val resolution = BridgeResolver.resolve(listOf(bridge), "/repo", "jetbrains-bridge")
+
+        assertEquals(BridgeConsistency.MATCHED, resolution.consistency)
+        assertTrue(resolution.executable)
+        assertFalse(resolution.stale)
+    }
 }
