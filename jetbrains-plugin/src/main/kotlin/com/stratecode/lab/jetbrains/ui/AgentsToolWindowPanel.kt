@@ -931,11 +931,19 @@ class AgentsToolWindowPanel(
     ) {
         val step = selectedStep ?: return
         val approvalSummary = WorkbenchStateMapper.buildApprovalSummary(currentApprovals, step.taskId)
+        val availability = WorkbenchStateMapper.buildTaskActionAvailability(
+            selectedStep = step,
+            patchView = patchView,
+            evidence = evidence,
+            resolution = currentBridgeResolution,
+            degraded = currentProjectContext?.degraded == true,
+            initiativeStatus = selectedDetailOrNull()?.initiative?.status,
+        )
         val viewState = TaskDetailViewState(
             title = step.title,
             subtitle = "${step.agent ?: "unknown"} · ${task.state} · ${step.executionMode ?: "-"} · ${task.updatedAt}",
             badgesText = buildBadgesText(patchView != null, evidence.locations.isNotEmpty(), approvalSummary.selectedTaskApproval != null, artifacts.isNotEmpty()),
-            overviewText = renderTaskOverviewText(task, patchView, evidence),
+            overviewText = renderTaskOverviewText(task, patchView, evidence, availability),
             outputText = renderTaskOutputText(task, patchView, evidence),
             diffText = patchView?.diff ?: "No diff available for this step.",
             patchView = patchView,
@@ -960,6 +968,14 @@ class AgentsToolWindowPanel(
         val phase = step.phase ?: detail.initiative.currentPhase
         val phaseHistory = detail.histories.firstOrNull { it.phase == phase }
         val reviews = detail.reviews.filter { it.phase == phase }
+        val availability = WorkbenchStateMapper.buildTaskActionAvailability(
+            selectedStep = step,
+            patchView = null,
+            evidence = null,
+            resolution = currentBridgeResolution,
+            degraded = currentProjectContext?.degraded == true,
+            initiativeStatus = detail.initiative.status,
+        )
         val overview = buildString {
             appendLine("Goal")
             appendLine("====")
@@ -972,6 +988,10 @@ class AgentsToolWindowPanel(
             appendLine("Current phase: ${detail.initiative.currentPhase}")
             appendLine("Execution mode: ${detail.initiative.executionMode}")
             appendLine("Task count: ${detail.executionSummary.taskCount}")
+            appendLine()
+            appendLine("Next action")
+            appendLine("===========")
+            appendLine(nextActionText(step, availability, detail))
             currentBridgeResolution?.executionBlockReason()?.let {
                 appendLine()
                 appendLine("Bridge block")
@@ -1077,7 +1097,8 @@ class AgentsToolWindowPanel(
         contextLabel.text = """
             <html>
             <b>Goal:</b> ${escapeHtml(detail.initiative.goal.take(180))}<br/>
-            <b>Phase:</b> ${escapeHtml(detail.initiative.currentPhase)} · <b>Status:</b> ${escapeHtml(detail.initiative.status)} · <b>Tasks:</b> ${detail.executionSummary.taskCount}
+            <b>Phase:</b> ${escapeHtml(detail.initiative.currentPhase)} · <b>Status:</b> ${escapeHtml(detail.initiative.status)} · <b>Tasks:</b> ${detail.executionSummary.taskCount}<br/>
+            <b>Next:</b> ${escapeHtml(nextActionText(selectedStep, WorkbenchStateMapper.buildTaskActionAvailability(selectedStep, selectedTaskPatchView, selectedTaskEvidence, currentBridgeResolution, currentProjectContext?.degraded == true, detail.initiative.status), detail))}
             </html>
         """.trimIndent()
         renderPhaseStep(
@@ -1554,6 +1575,7 @@ class AgentsToolWindowPanel(
         task: TaskDetailRecord,
         patchView: TaskResultPatchView?,
         evidence: EvidenceExtractionResult,
+        availability: TaskActionAvailability,
     ): String = buildString {
         appendLine("Task")
         appendLine("====")
@@ -1573,7 +1595,43 @@ class AgentsToolWindowPanel(
         appendLine("Diff: ${if (patchView != null) "available" else "none"}")
         appendLine("Evidence findings: ${evidence.locations.size}")
         appendLine("Raw artifacts: ${evidence.rawArtifacts.size}")
+        appendLine()
+        appendLine("Next action")
+        appendLine("===========")
+        appendLine(nextActionText(selectedStep, availability, selectedDetailOrNull()))
+        availability.blockingReason?.let {
+            appendLine()
+            appendLine("Blocking reason")
+            appendLine("===============")
+            appendLine(it)
+        }
     }.trim()
+
+    private fun nextActionText(
+        step: PlanStepWorkbenchItem?,
+        availability: TaskActionAvailability,
+        detail: InitiativeDetailResponseRecord?,
+    ): String {
+        if (step == null || detail == null) {
+            return "Create or select a goal."
+        }
+        return when (step.kind) {
+            PlanStepKind.PHASE -> when {
+                availability.canAdvancePhase -> "Click 'Advance Draft' to generate the next draft for this phase."
+                availability.canApprovePhase -> "Review the phase output and click 'Approve Phase' or 'Reject Phase'."
+                availability.canGenerateTasks -> "Click 'Generate Tasks' to materialize the execution backlog."
+                detail.initiative.currentPhase != step.phase -> "Inspect this phase for context or switch to the active phase."
+                else -> "Select the execution step or refresh if the phase should already have moved."
+            }
+            PlanStepKind.TASK -> when {
+                step.approvalRequired -> "Resolve the pending approval before trying to continue."
+                availability.canLaunch -> "Click 'Run' to launch this task on the current bridge."
+                availability.canApplyPatch -> "Inspect the diff and apply the patch if it looks correct."
+                availability.blockingReason != null -> availability.blockingReason
+                else -> "Inspect output, diff or evidence for this step."
+            }
+        }
+    }
 
     private fun renderTaskOutputText(
         task: TaskDetailRecord,
