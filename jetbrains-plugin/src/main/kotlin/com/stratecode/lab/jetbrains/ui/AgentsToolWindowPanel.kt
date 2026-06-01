@@ -768,10 +768,27 @@ class AgentsToolWindowPanel(
         }
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                buildClient(settings.currentState.baseUrl, apiKey).listInitiatives(context.workspaceRoot)
+                fetchInitiativesForWorkspace(
+                    client = buildClient(settings.currentState.baseUrl, apiKey),
+                    workspaceRoot = context.workspaceRoot,
+                    expectedInitiativeId = selectInitiativeId,
+                )
             }.onSuccess { response ->
                 SwingUtilities.invokeLater {
-                    currentInitiatives = response.items.filter { it.id in knownInitiativeIds }
+                    val fetched = response.items.filter { it.id in knownInitiativeIds }
+                    val preserved = if (!selectInitiativeId.isNullOrBlank() && fetched.none { it.id == selectInitiativeId }) {
+                        currentInitiatives.filter { it.id == selectInitiativeId }
+                    } else {
+                        emptyList()
+                    }
+                    if (preserved.isNotEmpty()) {
+                        recordDiagnostic(
+                            "warning",
+                            "Initiative list lagging",
+                            "Server list did not include $selectInitiativeId yet; preserving local goal entry temporarily.",
+                        )
+                    }
+                    currentInitiatives = (preserved + fetched).distinctBy { it.id }
                     val target = refreshInitiativeSelector(selectInitiativeId ?: selectedInitiative?.id ?: context.metadata?.lastInitiativeId)
                     if (currentInitiatives.isEmpty()) {
                         selectedInitiative = null
@@ -1949,6 +1966,38 @@ class AgentsToolWindowPanel(
             }
         }
         throw (lastError ?: IllegalStateException("Initiative detail remained unavailable for $initiativeId"))
+    }
+
+    private fun fetchInitiativesForWorkspace(
+        client: OrchestratorClient,
+        workspaceRoot: String,
+        expectedInitiativeId: String? = null,
+        attempts: Int = 4,
+        delayMillis: Long = 500,
+    ): com.stratecode.lab.jetbrains.client.InitiativeListResponse {
+        var lastResponse: com.stratecode.lab.jetbrains.client.InitiativeListResponse? = null
+        var lastError: Throwable? = null
+        repeat(attempts) { index ->
+            try {
+                val response = client.listInitiatives(workspaceRoot)
+                lastResponse = response
+                if (expectedInitiativeId.isNullOrBlank() || response.items.any { it.id == expectedInitiativeId }) {
+                    return response
+                }
+                recordDiagnostic(
+                    "warning",
+                    "Initiative list pending consistency",
+                    "Goal $expectedInitiativeId not visible in workspace list yet. Retry ${index + 1}/$attempts.",
+                )
+            } catch (error: Throwable) {
+                lastError = error
+            }
+            if (index < attempts - 1) {
+                Thread.sleep(delayMillis)
+            }
+        }
+        lastResponse?.let { return it }
+        throw (lastError ?: IllegalStateException("Initiative list remained unavailable for workspace $workspaceRoot"))
     }
 
     private fun buildBadgesText(hasDiff: Boolean, hasEvidence: Boolean, hasApproval: Boolean, hasArtifacts: Boolean): String =

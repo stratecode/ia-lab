@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.2.5"
+version = "0.2.6"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Improved goal creation feedback, added retryable initiative detail loading, and made bridge status resilient to partial backend failures.
+        Prevented freshly created goals from disappearing during backend consistency lag and improved bridge status resilience during partial failures.
         """.trimIndent()
     )
 }
