@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.2.9"
+version = "0.2.10"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Fixed initiative selection loss after detail loads, improved operation visibility, and reduced ambiguity after goal creation or approvals.
+        Refreshed header state when operations change so bridge badges reflect loading or repairing, and kept initiative selection stable after detail loads.
         """.trimIndent()
     )
 }

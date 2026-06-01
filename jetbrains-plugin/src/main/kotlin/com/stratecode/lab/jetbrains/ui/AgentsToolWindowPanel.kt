@@ -2142,8 +2142,16 @@ class AgentsToolWindowPanel(
     }
 
     private fun setOperationStatus(message: String) {
-        currentOperationStatus = message
-        operationLabel.text = message
+        val update = {
+            currentOperationStatus = message
+            refreshHeader()
+            updateActionState()
+        }
+        if (SwingUtilities.isEventDispatchThread()) {
+            update()
+        } else {
+            SwingUtilities.invokeLater(update)
+        }
     }
 
     private fun buildClient(baseUrl: String, apiKey: String): OrchestratorClient =
@@ -2152,8 +2160,16 @@ class AgentsToolWindowPanel(
         }
 
     private fun clearOperationStatus() {
-        currentOperationStatus = null
-        operationLabel.text = "Idle"
+        val update = {
+            currentOperationStatus = null
+            refreshHeader()
+            updateActionState()
+        }
+        if (SwingUtilities.isEventDispatchThread()) {
+            update()
+        } else {
+            SwingUtilities.invokeLater(update)
+        }
     }
 
     private fun handleFailure(title: String, message: String, notifyUser: Boolean = true) {
