@@ -290,6 +290,7 @@ data class ApprovalResolveRequest(
 class OrchestratorClient(
     private val baseUrl: String,
     private val apiKey: String,
+    private val trace: ((String) -> Unit)? = null,
 ) {
     companion object {
         private val connectTimeout: Duration = Duration.ofSeconds(5)
@@ -460,15 +461,25 @@ class OrchestratorClient(
     }
 
     private fun send(request: HttpRequest): String {
+        val startedAt = System.nanoTime()
+        trace?.invoke("HTTP ${request.method()} ${request.uri()}")
         val response = try {
             http.send(request, HttpResponse.BodyHandlers.ofString(UTF_8))
         } catch (error: HttpTimeoutException) {
+            val elapsedMs = elapsedMs(startedAt)
+            trace?.invoke("HTTP timeout after ${elapsedMs}ms ${request.method()} ${request.uri()}")
             error("Request timed out after ${requestTimeout.seconds}s: ${request.uri()}")
         } catch (error: ConnectException) {
+            val elapsedMs = elapsedMs(startedAt)
+            trace?.invoke("HTTP connect failure after ${elapsedMs}ms ${request.method()} ${request.uri()} -> ${error.message ?: "unreachable host"}")
             error("Connection failed to $baseUrl: ${error.message ?: "unreachable host"}")
         } catch (error: Exception) {
+            val elapsedMs = elapsedMs(startedAt)
+            trace?.invoke("HTTP request failure after ${elapsedMs}ms ${request.method()} ${request.uri()} -> ${error.message ?: error::class.java.simpleName}")
             error("Request failed for ${request.uri()}: ${error.message ?: error::class.java.simpleName}")
         }
+        val elapsedMs = elapsedMs(startedAt)
+        trace?.invoke("HTTP ${response.statusCode()} in ${elapsedMs}ms ${request.method()} ${request.uri()}")
         if (response.statusCode() !in 200..299) {
             error("HTTP ${response.statusCode()}: ${response.body()}")
         }
@@ -487,4 +498,6 @@ class OrchestratorClient(
     }
 
     private fun encode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8)
+
+    private fun elapsedMs(startedAt: Long): Long = (System.nanoTime() - startedAt) / 1_000_000
 }

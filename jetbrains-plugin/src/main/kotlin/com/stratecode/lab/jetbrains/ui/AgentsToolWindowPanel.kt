@@ -674,7 +674,7 @@ class AgentsToolWindowPanel(
             updateActionState()
             return
         }
-        val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
+        val client = buildClient(settings.currentState.baseUrl, apiKey)
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
                 val ready = client.checkReady()
@@ -737,7 +737,7 @@ class AgentsToolWindowPanel(
         }
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                OrchestratorClient(settings.currentState.baseUrl, apiKey).listInitiatives(context.workspaceRoot)
+                buildClient(settings.currentState.baseUrl, apiKey).listInitiatives(context.workspaceRoot)
             }.onSuccess { response ->
                 SwingUtilities.invokeLater {
                     currentInitiatives = response.items.filter { it.id in knownInitiativeIds }
@@ -790,7 +790,7 @@ class AgentsToolWindowPanel(
         loadingInitiativeDetailId = initiativeId
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
+                val client = buildClient(settings.currentState.baseUrl, apiKey)
                 InitiativeDetailBundle(
                     detail = client.getInitiativeDetail(initiativeId),
                     tasks = client.listInitiativeTasks(initiativeId).items,
@@ -898,7 +898,7 @@ class AgentsToolWindowPanel(
         overviewArea.text = "Loading step detail…"
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
+                val client = buildClient(settings.currentState.baseUrl, apiKey)
                 val task = client.getTask(taskId)
                 val sources = client.getTaskSources(taskId).items
                 val patch = TaskExecutionSupport.resolvePatch(task, sources)
@@ -1224,7 +1224,7 @@ class AgentsToolWindowPanel(
         recordDiagnostic("info", "Creating goal", "Submitting '$title' for workspace ${context.workspaceRoot}.")
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                OrchestratorClient(settings.currentState.baseUrl, apiKey).createInitiative(title, goal, context.workspaceRoot)
+                buildClient(settings.currentState.baseUrl, apiKey).createInitiative(title, goal, context.workspaceRoot)
             }.onSuccess {
                 StrateCodeProjectStore.rememberInitiative(
                     context,
@@ -1263,7 +1263,7 @@ class AgentsToolWindowPanel(
         registerBridgeButton.isEnabled = false
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                OrchestratorClient(settings.currentState.baseUrl, apiKey).registerBridge(context, settings.currentState.bridgeName)
+                buildClient(settings.currentState.baseUrl, apiKey).registerBridge(context, settings.currentState.bridgeName)
             }.onSuccess {
                 StrateCodeProjectStore.write(context, bridgeName = settings.currentState.bridgeName)
                 SwingUtilities.invokeLater {
@@ -1359,7 +1359,7 @@ class AgentsToolWindowPanel(
         }
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                OrchestratorClient(settings.currentState.baseUrl, apiKey).listApprovals()
+                buildClient(settings.currentState.baseUrl, apiKey).listApprovals()
             }.onSuccess { response ->
                 SwingUtilities.invokeLater {
                     currentApprovals = response.items
@@ -1405,7 +1405,7 @@ class AgentsToolWindowPanel(
         }
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
+                val client = buildClient(settings.currentState.baseUrl, apiKey)
                 if (approve) client.approveApproval(approval.id, "jetbrains-plugin") else client.rejectApproval(approval.id, "jetbrains-plugin")
             }.onSuccess {
                 SwingUtilities.invokeLater {
@@ -1554,7 +1554,7 @@ class AgentsToolWindowPanel(
         }
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                action(OrchestratorClient(settings.currentState.baseUrl, apiKey))
+                action(buildClient(settings.currentState.baseUrl, apiKey))
             }.onSuccess {
                 SwingUtilities.invokeLater {
                     recordDiagnostic("info", successTitle, selected.title)
@@ -1940,7 +1940,7 @@ class AgentsToolWindowPanel(
         setOperationStatus("Auto-registering bridge…")
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                OrchestratorClient(settings.currentState.baseUrl, apiKey).registerBridge(context, settings.currentState.bridgeName)
+                buildClient(settings.currentState.baseUrl, apiKey).registerBridge(context, settings.currentState.bridgeName)
             }.onSuccess {
                 SwingUtilities.invokeLater {
                     clearOperationStatus()
@@ -1960,6 +1960,11 @@ class AgentsToolWindowPanel(
         currentOperationStatus = message
         operationLabel.text = message
     }
+
+    private fun buildClient(baseUrl: String, apiKey: String): OrchestratorClient =
+        OrchestratorClient(baseUrl, apiKey) { traceMessage ->
+            recordDiagnostic("info", "HTTP", traceMessage)
+        }
 
     private fun clearOperationStatus() {
         currentOperationStatus = null

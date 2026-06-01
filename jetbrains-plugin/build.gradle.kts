@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.1.7"
+version = "0.1.8"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Added HTTP timeouts, clearer network failure messages, visible status refresh progress, and bridge auto-repair for stale workspace matches.
+        Added per-request HTTP tracing in plugin logs, plus timeouts, clearer network failure messages, and visible status refresh progress.
         """.trimIndent()
     )
 }
