@@ -7,7 +7,7 @@ import java.util.UUID
 
 object ProjectContextResolver {
     fun resolve(project: Project): ProjectContext {
-        val basePath = project.basePath.orEmpty()
+        val basePath = normalizeWorkspaceRoot(project.basePath.orEmpty())
         val metadata = StrateCodeProjectStore.read(basePath)
         val branch = readGitValue(basePath, "rev-parse", "--abbrev-ref", "HEAD")
         val remote = readGitValue(basePath, "config", "--get", "remote.origin.url")
@@ -46,7 +46,15 @@ object ProjectContextResolver {
     }
 
     fun stableBridgeId(workspaceRoot: String): String =
-        UUID.nameUUIDFromBytes("stratecode:$workspaceRoot".toByteArray(StandardCharsets.UTF_8)).toString()
+        UUID.nameUUIDFromBytes("stratecode:${normalizeWorkspaceRoot(workspaceRoot)}".toByteArray(StandardCharsets.UTF_8)).toString()
+
+    fun normalizeWorkspaceRoot(workspaceRoot: String): String {
+        val trimmed = workspaceRoot.trim()
+        if (trimmed.isBlank()) {
+            return ""
+        }
+        return runCatching { File(trimmed).canonicalPath }.getOrElse { File(trimmed).absolutePath }
+    }
 
     private fun readGitValue(basePath: String, vararg args: String): String? {
         if (basePath.isBlank() || !File(basePath).exists()) {

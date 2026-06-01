@@ -1,7 +1,9 @@
 package com.stratecode.lab.jetbrains.bridge
 
 import com.stratecode.lab.jetbrains.client.LocalBridgeResponse
+import java.io.File
 import java.time.Instant
+import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -63,5 +65,25 @@ class BridgeResolverTest {
         assertTrue(resolution.stale)
         assertFalse(resolution.executable)
         assertEquals("The matched bridge heartbeat is stale or missing.", resolution.executionBlockReason())
+    }
+
+    @Test
+    fun `canonical path match does not report mismatch`() {
+        val root = createTempDirectory().toFile()
+        val canonical = root.canonicalPath
+        val alternative = File(canonical, ".").absolutePath
+        val bridge = LocalBridgeResponse(
+            id = "bridge-1",
+            name = "jetbrains-bridge",
+            hostname = "devbox",
+            workspaceRoot = canonical,
+            status = "active",
+            lastHeartbeat = Instant.now().minusSeconds(5).toString(),
+        )
+
+        val resolution = BridgeResolver.resolve(listOf(bridge), alternative, "jetbrains-bridge")
+
+        assertEquals(BridgeConsistency.MATCHED, resolution.consistency)
+        assertTrue(resolution.executable)
     }
 }

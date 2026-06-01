@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.1.2"
+version = "0.1.3"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Added plugin diagnostics, direct access to idea.log, and bridge auto-registration for the current workspace.
+        Added diagnostics and bridge auto-registration, plus canonical workspace matching to avoid false bridge mismatches.
         """.trimIndent()
     )
 }

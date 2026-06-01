@@ -26,11 +26,12 @@ object BridgeResolver {
     private const val staleThresholdSeconds = 90L
 
     fun resolve(bridges: List<LocalBridgeResponse>, workspaceRoot: String, bridgeName: String): BridgeResolution {
-        val exact = bridges.firstOrNull { it.workspaceRoot == workspaceRoot && it.name == bridgeName }
+        val normalizedWorkspace = normalizePath(workspaceRoot)
+        val exact = bridges.firstOrNull { normalizePath(it.workspaceRoot) == normalizedWorkspace && it.name == bridgeName }
         if (exact != null) {
             return classify(exact, "Bridge matched by workspace and name.", BridgeConsistency.MATCHED)
         }
-        val workspaceMatch = bridges.firstOrNull { it.workspaceRoot == workspaceRoot }
+        val workspaceMatch = bridges.firstOrNull { normalizePath(it.workspaceRoot) == normalizedWorkspace }
         if (workspaceMatch != null) {
             return classify(workspaceMatch, "Workspace matches but configured bridge name differs.", BridgeConsistency.WARNING)
         }
@@ -46,6 +47,9 @@ object BridgeResolver {
             executable = false,
         )
     }
+
+    private fun normalizePath(path: String): String =
+        runCatching { java.io.File(path.trim()).canonicalPath }.getOrElse { java.io.File(path.trim()).absolutePath }
 
     private fun classify(bridge: LocalBridgeResponse, detail: String, consistency: BridgeConsistency): BridgeResolution {
         val age = heartbeatAgeSeconds(bridge.lastHeartbeat)
