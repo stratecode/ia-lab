@@ -660,6 +660,7 @@ class AgentsToolWindowPanel(
         val apiKey = settings.getApiKey()
         val context = ProjectContextResolver.resolve(project)
         currentProjectContext = context
+        setOperationStatus("Refreshing workspace status…")
         if (apiKey.isBlank()) {
             backendReady = null
             currentBridgeResolution = null
@@ -668,6 +669,7 @@ class AgentsToolWindowPanel(
             bridgeSummaryArea.text = "Configure the API key first. No bridge checks can run without it."
             bridgeCandidatesArea.text = ""
             recordDiagnostic("warning", "Missing API key", "Configure StrateCode Agents settings first.")
+            clearOperationStatus()
             refreshHeader()
             updateActionState()
             return
@@ -689,6 +691,7 @@ class AgentsToolWindowPanel(
             }.onSuccess { bundle ->
                 StrateCodeProjectStore.write(context, bridgeName = settings.currentState.bridgeName)
                 SwingUtilities.invokeLater {
+                    clearOperationStatus()
                     backendReady = bundle.backendReady
                     currentBridges = bundle.bridges
                     currentBridgeResolution = bundle.bridgeResolution
@@ -701,6 +704,7 @@ class AgentsToolWindowPanel(
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
+                    clearOperationStatus()
                     backendReady = null
                     currentBridges = emptyList()
                     currentBridgeResolution = null

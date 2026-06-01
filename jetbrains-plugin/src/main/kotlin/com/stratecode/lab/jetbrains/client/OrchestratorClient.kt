@@ -14,6 +14,9 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
+import java.time.Duration
+import java.net.http.HttpTimeoutException
+import java.net.ConnectException
 import kotlin.text.Charsets.UTF_8
 
 @Serializable
@@ -288,12 +291,19 @@ class OrchestratorClient(
     private val baseUrl: String,
     private val apiKey: String,
 ) {
+    companion object {
+        private val connectTimeout: Duration = Duration.ofSeconds(5)
+        private val requestTimeout: Duration = Duration.ofSeconds(20)
+    }
+
     private val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
         prettyPrint = true
     }
-    private val http = HttpClient.newBuilder().build()
+    private val http = HttpClient.newBuilder()
+        .connectTimeout(connectTimeout)
+        .build()
 
     fun checkReady(): ReadyResponse = get("/ready")
 
@@ -430,6 +440,7 @@ class OrchestratorClient(
 
     private fun getRaw(path: String, query: Map<String, String> = emptyMap()): String {
         val request = HttpRequest.newBuilder(buildUri(path, query))
+            .timeout(requestTimeout)
             .header("Authorization", "Bearer $apiKey")
             .header("Accept", "application/json")
             .GET()
@@ -439,6 +450,7 @@ class OrchestratorClient(
 
     private inline fun <reified Req, reified Res> post(path: String, body: Req): Res {
         val request = HttpRequest.newBuilder(buildUri(path))
+            .timeout(requestTimeout)
             .header("Authorization", "Bearer $apiKey")
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
@@ -448,7 +460,15 @@ class OrchestratorClient(
     }
 
     private fun send(request: HttpRequest): String {
-        val response = http.send(request, HttpResponse.BodyHandlers.ofString(UTF_8))
+        val response = try {
+            http.send(request, HttpResponse.BodyHandlers.ofString(UTF_8))
+        } catch (error: HttpTimeoutException) {
+            error("Request timed out after ${requestTimeout.seconds}s: ${request.uri()}")
+        } catch (error: ConnectException) {
+            error("Connection failed to $baseUrl: ${error.message ?: "unreachable host"}")
+        } catch (error: Exception) {
+            error("Request failed for ${request.uri()}: ${error.message ?: error::class.java.simpleName}")
+        }
         if (response.statusCode() !in 200..299) {
             error("HTTP ${response.statusCode()}: ${response.body()}")
         }
