@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.2.2"
+version = "0.2.3"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Extracted and tested startup badge state logic, keeping loading/repairing bridge signaling consistent alongside retryable auto-registration and richer diagnostics.
+        Added copyable diagnostics export, plus tested startup badge state logic, retryable auto-registration, and richer network/bridge tracing.
         """.trimIndent()
     )
 }

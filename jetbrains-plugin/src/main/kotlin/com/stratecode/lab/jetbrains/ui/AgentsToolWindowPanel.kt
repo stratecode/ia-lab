@@ -4,6 +4,7 @@ import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.PathManager
+import com.intellij.openapi.ide.CopyPasteManager
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
@@ -52,6 +53,7 @@ import java.awt.Color
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
+import java.awt.datatransfer.StringSelection
 import java.io.File
 import java.time.Instant
 import java.time.ZoneId
@@ -190,6 +192,7 @@ class AgentsToolWindowPanel(
     private val refreshInitiativeButton = JButton("Refresh Goal")
     private val openIdeLogButton = JButton("Open idea.log")
     private val refreshLogsButton = JButton("Refresh Logs")
+    private val copyLogsButton = JButton("Copy Logs")
 
     private var drawerMode: DrawerMode = DrawerMode.NONE
     private var backendReady: Boolean? = null
@@ -504,6 +507,7 @@ class AgentsToolWindowPanel(
                 JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
                     isOpaque = false
                     add(refreshLogsButton)
+                    add(copyLogsButton)
                     add(openIdeLogButton)
                 },
                 BorderLayout.SOUTH,
@@ -568,6 +572,7 @@ class AgentsToolWindowPanel(
         bridgeSmokeButton.addActionListener { runBridgeSmoke() }
         refreshInitiativeButton.addActionListener { selectedInitiative?.let { loadInitiativeDetail(it.id) } }
         refreshLogsButton.addActionListener { diagnosticsArea.text = renderDiagnostics() }
+        copyLogsButton.addActionListener { copyDiagnostics() }
         openIdeLogButton.addActionListener { openIdeLog() }
         advanceButton.addActionListener { advanceSelectedInitiative() }
         approvePhaseButton.addActionListener { resolveSelectedInitiative(true) }
@@ -2001,6 +2006,11 @@ class AgentsToolWindowPanel(
 
     private fun renderDiagnostics(): String =
         buildString {
+            appendLine("StrateCode Agents diagnostics")
+            appendLine("============================")
+            appendLine("Generated at ${logTimeFormatter.format(Instant.now())}")
+            appendLine("Current operation: ${currentOperationStatus ?: "Idle"}")
+            appendLine()
             appendLine("IDE log")
             appendLine("=======")
             appendLine(File(PathManager.getLogPath(), "idea.log").absolutePath)
@@ -2016,6 +2026,13 @@ class AgentsToolWindowPanel(
                 }
             }
         }.trim()
+
+    private fun copyDiagnostics() {
+        val payload = renderDiagnostics()
+        CopyPasteManager.getInstance().setContents(StringSelection(payload))
+        recordDiagnostic("info", "Logs copied", "Diagnostics copied to clipboard.")
+        notify("Logs copied", "Plugin diagnostics copied to clipboard.", NotificationType.INFORMATION)
+    }
 
     private fun openIdeLog() {
         val logFile = File(PathManager.getLogPath(), "idea.log")
