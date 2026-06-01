@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.2.10"
+version = "0.2.11"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Refreshed header state when operations change so bridge badges reflect loading or repairing, and kept initiative selection stable after detail loads.
+        Added short follow-up polling after goal and phase actions, refreshed bridge badges from operation state, and kept initiative selection stable after detail loads.
         """.trimIndent()
     )
 }

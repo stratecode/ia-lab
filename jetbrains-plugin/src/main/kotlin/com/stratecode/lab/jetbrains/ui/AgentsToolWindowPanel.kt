@@ -226,6 +226,7 @@ class AgentsToolWindowPanel(
     private var loadingInitiativeDetailId: String? = null
     private var loadingTaskId: String? = null
     private var currentOperationStatus: String? = null
+    private var followUpRefreshGeneration: Int = 0
 
     init {
         border = JBUI.Borders.empty(12)
@@ -1324,6 +1325,7 @@ class AgentsToolWindowPanel(
                     loadInitiativeDetail(it.id)
                     loadInitiatives(selectInitiativeId = it.id)
                     loadApprovals()
+                    scheduleInitiativeFollowUp(it.id, "goal creation")
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
@@ -1498,7 +1500,10 @@ class AgentsToolWindowPanel(
                     recordDiagnostic("info", if (approve) "Approval granted" else "Approval rejected", approval.id)
                     notify(if (approve) "Approval granted" else "Approval rejected", approval.id, NotificationType.INFORMATION)
                     loadApprovals()
-                    selectedInitiative?.let { loadInitiativeDetail(it.id) }
+                    selectedInitiative?.let {
+                        loadInitiativeDetail(it.id)
+                        scheduleInitiativeFollowUp(it.id, "approval resolution")
+                    }
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
@@ -1651,6 +1656,7 @@ class AgentsToolWindowPanel(
                     loadInitiatives(selectInitiativeId = selected.id)
                     loadInitiativeDetail(selected.id)
                     loadApprovals()
+                    scheduleInitiativeFollowUp(selected.id, successTitle)
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
@@ -1690,6 +1696,37 @@ class AgentsToolWindowPanel(
             workspaceRoot = workspaceRoot,
             createdAt = createdAt,
         )
+
+    private fun scheduleInitiativeFollowUp(
+        initiativeId: String,
+        reason: String,
+        attempts: Int = 5,
+        delayMillis: Long = 1500,
+    ) {
+        val generation = ++followUpRefreshGeneration
+        recordDiagnostic("info", "Follow-up refresh scheduled", "Watching $initiativeId after $reason.")
+        ApplicationManager.getApplication().executeOnPooledThread {
+            repeat(attempts) { index ->
+                if (generation != followUpRefreshGeneration) {
+                    return@executeOnPooledThread
+                }
+                if (index > 0) {
+                    Thread.sleep(delayMillis)
+                }
+                SwingUtilities.invokeLater {
+                    if (generation != followUpRefreshGeneration) {
+                        return@invokeLater
+                    }
+                    if (selectedInitiative?.id == initiativeId || initiativeDetailCache.containsKey(initiativeId)) {
+                        setOperationStatus("Waiting for orchestrator updates…")
+                        loadInitiatives(selectInitiativeId = initiativeId)
+                        loadInitiativeDetail(initiativeId)
+                        loadApprovals()
+                    }
+                }
+            }
+        }
+    }
 
     private fun renderTaskOverviewText(
         task: TaskDetailRecord,
