@@ -17,9 +17,10 @@ Current scope:
   - approvals
   - bridge
   - capabilities
-  - initiative info
+  - raw initiative info
+  - logs and recent plugin diagnostics
 - orchestrator health and capability status
-- bridge matching, registration, and heartbeat-based execution gating
+- bridge matching, auto-registration when missing, and heartbeat-based execution gating
 - bridge smoke validation from the IDE
 - project-scoped capability visibility
 - recent initiative listing and detail fetch, scoped to the current `workspace_root`
@@ -45,6 +46,9 @@ Current scope:
   - list pending approvals
   - approve or reject them
   - resolve blocking approvals inline from selected task context
+- log inspection support:
+  - open `idea.log` directly from the plugin
+  - inspect the latest plugin-side diagnostics without leaving the panel
 - local reset action:
   - clears `.stratecode/project.json`
   - forgets tracked initiatives for the workspace

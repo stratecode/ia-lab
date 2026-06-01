@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.1.1"
+version = "0.1.2"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Rebuilt around a plan-first workflow with local initiative scoping, safer parsing, and a cleaner governed execution surface.
+        Added plugin diagnostics, direct access to idea.log, and bridge auto-registration for the current workspace.
         """.trimIndent()
     )
 }
