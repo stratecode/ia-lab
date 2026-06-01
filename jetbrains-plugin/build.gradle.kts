@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.1.0"
+version = "0.1.1"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Initial shell with orchestrator connectivity, project detection, bridge status, and initiative management foundation.
+        Rebuilt around a plan-first workflow with local initiative scoping, safer parsing, and a cleaner governed execution surface.
         """.trimIndent()
     )
 }
