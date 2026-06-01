@@ -93,6 +93,7 @@ class AgentsToolWindowPanel(
     private val titleLabel = JLabel("StrateCode Plan")
     private val goalLabel = JLabel("No active goal")
     private val contextLabel = JLabel("Open or create a local initiative for this workspace.")
+    private val operationLabel = JLabel("Idle")
     private val projectBadge = badge("Project", "local", StatusTone.NEUTRAL)
     private val backendBadge = badge("Backend", "unknown", StatusTone.NEUTRAL)
     private val bridgeBadge = badge("Bridge", "unresolved", StatusTone.NEUTRAL)
@@ -217,6 +218,7 @@ class AgentsToolWindowPanel(
     private var suppressPlanSelectionEvents: Boolean = false
     private var loadingInitiativeDetailId: String? = null
     private var loadingTaskId: String? = null
+    private var currentOperationStatus: String? = null
 
     init {
         border = JBUI.Borders.empty(12)
@@ -236,6 +238,8 @@ class AgentsToolWindowPanel(
         titleLabel.font = titleLabel.font.deriveFont(Font.BOLD, 20f)
         goalLabel.font = goalLabel.font.deriveFont(Font.BOLD, 16f)
         contextLabel.foreground = Color(0x6B7280)
+        operationLabel.foreground = Color(0xA16207)
+        operationLabel.font = operationLabel.font.deriveFont(Font.BOLD, 12f)
 
         val primaryActions = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
             isOpaque = false
@@ -266,6 +270,8 @@ class AgentsToolWindowPanel(
             add(goalLabel)
             add(Box.createVerticalStrut(6))
             add(contextLabel)
+            add(Box.createVerticalStrut(4))
+            add(operationLabel)
             add(Box.createVerticalStrut(8))
             add(primaryActions)
             add(Box.createVerticalStrut(6))
@@ -700,10 +706,9 @@ class AgentsToolWindowPanel(
                     capabilitiesArea.text = error.message ?: error.toString()
                     bridgeSummaryArea.text = error.message ?: error.toString()
                     bridgeCandidatesArea.text = ""
-                    recordDiagnostic("error", "Status refresh failed", error.message ?: error.toString())
+                    handleFailure("Status refresh failed", error.message ?: error.toString())
                     refreshHeader()
                     updateActionState()
-                    notify("Status refresh failed", error.message ?: error.toString(), NotificationType.ERROR)
                 }
             }
         }
@@ -743,7 +748,7 @@ class AgentsToolWindowPanel(
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
                     currentInitiatives = emptyList()
-                    recordDiagnostic("error", "Initiative list failed", error.message ?: error.toString())
+                    handleFailure("Initiative list failed", error.message ?: error.toString(), notifyUser = false)
                     clearPlanState(error.message ?: error.toString())
                 }
             }
@@ -809,7 +814,7 @@ class AgentsToolWindowPanel(
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
                     loadingInitiativeDetailId = null
-                    recordDiagnostic("error", "Initiative detail failed", error.message ?: error.toString())
+                    handleFailure("Initiative detail failed", error.message ?: error.toString(), notifyUser = false)
                     clearPlanState("Failed to load initiative detail:\n${error.message ?: error}")
                 }
             }
@@ -915,7 +920,7 @@ class AgentsToolWindowPanel(
                     selectedTaskPatchView = null
                     selectedTaskEvidence = null
                     selectedTaskSourceArtifacts = emptyList()
-                    recordDiagnostic("error", "Task detail failed", error.message ?: error.toString())
+                    handleFailure("Task detail failed", error.message ?: error.toString(), notifyUser = false)
                     renderErrorDetail("Step detail failed", error.message ?: error.toString())
                     updateActionState()
                 }
@@ -1172,6 +1177,7 @@ class AgentsToolWindowPanel(
             <b>Local state:</b> ${escapeHtml(state.metadataSummary)}
             </html>
         """.trimIndent()
+        operationLabel.text = currentOperationStatus ?: "Idle"
     }
 
     private fun createInitiative() {
@@ -1208,6 +1214,9 @@ class AgentsToolWindowPanel(
             notify("Goal blocked", "Goal is required.", NotificationType.WARNING)
             return
         }
+        setOperationStatus("Creating goal…")
+        createInitiativeButton.isEnabled = false
+        recordDiagnostic("info", "Creating goal", "Submitting '$title' for workspace ${context.workspaceRoot}.")
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
                 OrchestratorClient(settings.currentState.baseUrl, apiKey).createInitiative(title, goal, context.workspaceRoot)
@@ -1219,6 +1228,8 @@ class AgentsToolWindowPanel(
                     bridgeName = settings.currentState.bridgeName,
                 )
                 SwingUtilities.invokeLater {
+                    clearOperationStatus()
+                    createInitiativeButton.isEnabled = true
                     recordDiagnostic("info", "Goal created", "${it.title} (${it.id})")
                     notify("Goal created", "${it.title} (${it.id})", NotificationType.INFORMATION)
                     loadStatus()
@@ -1227,8 +1238,9 @@ class AgentsToolWindowPanel(
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
-                    recordDiagnostic("error", "Goal creation failed", error.message ?: error.toString())
-                    notify("Goal creation failed", error.message ?: error.toString(), NotificationType.ERROR)
+                    clearOperationStatus()
+                    createInitiativeButton.isEnabled = true
+                    handleFailure("Goal creation failed", error.message ?: error.toString())
                 }
             }
         }
@@ -1242,20 +1254,25 @@ class AgentsToolWindowPanel(
             notify("Bridge registration blocked", "Configure an API key first.", NotificationType.WARNING)
             return
         }
+        setOperationStatus("Registering bridge…")
+        registerBridgeButton.isEnabled = false
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
                 OrchestratorClient(settings.currentState.baseUrl, apiKey).registerBridge(context, settings.currentState.bridgeName)
             }.onSuccess {
                 StrateCodeProjectStore.write(context, bridgeName = settings.currentState.bridgeName)
                 SwingUtilities.invokeLater {
+                    clearOperationStatus()
+                    registerBridgeButton.isEnabled = true
                     recordDiagnostic("info", "Bridge registered", "Bridge ${it.name} bound to ${it.workspaceRoot}.")
                     notify("Bridge registered", "Bridge ${it.name} is now bound to ${it.workspaceRoot}.", NotificationType.INFORMATION)
                     loadStatus()
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
-                    recordDiagnostic("error", "Bridge registration failed", error.message ?: error.toString())
-                    notify("Bridge registration failed", error.message ?: error.toString(), NotificationType.ERROR)
+                    clearOperationStatus()
+                    registerBridgeButton.isEnabled = true
+                    handleFailure("Bridge registration failed", error.message ?: error.toString())
                 }
             }
         }
@@ -1355,7 +1372,7 @@ class AgentsToolWindowPanel(
                     approvalsModel.clear()
                     currentApprovals = emptyList()
                     selectedApproval = null
-                    recordDiagnostic("error", "Approvals refresh failed", error.message ?: error.toString())
+                    handleFailure("Approvals refresh failed", error.message ?: error.toString(), notifyUser = false)
                     refreshHeader()
                     updateActionState()
                 }
@@ -1394,8 +1411,7 @@ class AgentsToolWindowPanel(
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
-                    recordDiagnostic("error", "Approval resolution failed", error.message ?: error.toString())
-                    notify("Approval resolution failed", error.message ?: error.toString(), NotificationType.ERROR)
+                    handleFailure("Approval resolution failed", error.message ?: error.toString())
                 }
             }
         }
@@ -1544,8 +1560,7 @@ class AgentsToolWindowPanel(
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
-                    recordDiagnostic("error", "Initiative action failed", error.message ?: error.toString())
-                    notify("Initiative action failed", error.message ?: error.toString(), NotificationType.ERROR)
+                    handleFailure("Initiative action failed", error.message ?: error.toString())
                 }
             }
         }
@@ -1916,19 +1931,40 @@ class AgentsToolWindowPanel(
         if (apiKey.isBlank()) {
             return
         }
+        setOperationStatus("Auto-registering bridge…")
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
                 OrchestratorClient(settings.currentState.baseUrl, apiKey).registerBridge(context, settings.currentState.bridgeName)
             }.onSuccess {
                 SwingUtilities.invokeLater {
+                    clearOperationStatus()
                     recordDiagnostic("info", "Auto-register succeeded", "Bridge ${it.name} bound to ${it.workspaceRoot}.")
                     loadStatus()
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
-                    recordDiagnostic("error", "Auto-register failed", error.message ?: error.toString())
+                    clearOperationStatus()
+                    handleFailure("Auto-register failed", error.message ?: error.toString(), notifyUser = false)
                 }
             }
+        }
+    }
+
+    private fun setOperationStatus(message: String) {
+        currentOperationStatus = message
+        operationLabel.text = message
+    }
+
+    private fun clearOperationStatus() {
+        currentOperationStatus = null
+        operationLabel.text = "Idle"
+    }
+
+    private fun handleFailure(title: String, message: String, notifyUser: Boolean = true) {
+        recordDiagnostic("error", title, message)
+        showDrawer(DrawerMode.LOGS)
+        if (notifyUser) {
+            notify(title, message, NotificationType.ERROR)
         }
     }
 

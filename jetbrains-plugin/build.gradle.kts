@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.1.4"
+version = "0.1.5"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Added diagnostics and bridge auto-registration, plus canonical workspace matching and fresh-bridge timestamp fallback to avoid false degraded status after registration.
+        Added visible operation status, automatic logs drawer on failures, and better bridge freshness detection after registration.
         """.trimIndent()
     )
 }
