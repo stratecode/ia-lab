@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.2.6"
+version = "0.2.7"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Prevented freshly created goals from disappearing during backend consistency lag and improved bridge status resilience during partial failures.
+        Fixed diagnostics updates crossing threads, reduced risk of IDE freezes, and kept freshly created goals stable during backend consistency lag.
         """.trimIndent()
     )
 }

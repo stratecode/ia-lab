@@ -2117,16 +2117,33 @@ class AgentsToolWindowPanel(
 
     private fun recordDiagnostic(level: String, title: String, message: String) {
         val line = "[${logTimeFormatter.format(Instant.now())}] ${level.uppercase()}  $title\n$message"
-        while (recentDiagnostics.size >= 50) {
-            recentDiagnostics.removeFirst()
-        }
-        recentDiagnostics.addLast(line)
-        diagnosticsArea.text = renderDiagnostics()
+        updateDiagnosticsBuffer(line)
+        updateDiagnosticsUi()
         currentProjectContext?.let { StrateCodeProjectStore.appendDiagnostic(it.workspaceRoot, line) }
         when (level.lowercase()) {
             "error" -> LOG.warn("$title: $message")
             "warning" -> LOG.warn("$title: $message")
             else -> LOG.info("$title: $message")
+        }
+    }
+
+    private fun updateDiagnosticsBuffer(line: String) {
+        synchronized(recentDiagnostics) {
+            while (recentDiagnostics.size >= 50) {
+                recentDiagnostics.removeFirst()
+            }
+            recentDiagnostics.addLast(line)
+        }
+    }
+
+    private fun updateDiagnosticsUi() {
+        val render = {
+            diagnosticsArea.text = renderDiagnostics()
+        }
+        if (SwingUtilities.isEventDispatchThread()) {
+            render()
+        } else {
+            SwingUtilities.invokeLater(render)
         }
     }
 
@@ -2143,12 +2160,14 @@ class AgentsToolWindowPanel(
             appendLine()
             appendLine("Recent plugin events")
             appendLine("====================")
-            if (recentDiagnostics.isEmpty()) {
-                appendLine("No diagnostics recorded yet.")
-            } else {
-                recentDiagnostics.forEach {
-                    appendLine(it)
-                    appendLine()
+            synchronized(recentDiagnostics) {
+                if (recentDiagnostics.isEmpty()) {
+                    appendLine("No diagnostics recorded yet.")
+                } else {
+                    recentDiagnostics.forEach {
+                        appendLine(it)
+                        appendLine()
+                    }
                 }
             }
         }.trim()
