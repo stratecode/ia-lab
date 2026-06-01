@@ -98,6 +98,30 @@ class WorkbenchStateMapperTest {
     }
 
     @Test
+    fun `requirements phase can advance from idea submitted`() {
+        val selected = PlanStepWorkbenchItem(
+            stepId = "phase:requirements",
+            initiativeId = "initiative-1",
+            kind = PlanStepKind.PHASE,
+            title = "Define requirements",
+            subtitle = "requirements",
+            status = PlanStepStatus.ACTIVE,
+            phase = "requirements",
+        )
+
+        val availability = WorkbenchStateMapper.buildTaskActionAvailability(
+            selectedStep = selected,
+            patchView = null,
+            evidence = null,
+            resolution = null,
+            degraded = false,
+            initiativeStatus = "idea_submitted",
+        )
+
+        assertTrue(availability.canAdvancePhase)
+    }
+
+    @Test
     fun `header state reflects approvals and degraded project`() {
         val header = WorkbenchStateMapper.buildHeaderState(
             context = ProjectContext(

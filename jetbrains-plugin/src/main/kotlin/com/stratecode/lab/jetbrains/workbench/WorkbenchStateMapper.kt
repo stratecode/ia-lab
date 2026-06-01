@@ -12,6 +12,8 @@ import com.stratecode.lab.jetbrains.task.TaskResultPatchView
 
 object WorkbenchStateMapper {
     private val phaseOrder = listOf("requirements", "design", "plan", "execution")
+    private val requirementsAdvanceStatuses = setOf("idea_submitted", "requirements_draft")
+    private val designAdvanceStatuses = setOf("design_draft")
 
     fun buildHeaderState(
         context: ProjectContext,
@@ -175,7 +177,7 @@ object WorkbenchStateMapper {
             canApplyPatch = isTask && hasPatch && executable && !degraded,
             canOpenChangedFile = isTask && hasChangedFiles,
             canOpenEvidence = isTask && hasEvidence,
-            canAdvancePhase = isPhase && phase in setOf("requirements", "design") && initiativeStatus?.endsWith("_draft") == true,
+            canAdvancePhase = isPhase && canAdvancePhase(phase, initiativeStatus),
             canApprovePhase = isPhase && phase in setOf("requirements", "design", "plan") && initiativeStatus?.endsWith("_review") == true,
             canRejectPhase = isPhase && phase in setOf("requirements", "design", "plan") && initiativeStatus?.endsWith("_review") == true,
             canGenerateTasks = isPhase && phase == "plan" && initiativeStatus == "plan_draft",
@@ -186,6 +188,19 @@ object WorkbenchStateMapper {
                 blockReason
             },
         )
+    }
+
+    fun canAdvancePhase(
+        phase: String?,
+        initiativeStatus: String?,
+    ): Boolean {
+        val normalizedPhase = phase?.lowercase().orEmpty()
+        val normalizedStatus = initiativeStatus?.lowercase().orEmpty()
+        return when (normalizedPhase) {
+            "requirements" -> normalizedStatus in requirementsAdvanceStatuses
+            "design" -> normalizedStatus in designAdvanceStatuses
+            else -> false
+        }
     }
 
     fun buildApprovalSummary(

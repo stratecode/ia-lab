@@ -872,7 +872,13 @@ class AgentsToolWindowPanel(
                     clearOperationStatus()
                     loadingInitiativeDetailId = null
                     handleFailure("Initiative detail failed", error.message ?: error.toString(), notifyUser = false)
-                    clearPlanState("Failed to load initiative detail:\n${error.message ?: error}")
+                    if (initiativeDetailCache.containsKey(initiativeId)) {
+                        rebuildPlanList(selectStepId = selectedStep?.stepId)
+                        renderInitiativeSnapshot()
+                        setOperationStatus("Goal created. Detail refresh failed; showing the latest known local state.")
+                    } else {
+                        clearPlanState("Failed to load initiative detail:\n${error.message ?: error}")
+                    }
                 }
             }
         }
@@ -1249,13 +1255,16 @@ class AgentsToolWindowPanel(
         if (loadingTaskId != null) {
             return "Loading task detail…"
         }
+        val detail = selectedDetailOrNull()
+        if (detail?.initiative?.status == "idea_submitted" && detail.initiative.currentPhase == "requirements") {
+            return "Goal created. Click 'Advance Draft' to generate the requirements output."
+        }
         val selectedTaskApproval = selectedStep?.taskId?.let { taskId ->
             currentApprovals.firstOrNull { it.taskId == taskId }
         }
         if (selectedTaskApproval != null) {
             return "Waiting for approval: ${selectedTaskApproval.actionType}"
         }
-        val detail = selectedDetailOrNull()
         if (detail != null && detail.initiative.status.endsWith("_review")) {
             return "Waiting for phase review approval."
         }
@@ -1317,11 +1326,16 @@ class AgentsToolWindowPanel(
                     createInitiativeButton.isEnabled = true
                     recordDiagnostic("info", "Goal created", "${it.title} (${it.id})")
                     notify("Goal created", "${it.title} (${it.id})", NotificationType.INFORMATION)
+                    val optimisticDetail = buildOptimisticInitiativeDetail(it, goal)
                     currentInitiatives = listOf(it) + currentInitiatives.filterNot { existing -> existing.id == it.id }
+                    initiativeDetailCache[it.id] = optimisticDetail
+                    initiativeTaskCache[it.id] = emptyList()
+                    initiativeArtifactCache[it.id] = emptyList()
                     selectedInitiative = it
                     refreshInitiativeSelector(it.id)
-                    clearPlanState("Goal created.\n\nLoading initiative detail from the server…")
-                    setOperationStatus("Goal created. Waiting for initiative detail…")
+                    rebuildPlanList(selectStepId = "phase:${it.currentPhase}")
+                    renderInitiativeSnapshot()
+                    setOperationStatus("Goal created. Advance Draft to generate the requirements output.")
                     loadInitiativeDetail(it.id)
                     loadInitiatives(selectInitiativeId = it.id)
                     loadApprovals()
@@ -1695,6 +1709,25 @@ class AgentsToolWindowPanel(
             currentPhase = currentPhase,
             workspaceRoot = workspaceRoot,
             createdAt = createdAt,
+        )
+
+    private fun buildOptimisticInitiativeDetail(
+        summary: InitiativeSummary,
+        goal: String,
+    ): InitiativeDetailResponseRecord =
+        InitiativeDetailResponseRecord(
+            initiative = InitiativeRecord(
+                id = summary.id,
+                title = summary.title,
+                workspaceRoot = summary.workspaceRoot,
+                goal = goal,
+                status = summary.status,
+                currentPhase = summary.currentPhase,
+                createdBy = "jetbrains-plugin",
+                executionMode = "selective",
+                createdAt = summary.createdAt,
+                updatedAt = summary.createdAt,
+            ),
         )
 
     private fun scheduleInitiativeFollowUp(
