@@ -21,6 +21,15 @@ Current scope:
 - task execution controls from the IDE:
   - set `execution_mode` per task
   - launch one or many selected tasks
+- task execution inspection from the IDE:
+  - fetch typed task detail and task sources
+  - preview diff from `task.results.diff` or patch-like artifacts
+  - open the first changed file
+  - apply a governed patch with local `git apply`
+- reviewer evidence workflow:
+  - extract navigable findings from `code_analysis_report`
+  - jump directly to `file:line`
+  - show raw evidence payloads when coordinates are missing
 - pending approvals tab:
   - list pending approvals
   - approve or reject them

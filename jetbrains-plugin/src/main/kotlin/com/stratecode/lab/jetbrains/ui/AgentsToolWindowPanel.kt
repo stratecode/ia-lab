@@ -21,10 +21,15 @@ import com.stratecode.lab.jetbrains.client.InitiativeTaskLinkRecord
 import com.stratecode.lab.jetbrains.client.LocalBridgeResponse
 import com.stratecode.lab.jetbrains.client.OrchestratorClient
 import com.stratecode.lab.jetbrains.client.ApprovalRecord
+import com.stratecode.lab.jetbrains.client.TaskDetailRecord
 import com.stratecode.lab.jetbrains.project.ProjectContext
 import com.stratecode.lab.jetbrains.project.ProjectContextResolver
 import com.stratecode.lab.jetbrains.project.StrateCodeProjectStore
 import com.stratecode.lab.jetbrains.settings.PluginSettingsService
+import com.stratecode.lab.jetbrains.task.EvidenceExtractionResult
+import com.stratecode.lab.jetbrains.task.EvidenceLocation
+import com.stratecode.lab.jetbrains.task.TaskExecutionSupport
+import com.stratecode.lab.jetbrains.task.TaskResultPatchView
 import java.awt.BorderLayout
 import java.awt.Color
 import java.awt.Dimension
@@ -66,6 +71,7 @@ class AgentsToolWindowPanel(
     private val initiativeSummaryArea = infoArea(15)
     private val initiativeReviewsArea = infoArea(8)
     private val tasksArea = infoArea(14)
+    private val evidenceArea = infoArea(16)
     private val artifactsArea = infoArea(16)
     private val approvalsArea = infoArea(14)
     private val feedbackArea = JBTextArea(4, 60).apply {
@@ -94,6 +100,11 @@ class AgentsToolWindowPanel(
         selectionMode = ListSelectionModel.SINGLE_SELECTION
         cellRenderer = ApprovalCellRenderer()
     }
+    private val evidenceModel = DefaultListModel<EvidenceLocation>()
+    private val evidenceList = JBList(evidenceModel).apply {
+        selectionMode = ListSelectionModel.SINGLE_SELECTION
+        cellRenderer = EvidenceLocationCellRenderer()
+    }
 
     private val initiativeTitleField = JBTextField()
     private val initiativeGoalArea = JBTextArea(6, 60).apply {
@@ -109,6 +120,10 @@ class AgentsToolWindowPanel(
     private val refreshDetailButton = JButton("Refresh Detail")
     private val setTaskModeButton = JButton("Set Task Mode")
     private val launchTaskButton = JButton("Launch Selected Tasks")
+    private val previewDiffButton = JButton("Preview Diff")
+    private val applyPatchButton = JButton("Apply Patch")
+    private val openChangedFileButton = JButton("Open Changed File")
+    private val openEvidenceButton = JButton("Open First Evidence")
     private val refreshApprovalsButton = JButton("Refresh Approvals")
     private val approveApprovalButton = JButton("Approve Approval")
     private val rejectApprovalButton = JButton("Reject Approval")
@@ -119,6 +134,10 @@ class AgentsToolWindowPanel(
     private var selectedInitiative: InitiativeSummary? = null
     private var selectedDetail: InitiativeDetailResponseRecord? = null
     private var selectedTaskLink: InitiativeTaskLinkRecord? = null
+    private var selectedTaskDetail: TaskDetailRecord? = null
+    private var selectedTaskPatchView: TaskResultPatchView? = null
+    private var selectedTaskEvidence: EvidenceExtractionResult? = null
+    private var selectedEvidenceLocation: EvidenceLocation? = null
     private var selectedArtifact: InitiativeArtifactRecord? = null
     private var selectedApproval: ApprovalRecord? = null
     private var currentProjectContext: ProjectContext? = null
@@ -232,9 +251,21 @@ class AgentsToolWindowPanel(
         }
         taskLinksList.addListSelectionListener {
             selectedTaskLink = taskLinksList.selectedValue
-            tasksArea.text = renderTaskSelection(taskLinksList.selectedValuesList)
+            handleTaskSelectionChanged()
             updateActionState()
         }
+        evidenceList.addListSelectionListener {
+            selectedEvidenceLocation = evidenceList.selectedValue
+            evidenceArea.text = renderEvidenceDetail(selectedEvidenceLocation, selectedTaskEvidence)
+            updateActionState()
+        }
+        evidenceList.addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mouseClicked(event: java.awt.event.MouseEvent) {
+                if (event.clickCount == 2 && evidenceList.selectedValue != null) {
+                    openSelectedTaskEvidence()
+                }
+            }
+        })
         artifactsList.addListSelectionListener {
             selectedArtifact = artifactsList.selectedValue
             artifactsArea.text = renderArtifactDetail(selectedArtifact)
@@ -248,7 +279,16 @@ class AgentsToolWindowPanel(
                 "Tasks",
                 JBSplitter(false, 0.42f).apply {
                     firstComponent = section("Task Backlog", JBScrollPane(taskLinksList))
-                    secondComponent = section("Task Detail", JBScrollPane(tasksArea))
+                    secondComponent = JBTabbedPane().apply {
+                        addTab("Detail", section("Task Detail", JBScrollPane(tasksArea)))
+                        addTab(
+                            "Evidence",
+                            JBSplitter(false, 0.38f).apply {
+                                firstComponent = section("Navigable Evidence", JBScrollPane(evidenceList))
+                                secondComponent = section("Evidence Detail", JBScrollPane(evidenceArea))
+                            },
+                        )
+                    }
                 },
             )
             addTab(
@@ -270,6 +310,10 @@ class AgentsToolWindowPanel(
             add(refreshDetailButton)
             add(setTaskModeButton)
             add(launchTaskButton)
+            add(previewDiffButton)
+            add(applyPatchButton)
+            add(openChangedFileButton)
+            add(openEvidenceButton)
         }
 
         val rightTop = JPanel(BorderLayout()).apply {
@@ -348,6 +392,10 @@ class AgentsToolWindowPanel(
         }
         setTaskModeButton.addActionListener { setSelectedTaskMode() }
         launchTaskButton.addActionListener { launchSelectedTask() }
+        previewDiffButton.addActionListener { previewSelectedTaskDiff() }
+        applyPatchButton.addActionListener { applySelectedTaskPatch() }
+        openChangedFileButton.addActionListener { openSelectedTaskChangedFile() }
+        openEvidenceButton.addActionListener { openSelectedTaskEvidence() }
         refreshApprovalsButton.addActionListener { loadApprovals() }
         approveApprovalButton.addActionListener { resolveSelectedApproval(true) }
         rejectApprovalButton.addActionListener { resolveSelectedApproval(false) }
@@ -366,6 +414,10 @@ class AgentsToolWindowPanel(
             refreshDetailButton.isEnabled = false
             setTaskModeButton.isEnabled = false
             launchTaskButton.isEnabled = false
+            previewDiffButton.isEnabled = false
+            applyPatchButton.isEnabled = false
+            openChangedFileButton.isEnabled = false
+            openEvidenceButton.isEnabled = false
             refreshApprovalsButton.isEnabled = true
             approveApprovalButton.isEnabled = selectedApproval != null
             rejectApprovalButton.isEnabled = selectedApproval != null
@@ -383,6 +435,17 @@ class AgentsToolWindowPanel(
         launchTaskButton.isEnabled = selectedTasks.isNotEmpty() &&
             detail.executionSummary.taskCount > 0 &&
             currentBridgeResolution?.executable == true
+        val singleTask = selectedTasks.size == 1
+        val hasPatch = selectedTaskPatchView != null
+        val hasChangedFile = selectedTaskPatchView?.changedFiles?.isNotEmpty() == true
+        val hasEvidence = evidenceModel.size() > 0
+        previewDiffButton.isEnabled = singleTask && hasPatch
+        applyPatchButton.isEnabled = singleTask &&
+            hasPatch &&
+            currentBridgeResolution?.executable == true &&
+            currentProjectContext?.degraded == false
+        openChangedFileButton.isEnabled = singleTask && hasChangedFile
+        openEvidenceButton.isEnabled = singleTask && hasEvidence
         val hasApproval = selectedApproval != null
         refreshApprovalsButton.isEnabled = true
         approveApprovalButton.isEnabled = hasApproval
@@ -542,9 +605,15 @@ class AgentsToolWindowPanel(
                         initiativeSummaryArea.text = "No initiatives found for:\n${context.workspaceRoot}\n\nThis panel is scoped to the current project only."
                         initiativeReviewsArea.text = ""
                         tasksArea.text = ""
+                        evidenceArea.text = ""
                         taskLinksModel.clear()
+                        evidenceModel.clear()
                         selectedDetail = null
                         selectedTaskLink = null
+                        selectedTaskDetail = null
+                        selectedTaskPatchView = null
+                        selectedTaskEvidence = null
+                        selectedEvidenceLocation = null
                         updateActionState()
                     }
                 }
@@ -611,11 +680,17 @@ class AgentsToolWindowPanel(
                     initiativeSummaryArea.text = error.message ?: error.toString()
                     initiativeReviewsArea.text = ""
                     tasksArea.text = ""
+                    evidenceArea.text = ""
                     artifactsArea.text = ""
                     taskLinksModel.clear()
+                    evidenceModel.clear()
                     artifactsModel.clear()
                     selectedDetail = null
                     selectedTaskLink = null
+                    selectedTaskDetail = null
+                    selectedTaskPatchView = null
+                    selectedTaskEvidence = null
+                    selectedEvidenceLocation = null
                     selectedArtifact = null
                     updateActionState()
                 }
@@ -688,6 +763,71 @@ class AgentsToolWindowPanel(
         }
         runInitiativeMutation("Task launch queued") { client ->
             client.launchInitiativeTasks(detail.initiative.id, selectedTasks.map { it.taskId })
+        }
+    }
+
+    private fun previewSelectedTaskDiff() {
+        val patchView = selectedTaskPatchView ?: return
+        val context = currentProjectContext ?: return
+        TaskExecutionSupport.previewPatch(project, context.workspaceRoot, patchView)
+    }
+
+    private fun applySelectedTaskPatch() {
+        val context = currentProjectContext ?: return
+        val patchView = selectedTaskPatchView ?: return
+        if (context.degraded || context.repositoryUrl.isNullOrBlank()) {
+            notify("Patch blocked", "The project is in degraded mode or missing repository_url.", NotificationType.WARNING)
+            return
+        }
+        val resolution = currentBridgeResolution
+        val blockReason = if (resolution == null) {
+            "No bridge state is loaded for this project."
+        } else {
+            resolution.executionBlockReason()
+        }
+        if (blockReason != null) {
+            notify("Patch blocked", blockReason, NotificationType.WARNING)
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                TaskExecutionSupport.applyPatch(context.workspaceRoot, patchView)
+            }.onSuccess { result ->
+                SwingUtilities.invokeLater {
+                    notify("Patch applied", patchView.summary ?: "Patch applied successfully.", NotificationType.INFORMATION)
+                    TaskExecutionSupport.openChangedFile(project, context.workspaceRoot, result.changedFiles)
+                    loadStatus()
+                    selectedInitiative?.let { loadInitiativeDetail(it.id) }
+                    selectedTaskLink?.let { loadTaskExecutionDetail(it.taskId) }
+                }
+            }.onFailure { error ->
+                SwingUtilities.invokeLater {
+                    notify("Patch apply failed", error.message ?: error.toString(), NotificationType.ERROR)
+                    tasksArea.text = buildString {
+                        appendLine(tasksArea.text)
+                        appendLine()
+                        appendLine("Patch apply error")
+                        appendLine("=================")
+                        appendLine(error.message ?: error.toString())
+                    }.trim()
+                }
+            }
+        }
+    }
+
+    private fun openSelectedTaskChangedFile() {
+        val context = currentProjectContext ?: return
+        val patchView = selectedTaskPatchView ?: return
+        if (!TaskExecutionSupport.openChangedFile(project, context.workspaceRoot, patchView.changedFiles)) {
+            notify("Open changed file failed", "No changed file could be opened from this task.", NotificationType.WARNING)
+        }
+    }
+
+    private fun openSelectedTaskEvidence() {
+        val context = currentProjectContext ?: return
+        val target = selectedEvidenceLocation ?: evidenceModel.getElementAtOrNull(0) ?: return
+        if (!TaskExecutionSupport.openAtLocation(project, context.workspaceRoot, target)) {
+            notify("Open evidence failed", "The referenced file or line could not be resolved in this workspace.", NotificationType.WARNING)
         }
     }
 
@@ -796,6 +936,66 @@ class AgentsToolWindowPanel(
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
                     notify("Initiative action failed", error.message ?: error.toString(), NotificationType.ERROR)
+                }
+            }
+        }
+    }
+
+    private fun handleTaskSelectionChanged() {
+        val selectedTasks = taskLinksList.selectedValuesList
+        if (selectedTasks.size == 1) {
+            loadTaskExecutionDetail(selectedTasks.first().taskId)
+            return
+        }
+        selectedTaskDetail = null
+        selectedTaskPatchView = null
+        selectedTaskEvidence = null
+        selectedEvidenceLocation = null
+        evidenceModel.clear()
+        tasksArea.text = renderTaskSelection(selectedTasks)
+        evidenceArea.text = if (selectedTasks.isEmpty()) {
+            "Select a task to inspect its evidence."
+        } else {
+            "Evidence is only loaded for a single selected task."
+        }
+    }
+
+    private fun loadTaskExecutionDetail(taskId: String) {
+        val settings = settings()
+        val apiKey = settings.getApiKey()
+        if (apiKey.isBlank()) {
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
+                val task = client.getTask(taskId)
+                val sources = client.getTaskSources(taskId)
+                val patch = TaskExecutionSupport.resolvePatch(task, sources.items)
+                val evidence = TaskExecutionSupport.extractEvidence(task, sources.items)
+                TaskExecutionBundle(task, sources.items, patch, evidence)
+            }.onSuccess { bundle ->
+                SwingUtilities.invokeLater {
+                    selectedTaskDetail = bundle.task
+                    selectedTaskPatchView = bundle.patchView
+                    selectedTaskEvidence = bundle.evidence
+                    evidenceModel.clear()
+                    bundle.evidence.locations.forEach(evidenceModel::addElement)
+                    selectedEvidenceLocation = null
+                    tasksArea.text = renderTaskDetail(bundle.task, bundle.patchView, bundle.evidence)
+                    evidenceArea.text = renderEvidenceDetail(null, bundle.evidence)
+                    updateActionState()
+                }
+            }.onFailure { error ->
+                SwingUtilities.invokeLater {
+                    selectedTaskDetail = null
+                    selectedTaskPatchView = null
+                    selectedTaskEvidence = null
+                    selectedEvidenceLocation = null
+                    evidenceModel.clear()
+                    tasksArea.text = "Failed to load task detail:\n${error.message ?: error}"
+                    evidenceArea.text = "Failed to load evidence."
+                    updateActionState()
                 }
             }
         }
@@ -1009,6 +1209,88 @@ class AgentsToolWindowPanel(
         }.trim()
     }
 
+    private fun renderTaskDetail(
+        task: TaskDetailRecord,
+        patchView: TaskResultPatchView?,
+        evidence: EvidenceExtractionResult,
+    ): String = buildString {
+        appendLine("Task: ${task.id}")
+        appendLine("State: ${task.state}")
+        appendLine("Updated: ${task.updatedAt}")
+        appendLine("Workspace path: ${task.workspacePath ?: "-"}")
+        appendLine()
+        appendLine("Patch")
+        appendLine("=====")
+        if (patchView == null) {
+            appendLine("No applicable patch found.")
+        } else {
+            appendLine("Source: ${patchView.sourceType}")
+            appendLine("Changed files: ${patchView.changedFiles.size}")
+            patchView.summary?.let { appendLine("Summary: $it") }
+            appendLine()
+            appendLine(patchView.changedFiles.joinToString("\n").ifBlank { "(none)" })
+        }
+        appendLine()
+        appendLine("Evidence")
+        appendLine("========")
+        appendLine("Navigable findings: ${evidence.locations.size}")
+        appendLine("Raw artifacts without coordinates: ${evidence.rawArtifacts.size}")
+        if (evidence.errors.isNotEmpty()) {
+            appendLine("Parse errors: ${evidence.errors.size}")
+            evidence.errors.forEach { appendLine("- $it") }
+        }
+        task.errorMessage?.takeIf { it.isNotBlank() }?.let {
+            appendLine()
+            appendLine("Task error")
+            appendLine("==========")
+            appendLine(it)
+        }
+    }.trim()
+
+    private fun renderEvidenceDetail(
+        selected: EvidenceLocation?,
+        evidence: EvidenceExtractionResult?,
+    ): String {
+        if (selected != null) {
+            return buildString {
+                appendLine("File: ${selected.file}")
+                appendLine("Line: ${selected.line}")
+                selected.column?.let { appendLine("Column: $it") }
+                appendLine("Source: ${selected.sourceType}")
+                appendLine("Severity: ${selected.severity ?: "-"}")
+                appendLine()
+                appendLine(selected.message ?: "No message.")
+            }.trim()
+        }
+        if (evidence == null) {
+            return "Select a single task to inspect its evidence."
+        }
+        return buildString {
+            appendLine("Navigable findings: ${evidence.locations.size}")
+            appendLine("Raw artifacts: ${evidence.rawArtifacts.size}")
+            if (evidence.errors.isNotEmpty()) {
+                appendLine()
+                appendLine("Parse errors")
+                appendLine("============")
+                evidence.errors.forEach { appendLine("- $it") }
+            }
+            if (evidence.locations.isNotEmpty()) {
+                appendLine()
+                appendLine("Double click a finding or use 'Open First Evidence'.")
+            }
+            if (evidence.rawArtifacts.isNotEmpty()) {
+                appendLine()
+                appendLine("Raw artifact preview")
+                appendLine("====================")
+                evidence.rawArtifacts.take(2).forEach { artifact ->
+                    appendLine("[${artifact.artifactType}] ${artifact.title ?: artifact.id}")
+                    appendLine((artifact.contentText ?: "(no textual content)").take(800))
+                    appendLine()
+                }
+            }
+        }.trim()
+    }
+
     private fun renderArtifactDetail(artifact: InitiativeArtifactRecord?): String {
         if (artifact == null) {
             return if (artifactsModel.isEmpty) {
@@ -1104,6 +1386,13 @@ class AgentsToolWindowPanel(
 
     private fun settings(): PluginSettingsService =
         ApplicationManager.getApplication().getService(PluginSettingsService::class.java)
+
+    private data class TaskExecutionBundle(
+        val task: TaskDetailRecord,
+        val sources: List<InitiativeArtifactRecord>,
+        val patchView: TaskResultPatchView?,
+        val evidence: EvidenceExtractionResult,
+    )
 }
 
 private class InitiativeCellRenderer : DefaultListCellRenderer() {
@@ -1174,6 +1463,32 @@ private class ApprovalCellRenderer : DefaultListCellRenderer() {
     private fun escape(value: String): String =
         value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 }
+
+private class EvidenceLocationCellRenderer : DefaultListCellRenderer() {
+    override fun getListCellRendererComponent(
+        list: JList<*>,
+        value: Any?,
+        index: Int,
+        isSelected: Boolean,
+        cellHasFocus: Boolean,
+    ) = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus).also {
+        if (value is EvidenceLocation && it is JLabel) {
+            it.border = JBUI.Borders.empty(8)
+            it.text = """
+                <html>
+                <b>${escape(value.file)}:${value.line}</b><br/>
+                <span style='color:#6B7280'>${escape(value.severity ?: value.sourceType)}${value.message?.let { msg -> " / ${escape(msg)}" } ?: ""}</span>
+                </html>
+            """.trimIndent()
+        }
+    }
+
+    private fun escape(value: String): String =
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+}
+
+private fun <T> DefaultListModel<T>.getElementAtOrNull(index: Int): T? =
+    if (index in 0 until size()) getElementAt(index) else null
 
 private class InitiativeArtifactCellRenderer : DefaultListCellRenderer() {
     override fun getListCellRendererComponent(

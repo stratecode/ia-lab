@@ -215,8 +215,12 @@ Required:
 
 - open files from reviewer or artifact references
 - show diff
-- apply patch with confirmation
+- apply patch with validation and clear user feedback
 - navigate from evidence to code
+
+Status:
+
+- implemented
 
 ### Phase 5
 
