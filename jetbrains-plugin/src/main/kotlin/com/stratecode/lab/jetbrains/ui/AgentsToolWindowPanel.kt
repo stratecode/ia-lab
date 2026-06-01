@@ -11,11 +11,14 @@ import com.intellij.ui.components.JBTabbedPane
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
+import com.stratecode.lab.jetbrains.bridge.BridgeResolution
 import com.stratecode.lab.jetbrains.bridge.BridgeResolver
+import com.stratecode.lab.jetbrains.bridge.executionBlockReason
 import com.stratecode.lab.jetbrains.client.InitiativeDetailResponseRecord
 import com.stratecode.lab.jetbrains.client.InitiativeSummary
 import com.stratecode.lab.jetbrains.client.InitiativeArtifactRecord
 import com.stratecode.lab.jetbrains.client.InitiativeTaskLinkRecord
+import com.stratecode.lab.jetbrains.client.LocalBridgeResponse
 import com.stratecode.lab.jetbrains.client.OrchestratorClient
 import com.stratecode.lab.jetbrains.client.ApprovalRecord
 import com.stratecode.lab.jetbrains.project.ProjectContext
@@ -58,6 +61,8 @@ class AgentsToolWindowPanel(
     private val scopeSummaryLabel = htmlLabel("Initiatives will be scoped to the current workspace.")
 
     private val capabilitiesArea = infoArea(12)
+    private val bridgeSummaryArea = infoArea(14)
+    private val bridgeCandidatesArea = infoArea(12)
     private val initiativeSummaryArea = infoArea(15)
     private val initiativeReviewsArea = infoArea(8)
     private val tasksArea = infoArea(14)
@@ -107,12 +112,18 @@ class AgentsToolWindowPanel(
     private val refreshApprovalsButton = JButton("Refresh Approvals")
     private val approveApprovalButton = JButton("Approve Approval")
     private val rejectApprovalButton = JButton("Reject Approval")
+    private val refreshBridgeButton = JButton("Refresh Bridge")
+    private val registerBridgeButton = JButton("Register Bridge")
+    private val bridgeSmokeButton = JButton("Bridge Smoke")
 
     private var selectedInitiative: InitiativeSummary? = null
     private var selectedDetail: InitiativeDetailResponseRecord? = null
     private var selectedTaskLink: InitiativeTaskLinkRecord? = null
     private var selectedArtifact: InitiativeArtifactRecord? = null
     private var selectedApproval: ApprovalRecord? = null
+    private var currentProjectContext: ProjectContext? = null
+    private var currentBridgeResolution: BridgeResolution? = null
+    private var currentBridges: List<LocalBridgeResponse> = emptyList()
 
     init {
         border = JBUI.Borders.empty(12)
@@ -160,6 +171,7 @@ class AgentsToolWindowPanel(
             addTab("Overview", buildOverviewTab())
             addTab("Initiatives", buildInitiativesTab())
             addTab("Approvals", buildApprovalsTab())
+            addTab("Bridge", buildBridgeTab())
         }
 
     private fun buildOverviewTab(): JComponent {
@@ -308,6 +320,24 @@ class AgentsToolWindowPanel(
         }
     }
 
+    private fun buildBridgeTab(): JComponent {
+        val controls = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+            isOpaque = false
+            add(refreshBridgeButton)
+            add(registerBridgeButton)
+            add(bridgeSmokeButton)
+        }
+        val splitter = JBSplitter(false, 0.55f).apply {
+            firstComponent = section("Bridge Summary", JBScrollPane(bridgeSummaryArea))
+            secondComponent = section("Known Bridges", JBScrollPane(bridgeCandidatesArea))
+        }
+        return JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.emptyTop(12)
+            add(splitter, BorderLayout.CENTER)
+            add(controls, BorderLayout.SOUTH)
+        }
+    }
+
     private fun bindActions() {
         advanceButton.addActionListener { advanceSelectedInitiative() }
         approveButton.addActionListener { resolveSelectedInitiative(true) }
@@ -321,6 +351,9 @@ class AgentsToolWindowPanel(
         refreshApprovalsButton.addActionListener { loadApprovals() }
         approveApprovalButton.addActionListener { resolveSelectedApproval(true) }
         rejectApprovalButton.addActionListener { resolveSelectedApproval(false) }
+        refreshBridgeButton.addActionListener { loadStatus() }
+        registerBridgeButton.addActionListener { registerBridge() }
+        bridgeSmokeButton.addActionListener { runBridgeSmoke() }
     }
 
     private fun updateActionState() {
@@ -347,7 +380,9 @@ class AgentsToolWindowPanel(
         generateTasksButton.isEnabled = phase == "plan" && status == "plan_draft"
         val selectedTasks = taskLinksList.selectedValuesList
         setTaskModeButton.isEnabled = selectedTasks.size == 1
-        launchTaskButton.isEnabled = selectedTasks.isNotEmpty() && detail.executionSummary.taskCount > 0
+        launchTaskButton.isEnabled = selectedTasks.isNotEmpty() &&
+            detail.executionSummary.taskCount > 0 &&
+            currentBridgeResolution?.executable == true
         val hasApproval = selectedApproval != null
         refreshApprovalsButton.isEnabled = true
         approveApprovalButton.isEnabled = hasApproval
@@ -358,12 +393,18 @@ class AgentsToolWindowPanel(
         val settings = settings()
         val apiKey = settings.getApiKey()
         val context = ProjectContextResolver.resolve(project)
+        currentProjectContext = context
         updateProjectSummary(context)
 
         if (apiKey.isBlank()) {
             backendBadge.text = "Backend  missing key"
             setBadgeColor(backendBadge, Color(0x8B5E3C))
             capabilitiesArea.text = "Configure the API key in Settings > StrateCode Agents."
+            bridgeSummaryArea.text = "Configure the API key first. No bridge checks can run without it."
+            bridgeCandidatesArea.text = ""
+            currentBridgeResolution = null
+            currentBridges = emptyList()
+            updateActionState()
             return
         }
 
@@ -377,24 +418,34 @@ class AgentsToolWindowPanel(
                 val projectCaps = context.repositoryUrl?.let { client.getProjectCapabilities(it, "needs_repo_static_analysis", "reviewer") }
                 StrateCodeProjectStore.write(context, bridgeName = settings.currentState.bridgeName)
                 SwingUtilities.invokeLater {
+                    currentBridgeResolution = bridge
+                    currentBridges = bridges.items
                     backendBadge.text = "Backend  ${if (ready.ready) "ready" else "not ready"}"
                     setBadgeColor(backendBadge, if (ready.ready) Color(0x1F7A4C) else Color(0x8B5E3C))
                     bridgeBadge.text = "Bridge  ${bridge.status}"
                     setBadgeColor(bridgeBadge, when (bridge.status) {
-                        "online", "idle", "busy", "ready" -> Color(0x1F7A4C)
+                        "online", "idle", "busy", "ready", "active" -> if (bridge.executable) Color(0x1F7A4C) else Color(0x8B5E3C)
                         "missing" -> Color(0x8B5E3C)
                         else -> Color(0x5B6B7A)
                     })
                     metadataSummaryLabel.text = metadataSummaryHtml(ProjectContextResolver.resolve(project))
                     capabilitiesArea.text = buildCapabilitiesText(projectCaps?.mode, capabilities.capabilities, projectCaps?.capabilities.orEmpty())
+                    bridgeSummaryArea.text = renderBridgeSummary(context, bridge)
+                    bridgeCandidatesArea.text = renderBridgeCandidates(context.workspaceRoot, bridges.items)
+                    updateActionState()
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
+                    currentBridgeResolution = null
+                    currentBridges = emptyList()
                     backendBadge.text = "Backend  error"
                     setBadgeColor(backendBadge, Color(0x8B2E2E))
                     bridgeBadge.text = "Bridge  unresolved"
                     setBadgeColor(bridgeBadge, Color(0x8B5E3C))
                     capabilitiesArea.text = error.message ?: error.toString()
+                    bridgeSummaryArea.text = error.message ?: error.toString()
+                    bridgeCandidatesArea.text = ""
+                    updateActionState()
                     notify("Status refresh failed", error.message ?: error.toString(), NotificationType.ERROR)
                 }
             }
@@ -624,8 +675,39 @@ class AgentsToolWindowPanel(
         if (selectedTasks.isEmpty()) {
             return
         }
+        val resolution = currentBridgeResolution
+        val blockReason = if (resolution == null) {
+            "No bridge state is loaded for this project."
+        } else {
+            resolution.executionBlockReason()
+        }
+        if (blockReason != null) {
+            notify("Launch blocked", blockReason, NotificationType.WARNING)
+            loadStatus()
+            return
+        }
         runInitiativeMutation("Task launch queued") { client ->
             client.launchInitiativeTasks(detail.initiative.id, selectedTasks.map { it.taskId })
+        }
+    }
+
+    private fun runBridgeSmoke() {
+        val context = ProjectContextResolver.resolve(project)
+        val resolution = currentBridgeResolution
+        if (resolution == null) {
+            loadStatus()
+            notify("Bridge smoke inconclusive", "Bridge state was not loaded yet. Refreshed instead.", NotificationType.WARNING)
+            return
+        }
+        val problem = resolution.executionBlockReason()
+        if (problem == null) {
+            notify(
+                "Bridge smoke passed",
+                "Bridge ${resolution.matched?.name ?: "-"} is executable for ${context.workspaceRoot}.",
+                NotificationType.INFORMATION,
+            )
+        } else {
+            notify("Bridge smoke failed", problem, NotificationType.WARNING)
         }
     }
 
@@ -734,7 +816,8 @@ class AgentsToolWindowPanel(
         scopeSummaryLabel.text = """
             <html>
             This plugin scopes initiative visibility to the current workspace root.<br/>
-            Only initiatives with <code>workspace_root=${escape(context.workspaceRoot)}</code> are listed.
+            Only initiatives with <code>workspace_root=${escape(context.workspaceRoot)}</code> are listed.<br/>
+            Launch stays blocked if the matched bridge is stale or points elsewhere.
             </html>
         """.trimIndent()
     }
@@ -780,6 +863,57 @@ class AgentsToolWindowPanel(
             }
         }
         return builder.toString()
+    }
+
+    private fun renderBridgeSummary(context: ProjectContext, resolution: BridgeResolution): String =
+        buildString {
+            appendLine("Configured bridge name: ${settings().currentState.bridgeName}")
+            appendLine("Workspace root: ${context.workspaceRoot}")
+            appendLine("Repository: ${context.repositoryUrl ?: "degraded"}")
+            appendLine()
+            appendLine("Resolution")
+            appendLine("==========")
+            appendLine("Status: ${resolution.status}")
+            appendLine("Consistency: ${resolution.consistency}")
+            appendLine("Executable: ${resolution.executable}")
+            appendLine("Detail: ${resolution.detail}")
+            appendLine("Heartbeat age: ${resolution.heartbeatAgeSeconds?.let { "${it}s" } ?: "<never>"}")
+            appendLine("Stale: ${resolution.stale}")
+            appendLine()
+            if (resolution.matched != null) {
+                appendLine("Matched bridge")
+                appendLine("==============")
+                appendLine("ID: ${resolution.matched.id}")
+                appendLine("Name: ${resolution.matched.name}")
+                appendLine("Host: ${resolution.matched.hostname}")
+                appendLine("Workspace: ${resolution.matched.workspaceRoot}")
+                appendLine("Last heartbeat: ${resolution.matched.lastHeartbeat ?: "-"}")
+                appendLine()
+            }
+            resolution.executionBlockReason()?.let {
+                appendLine("Execution block")
+                appendLine("===============")
+                appendLine(it)
+            }
+        }.trim()
+
+    private fun renderBridgeCandidates(workspaceRoot: String, bridges: List<LocalBridgeResponse>): String {
+        if (bridges.isEmpty()) {
+            return "No bridges are registered."
+        }
+        return buildString {
+            bridges.sortedWith(compareBy<LocalBridgeResponse>({ it.workspaceRoot != workspaceRoot }, { it.name })).forEach { bridge ->
+                val marker = when {
+                    bridge.workspaceRoot == workspaceRoot -> "*"
+                    else -> "-"
+                }
+                appendLine("$marker ${bridge.name} [${bridge.status}]")
+                appendLine("  workspace=${bridge.workspaceRoot}")
+                appendLine("  host=${bridge.hostname}")
+                appendLine("  heartbeat=${bridge.lastHeartbeat ?: "<never>"}")
+                appendLine()
+            }
+        }.trim()
     }
 
     private fun renderInitiativeSummary(detail: InitiativeDetailResponseRecord): String {

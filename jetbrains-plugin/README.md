@@ -9,6 +9,8 @@ Current scope:
 - secure orchestrator settings
 - orchestrator health and capability status
 - bridge matching and registration
+- bridge tab with heartbeat staleness and execution gating
+- bridge smoke validation from the IDE
 - project-scoped capability visibility
 - recent initiative listing and detail fetch, scoped to the current `workspace_root`
 - initiative creation from the tool window or editor selection

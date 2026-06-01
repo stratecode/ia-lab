@@ -16,6 +16,8 @@ Implemented now:
 - `Agents` tool window with:
   - backend readiness
   - bridge resolution
+  - bridge tab with staleness and executable/non-executable state
+  - bridge smoke validation
   - capability visibility
   - project-scoped capability visibility
   - initiative creation
@@ -34,12 +36,9 @@ Implemented now:
 
 Not implemented yet:
 
-- approvals UI
-- phase advance/reject controls
-- task generation and selective launch controls
-- artifact browser
 - diff preview and governed patch application
-- bridge smoke action from the IDE
+- navigation from reviewer evidence to file/line
+- bridge task/daemon introspection beyond heartbeat-level health
 
 ## Product intent
 
@@ -203,6 +202,10 @@ Required:
 - register bridge
 - show bridge status and staleness
 - enforce bridge/project consistency before launch
+
+Status:
+
+- implemented
 
 ### Phase 4
 
