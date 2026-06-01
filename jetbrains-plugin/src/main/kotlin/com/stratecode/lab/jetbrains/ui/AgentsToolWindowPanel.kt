@@ -686,16 +686,35 @@ class AgentsToolWindowPanel(
         val client = buildClient(settings.currentState.baseUrl, apiKey)
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                val ready = client.checkReady()
-                val capabilities = client.listCapabilities(context.repositoryUrl, "needs_external_evidence", "researcher", listOf("evidence", "docs"))
-                val bridges = client.listBridges()
-                val bridge = BridgeResolver.resolve(bridges.items, context.workspaceRoot, settings.currentState.bridgeName)
-                val projectCaps = context.repositoryUrl?.let { client.getProjectCapabilities(it, "needs_repo_static_analysis", "reviewer") }
+                val warnings = mutableListOf<Pair<String, String>>()
+                val ready = runCatching { client.checkReady() }
+                    .onFailure { warnings += "Ready check degraded" to (it.message ?: it.toString()) }
+                    .getOrNull()
+                val bridges = runCatching { client.listBridges() }
+                    .onFailure { warnings += "Bridge list degraded" to (it.message ?: it.toString()) }
+                    .getOrNull()
+                val capabilities = runCatching {
+                    client.listCapabilities(context.repositoryUrl, "needs_external_evidence", "researcher", listOf("evidence", "docs"))
+                }.onFailure {
+                    warnings += "Capabilities degraded" to (it.message ?: it.toString())
+                }.getOrNull()
+                val projectCaps = context.repositoryUrl?.let {
+                    runCatching { client.getProjectCapabilities(it, "needs_repo_static_analysis", "reviewer") }
+                        .onFailure { error -> warnings += "Project capabilities degraded" to (error.message ?: error.toString()) }
+                        .getOrNull()
+                }
+                val bridge = bridges?.let { BridgeResolver.resolve(it.items, context.workspaceRoot, settings.currentState.bridgeName) }
                 StatusBundle(
-                    backendReady = ready.ready,
-                    bridges = bridges.items,
+                    backendReady = ready?.ready,
+                    bridges = bridges?.items.orEmpty(),
                     bridgeResolution = bridge,
-                    capabilitiesText = buildCapabilitiesText(projectCaps?.mode, capabilities.capabilities, projectCaps?.capabilities.orEmpty()),
+                    capabilitiesText = buildCapabilitiesText(
+                        projectMode = projectCaps?.mode,
+                        candidates = capabilities?.capabilities.orEmpty(),
+                        projectCapabilities = projectCaps?.capabilities.orEmpty(),
+                        warnings = warnings,
+                    ),
+                    warnings = warnings,
                 )
             }.onSuccess { bundle ->
                 StrateCodeProjectStore.write(context, bridgeName = settings.currentState.bridgeName)
@@ -705,9 +724,12 @@ class AgentsToolWindowPanel(
                     currentBridges = bundle.bridges
                     currentBridgeResolution = bundle.bridgeResolution
                     capabilitiesArea.text = bundle.capabilitiesText
-                    bridgeSummaryArea.text = renderBridgeSummary(context, bundle.bridgeResolution)
+                    bridgeSummaryArea.text = renderBridgeSummary(context, bundle.bridgeResolution, bundle.warnings)
                     bridgeCandidatesArea.text = renderBridgeCandidates(context.workspaceRoot, bundle.bridges)
-                    maybeAutoRegisterBridge(context, bundle.bridgeResolution)
+                    bundle.warnings.forEach { (title, message) ->
+                        recordDiagnostic("warning", title, message)
+                    }
+                    bundle.bridgeResolution?.let { maybeAutoRegisterBridge(context, it) }
                     refreshHeader()
                     updateActionState()
                 }
@@ -800,11 +822,7 @@ class AgentsToolWindowPanel(
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
                 val client = buildClient(settings.currentState.baseUrl, apiKey)
-                InitiativeDetailBundle(
-                    detail = client.getInitiativeDetail(initiativeId),
-                    tasks = client.listInitiativeTasks(initiativeId).items,
-                    artifacts = client.listInitiativeArtifacts(initiativeId).items,
-                )
+                fetchInitiativeDetailBundle(client, initiativeId)
             }.onSuccess { bundle ->
                 val context = ProjectContextResolver.resolve(project)
                 StrateCodeProjectStore.rememberInitiative(
@@ -1248,6 +1266,11 @@ class AgentsToolWindowPanel(
                     createInitiativeButton.isEnabled = true
                     recordDiagnostic("info", "Goal created", "${it.title} (${it.id})")
                     notify("Goal created", "${it.title} (${it.id})", NotificationType.INFORMATION)
+                    currentInitiatives = listOf(it) + currentInitiatives.filterNot { existing -> existing.id == it.id }
+                    selectedInitiative = it
+                    refreshInitiativeSelector(it.id)
+                    clearPlanState("Goal created.\n\nLoading initiative detail from the server…")
+                    loadInitiativeDetail(it.id)
                     loadStatus()
                     loadInitiatives(selectInitiativeId = it.id)
                     loadApprovals()
@@ -1777,7 +1800,11 @@ class AgentsToolWindowPanel(
         }.trim()
     }
 
-    private fun renderBridgeSummary(context: ProjectContext, resolution: BridgeResolution): String =
+    private fun renderBridgeSummary(
+        context: ProjectContext,
+        resolution: BridgeResolution?,
+        warnings: List<Pair<String, String>> = emptyList(),
+    ): String =
         buildString {
             appendLine("Configured bridge name: ${settings().currentState.bridgeName}")
             appendLine("Workspace root: ${context.workspaceRoot}")
@@ -1785,14 +1812,18 @@ class AgentsToolWindowPanel(
             appendLine()
             appendLine("Resolution")
             appendLine("==========")
-            appendLine("Status: ${resolution.status}")
-            appendLine("Consistency: ${resolution.consistency}")
-            appendLine("Executable: ${resolution.executable}")
-            appendLine("Detail: ${resolution.detail}")
-            appendLine("Heartbeat age: ${resolution.heartbeatAgeSeconds?.let { "${it}s" } ?: "<never>"}")
-            appendLine("Stale: ${resolution.stale}")
-            appendLine()
-            resolution.matched?.let {
+            if (resolution == null) {
+                appendLine("Bridge state unavailable because bridge discovery failed.")
+            } else {
+                appendLine("Status: ${resolution.status}")
+                appendLine("Consistency: ${resolution.consistency}")
+                appendLine("Executable: ${resolution.executable}")
+                appendLine("Detail: ${resolution.detail}")
+                appendLine("Heartbeat age: ${resolution.heartbeatAgeSeconds?.let { "${it}s" } ?: "<never>"}")
+                appendLine("Stale: ${resolution.stale}")
+                appendLine()
+            }
+            resolution?.matched?.let {
                 appendLine("Matched bridge")
                 appendLine("==============")
                 appendLine("ID: ${it.id}")
@@ -1801,11 +1832,19 @@ class AgentsToolWindowPanel(
                 appendLine("Workspace: ${it.workspaceRoot}")
                 appendLine("Last heartbeat: ${it.lastHeartbeat ?: "-"}")
             }
-            resolution.executionBlockReason()?.let {
+            resolution?.executionBlockReason()?.let {
                 appendLine()
                 appendLine("Execution block")
                 appendLine("===============")
                 appendLine(it)
+            }
+            if (warnings.isNotEmpty()) {
+                appendLine()
+                appendLine("Degraded checks")
+                appendLine("===============")
+                warnings.forEach { (title, message) ->
+                    appendLine("$title: $message")
+                }
             }
         }.trim()
 
@@ -1850,9 +1889,10 @@ class AgentsToolWindowPanel(
     }.trim()
 
     private fun buildCapabilitiesText(
-        mode: String?,
+        projectMode: String?,
         candidates: List<com.stratecode.lab.jetbrains.client.CapabilityCandidate>,
         projectCapabilities: List<com.stratecode.lab.jetbrains.client.CapabilityCandidate>,
+        warnings: List<Pair<String, String>> = emptyList(),
     ): String = buildString {
         appendLine("Discovery candidates")
         appendLine("===================")
@@ -1867,7 +1907,7 @@ class AgentsToolWindowPanel(
         appendLine()
         appendLine("Project effective policy")
         appendLine("========================")
-        appendLine("mode: ${mode ?: "n/a"}")
+        appendLine("mode: ${projectMode ?: "n/a"}")
         if (projectCapabilities.isEmpty()) {
             appendLine("No project-scoped reviewer capabilities returned.")
         } else {
@@ -1876,7 +1916,40 @@ class AgentsToolWindowPanel(
                 appendLine("  tags: ${it.capabilityTags.joinToString(", ")}")
             }
         }
+        if (warnings.isNotEmpty()) {
+            appendLine()
+            appendLine("Degraded checks")
+            appendLine("===============")
+            warnings.forEach { (title, message) ->
+                appendLine("• $title")
+                appendLine("  $message")
+            }
+        }
     }.trim()
+
+    private fun fetchInitiativeDetailBundle(
+        client: OrchestratorClient,
+        initiativeId: String,
+        attempts: Int = 4,
+        delayMillis: Long = 500,
+    ): InitiativeDetailBundle {
+        var lastError: Throwable? = null
+        repeat(attempts) { index ->
+            try {
+                return InitiativeDetailBundle(
+                    detail = client.getInitiativeDetail(initiativeId),
+                    tasks = client.listInitiativeTasks(initiativeId).items,
+                    artifacts = client.listInitiativeArtifacts(initiativeId).items,
+                )
+            } catch (error: Throwable) {
+                lastError = error
+                if (index < attempts - 1) {
+                    Thread.sleep(delayMillis)
+                }
+            }
+        }
+        throw (lastError ?: IllegalStateException("Initiative detail remained unavailable for $initiativeId"))
+    }
 
     private fun buildBadgesText(hasDiff: Boolean, hasEvidence: Boolean, hasApproval: Boolean, hasArtifacts: Boolean): String =
         buildBadgeLine(
@@ -2097,10 +2170,11 @@ class AgentsToolWindowPanel(
     }
 
     private data class StatusBundle(
-        val backendReady: Boolean,
+        val backendReady: Boolean?,
         val bridges: List<LocalBridgeResponse>,
-        val bridgeResolution: BridgeResolution,
+        val bridgeResolution: BridgeResolution?,
         val capabilitiesText: String,
+        val warnings: List<Pair<String, String>> = emptyList(),
     )
 
     private data class InitiativeDetailBundle(

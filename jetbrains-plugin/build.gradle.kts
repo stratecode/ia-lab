@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.2.4"
+version = "0.2.5"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Added persistent workspace diagnostics, copyable diagnostics export, and richer bridge/network troubleshooting signals.
+        Improved goal creation feedback, added retryable initiative detail loading, and made bridge status resilient to partial backend failures.
         """.trimIndent()
     )
 }
