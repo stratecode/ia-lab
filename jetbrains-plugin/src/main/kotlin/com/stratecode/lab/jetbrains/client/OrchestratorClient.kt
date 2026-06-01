@@ -7,6 +7,8 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
 import java.net.InetAddress
 import java.net.URI
 import java.net.URLEncoder
@@ -387,8 +389,13 @@ class OrchestratorClient(
         return json.decodeFromString(created.toString())
     }
 
-    fun advanceInitiative(initiativeId: String, feedback: String = ""): InitiativeRecord =
-        post("/initiatives/$initiativeId/advance", InitiativeActionRequest(feedback = feedback))
+    fun advanceInitiative(initiativeId: String, feedback: String = ""): InitiativeRecord {
+        val response = post<InitiativeActionRequest, JsonElement>(
+            "/initiatives/$initiativeId/advance",
+            InitiativeActionRequest(feedback = feedback),
+        )
+        return decodeInitiativeRecord(response)
+    }
 
     fun approveInitiativePhase(initiativeId: String, phase: String, operator: String, feedback: String = ""): InitiativeRecord =
         post(
@@ -484,6 +491,15 @@ class OrchestratorClient(
             error("HTTP ${response.statusCode()}: ${response.body()}")
         }
         return response.body()
+    }
+
+    private fun decodeInitiativeRecord(payload: JsonElement): InitiativeRecord {
+        if (payload is JsonObject) {
+            payload["initiative"]?.let { nested ->
+                return json.decodeFromJsonElement(nested)
+            }
+        }
+        return json.decodeFromJsonElement(payload)
     }
 
     private fun buildUri(path: String, query: Map<String, String> = emptyMap()): URI {

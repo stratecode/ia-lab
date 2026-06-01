@@ -1,9 +1,12 @@
 package com.stratecode.lab.jetbrains.client
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class OrchestratorClientParsingTest {
     private val json = Json {
@@ -54,5 +57,37 @@ class OrchestratorClientParsingTest {
 
         assertEquals(1, detail.histories.size)
         assertNull(detail.histories.first().items)
+    }
+
+    @Test
+    fun `advance response wrapper contains initiative record`() {
+        val raw = """
+            {
+              "initiative": {
+                "id": "init-1",
+                "title": "Test",
+                "workspace_root": "/repo",
+                "goal": "goal",
+                "status": "requirements_review",
+                "current_phase": "requirements",
+                "created_by": "tester",
+                "execution_mode": "selective",
+                "created_at": "2026-06-01T10:00:00Z",
+                "updated_at": "2026-06-01T10:00:05Z"
+              },
+              "artifacts": {
+                "markdown_id": "artifact-md",
+                "json_id": "artifact-json"
+              }
+            }
+        """.trimIndent()
+
+        val element = json.parseToJsonElement(raw)
+        val nested = element.jsonObject["initiative"]
+
+        assertTrue(nested != null)
+        val record: InitiativeRecord = json.decodeFromJsonElement(nested)
+        assertEquals("init-1", record.id)
+        assertEquals("requirements_review", record.status)
     }
 }
