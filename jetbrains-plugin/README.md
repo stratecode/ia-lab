@@ -8,11 +8,11 @@ Current scope:
 - `.stratecode/project.json` local metadata for bridge and initiative context
 - local-only initiative registry from `.stratecode/project.json`
 - secure orchestrator settings
-- task-first `Work` view with:
-  - operational header for project, backend, bridge, and approval count
+- plan-first `Work` view with:
+  - operational header for project, backend, bridge, approval count, and active goal
   - active initiative selector
-  - filtered backlog for the current workspace
-  - contextual task detail for summary, diff, evidence, and task artifacts
+  - ordered plan steps for the current workspace
+  - contextual step detail for overview, output, diff, evidence, and relevant artifacts
 - support drawers for:
   - approvals
   - bridge
@@ -30,8 +30,8 @@ Current scope:
   - approve or reject requirements/design/plan reviews
   - generate the execution-plan task backlog
 - task execution controls from the IDE:
-  - set `execution_mode` per task
-  - launch one or many selected tasks
+  - set `execution_mode` per task step
+  - launch the selected task step
 - task execution inspection from the IDE:
   - fetch typed task detail and task sources
   - preview diff from `task.results.diff` or patch-like artifacts
@@ -60,4 +60,4 @@ Useful commands:
 ./gradlew runIde
 ```
 
-The plugin is intentionally not a Copilot clone. It is a governed client of the orchestrator runtime.
+The plugin is intentionally not a Copilot clone. It is a governed client of the orchestrator runtime with a plan-first workflow.

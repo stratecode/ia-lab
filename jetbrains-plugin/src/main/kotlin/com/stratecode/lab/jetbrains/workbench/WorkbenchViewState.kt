@@ -13,6 +13,18 @@ enum class StatusTone {
     NEUTRAL,
 }
 
+enum class PlanStepKind {
+    PHASE,
+    TASK,
+}
+
+enum class PlanStepStatus {
+    PENDING,
+    ACTIVE,
+    BLOCKED,
+    DONE,
+}
+
 data class HeaderStatusViewState(
     val projectName: String,
     val workspaceRoot: String,
@@ -37,18 +49,21 @@ data class InitiativeWorkbenchItem(
     val lastReviewSummary: String? = null,
 )
 
-data class TaskWorkbenchItem(
-    val taskId: String,
+data class PlanStepWorkbenchItem(
+    val stepId: String,
+    val initiativeId: String,
+    val kind: PlanStepKind,
     val title: String,
-    val state: String,
-    val agent: String,
-    val executionMode: String,
-    val executionTarget: String,
-    val launchOrder: Int,
-    val diffAvailable: Boolean,
-    val evidenceAvailable: Boolean,
-    val approvalRequired: Boolean,
-    val link: InitiativeTaskLinkRecord,
+    val subtitle: String,
+    val status: PlanStepStatus,
+    val phase: String? = null,
+    val agent: String? = null,
+    val taskId: String? = null,
+    val executionMode: String? = null,
+    val diffAvailable: Boolean = false,
+    val evidenceAvailable: Boolean = false,
+    val approvalRequired: Boolean = false,
+    val link: InitiativeTaskLinkRecord? = null,
 )
 
 data class TaskActionAvailability(
@@ -58,18 +73,20 @@ data class TaskActionAvailability(
     val canApplyPatch: Boolean,
     val canOpenChangedFile: Boolean,
     val canOpenEvidence: Boolean,
+    val canAdvancePhase: Boolean,
+    val canApprovePhase: Boolean,
+    val canRejectPhase: Boolean,
+    val canGenerateTasks: Boolean,
     val canResolveApproval: Boolean,
     val blockingReason: String? = null,
 )
 
 data class TaskDetailViewState(
-    val taskId: String,
     val title: String,
-    val agent: String,
-    val state: String,
-    val executionMode: String,
-    val updatedAt: String,
-    val summaryText: String,
+    val subtitle: String,
+    val badgesText: String,
+    val overviewText: String,
+    val outputText: String,
     val diffText: String,
     val patchView: TaskResultPatchView?,
     val evidenceLocations: List<EvidenceLocation>,
@@ -87,9 +104,9 @@ data class ApprovalSummaryViewState(
 data class WorkbenchViewState(
     val header: HeaderStatusViewState,
     val initiatives: List<InitiativeWorkbenchItem>,
-    val tasks: List<TaskWorkbenchItem>,
+    val steps: List<PlanStepWorkbenchItem>,
     val selectedInitiativeId: String? = null,
-    val selectedTaskId: String? = null,
-    val selectedTaskDetail: TaskDetailViewState? = null,
+    val selectedStepId: String? = null,
+    val selectedDetail: TaskDetailViewState? = null,
     val approvalSummary: ApprovalSummaryViewState = ApprovalSummaryViewState(0),
 )

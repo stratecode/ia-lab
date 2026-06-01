@@ -13,12 +13,20 @@ Implemented now:
 - secure settings for orchestrator `base_url`, `api_key`, `bridge_name`, and policy mode
 - project context resolution for `workspace_root`, branch, and normalized `repository_url`
 - local project metadata and initiative registry persisted in `.stratecode/project.json`
-- `Agents` tool window redesigned as a task-first workbench with:
-  - operational header for project, backend, bridge, and approvals
-  - active initiative selector
-  - backlog-first left rail with task filters
-  - contextual task detail focused on summary, diff, evidence, and task artifacts
-  - secondary drawers for approvals, bridge, capabilities, and initiative info
+- `Agents` tool window redesigned as a plan-first workbench with:
+  - operational header for project, backend, bridge, approvals, and active goal
+  - active initiative selector scoped to `.stratecode/project.json`
+  - left rail centered on the current plan:
+    - phase steps
+    - task steps
+    - light filters
+  - contextual step detail focused on:
+    - overview
+    - output
+    - diff
+    - evidence
+    - relevant artifacts
+  - secondary support drawers for approvals, bridge, capabilities, and raw initiative info
   - bridge smoke validation and execution gating
   - initiative creation, typed initiative detail, and task backlog rendering
   - phase actions:
@@ -50,7 +58,7 @@ V1 is intentionally narrow:
 - IntelliJ Platform plugin
 - validated first on IntelliJ IDEA
 - local project bound to one bridge-backed workspace
-- task-first governed workflow
+- plan-first governed workflow
 - governed editor primitives
 - no fake autonomy, no RPA, no shell cosplay through popup menus
 
@@ -238,7 +246,7 @@ Required:
 
 Status:
 
-- implemented through the task-first workbench redesign
+- implemented through the plan-first workbench redesign
 
 ### Phase 6
 
@@ -258,6 +266,34 @@ Primary surface:
 
 - one tool window: `Agents`
 - default view: `Work`
+- core interaction model:
+  - select goal
+  - inspect plan steps
+  - work from the currently selected step
+
+Main visible layout:
+
+- header:
+  - project
+  - backend
+  - bridge
+  - approvals
+  - current goal
+- left rail:
+  - active initiative selector
+  - plan filters
+  - ordered plan steps
+- right panel:
+  - selected step summary
+  - contextual actions
+  - tabs for `Overview`, `Output`, `Diff`, `Evidence`, and `Artifacts`
+
+Secondary surfaces:
+
+- `Approvals`
+- `Bridge`
+- `Capabilities`
+- `Raw Initiative`
 
 Secondary support surfaces:
 

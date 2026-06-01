@@ -33,10 +33,12 @@ import com.stratecode.lab.jetbrains.task.TaskResultPatchView
 import com.stratecode.lab.jetbrains.workbench.ApprovalSummaryViewState
 import com.stratecode.lab.jetbrains.workbench.HeaderStatusViewState
 import com.stratecode.lab.jetbrains.workbench.InitiativeWorkbenchItem
+import com.stratecode.lab.jetbrains.workbench.PlanStepKind
+import com.stratecode.lab.jetbrains.workbench.PlanStepStatus
+import com.stratecode.lab.jetbrains.workbench.PlanStepWorkbenchItem
 import com.stratecode.lab.jetbrains.workbench.StatusTone
 import com.stratecode.lab.jetbrains.workbench.TaskActionAvailability
 import com.stratecode.lab.jetbrains.workbench.TaskDetailViewState
-import com.stratecode.lab.jetbrains.workbench.TaskWorkbenchItem
 import com.stratecode.lab.jetbrains.workbench.WorkbenchStateMapper
 import java.awt.BorderLayout
 import java.awt.CardLayout
@@ -44,7 +46,6 @@ import java.awt.Color
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
-import java.awt.GridLayout
 import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.BoxLayout
@@ -73,51 +74,57 @@ class AgentsToolWindowPanel(
         INITIATIVE,
     }
 
-    private val titleLabel = JLabel("StrateCode Workbench")
-    private val subtitleLabel = JLabel("<html>Task-first console for governed initiative execution.</html>")
-    private val projectBadge = badge("Project", "unresolved", StatusTone.NEUTRAL)
+    private val titleLabel = JLabel("StrateCode Plan")
+    private val goalLabel = JLabel("No active goal")
+    private val contextLabel = JLabel("Open or create a local initiative for this workspace.")
+    private val projectBadge = badge("Project", "local", StatusTone.NEUTRAL)
     private val backendBadge = badge("Backend", "unknown", StatusTone.NEUTRAL)
     private val bridgeBadge = badge("Bridge", "unresolved", StatusTone.NEUTRAL)
     private val approvalsBadge = badge("Approvals", "0 pending", StatusTone.NEUTRAL)
 
     private val refreshButton = JButton("Refresh")
-    private val createInitiativeButton = JButton("Create Initiative")
+    private val createInitiativeButton = JButton("Create Goal")
     private val resetWorkspaceButton = JButton("Reset Local State")
     private val approvalsDrawerButton = JButton("Approvals")
     private val bridgeDrawerButton = JButton("Bridge")
     private val capabilitiesDrawerButton = JButton("Capabilities")
-    private val initiativeDrawerButton = JButton("Initiative Info")
+    private val initiativeDrawerButton = JButton("Raw Initiative")
 
     private val initiativeSelectorModel = DefaultComboBoxModel<InitiativeWorkbenchItem>()
     private val initiativeSelector = JComboBox(initiativeSelectorModel).apply {
         renderer = InitiativeWorkbenchItemRenderer()
     }
-    private val statusFilterCombo = JComboBox(arrayOf("all", "pending", "running", "waiting_approval", "completed", "failed"))
+    private val statusFilterCombo = JComboBox(arrayOf("all", "pending", "running", "waiting_approval", "completed"))
     private val agentFilterCombo = JComboBox(arrayOf("all", "planner", "researcher", "coder", "reviewer"))
 
-    private val taskModel = DefaultListModel<TaskWorkbenchItem>()
-    private val taskList = JBList(taskModel).apply {
-        selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
-        cellRenderer = TaskWorkbenchItemCellRenderer()
+    private val planModel = DefaultListModel<PlanStepWorkbenchItem>()
+    private val planList = JBList(planModel).apply {
+        selectionMode = ListSelectionModel.SINGLE_SELECTION
+        cellRenderer = PlanStepWorkbenchItemCellRenderer()
     }
 
-    private val taskHeadlineLabel = JLabel("No task selected")
-    private val taskMetaLabel = JLabel("Pick a task from the backlog to inspect diff, evidence, and patch actions.")
-    private val taskBadgesLabel = JLabel("")
+    private val stepTitleLabel = JLabel("No plan step selected")
+    private val stepMetaLabel = JLabel("Pick a goal or create one. The current step will appear here.")
+    private val stepBadgesLabel = JLabel("")
 
     private val approvalCalloutPanel = JPanel(BorderLayout())
     private val approvalCalloutLabel = JLabel("")
     private val approveInlineButton = JButton("Approve")
     private val rejectInlineButton = JButton("Reject")
 
+    private val advanceButton = JButton("Advance Draft")
+    private val approvePhaseButton = JButton("Approve Phase")
+    private val rejectPhaseButton = JButton("Reject Phase")
+    private val generateTasksButton = JButton("Generate Tasks")
     private val setModeButton = JButton("Set Mode")
-    private val launchButton = JButton("Launch")
+    private val launchButton = JButton("Run")
     private val previewDiffButton = JButton("Preview Diff")
     private val applyPatchButton = JButton("Apply Patch")
     private val openChangedFileButton = JButton("Open Changed File")
     private val openEvidenceButton = JButton("Open First Evidence")
 
-    private val summaryArea = infoArea(16)
+    private val overviewArea = infoArea(16)
+    private val outputArea = infoArea(14)
     private val diffArea = infoArea(18)
     private val evidenceArea = infoArea(14)
     private val artifactDetailArea = infoArea(14)
@@ -159,11 +166,7 @@ class AgentsToolWindowPanel(
 
     private val capabilitiesArea = infoArea(16)
     private val initiativeInfoArea = infoArea(16)
-    private val refreshInitiativeButton = JButton("Refresh Initiative")
-    private val advanceButton = JButton("Advance Draft")
-    private val approvePhaseButton = JButton("Approve Phase")
-    private val rejectPhaseButton = JButton("Reject Phase")
-    private val generateTasksButton = JButton("Generate Tasks")
+    private val refreshInitiativeButton = JButton("Refresh Goal")
 
     private var drawerMode: DrawerMode = DrawerMode.NONE
     private var backendReady: Boolean? = null
@@ -178,7 +181,9 @@ class AgentsToolWindowPanel(
     private val taskPatchCache = linkedMapOf<String, TaskResultPatchView?>()
     private val taskEvidenceCache = linkedMapOf<String, EvidenceExtractionResult?>()
     private val taskSourcesCache = linkedMapOf<String, List<InitiativeArtifactRecord>>()
+    private var currentPlanSteps: List<PlanStepWorkbenchItem> = emptyList()
     private var selectedInitiative: InitiativeSummary? = null
+    private var selectedStep: PlanStepWorkbenchItem? = null
     private var selectedTaskDetail: TaskDetailRecord? = null
     private var selectedTaskPatchView: TaskResultPatchView? = null
     private var selectedTaskEvidence: EvidenceExtractionResult? = null
@@ -186,6 +191,10 @@ class AgentsToolWindowPanel(
     private var selectedArtifact: InitiativeArtifactRecord? = null
     private var selectedApproval: ApprovalRecord? = null
     private var selectedEvidenceLocation: EvidenceLocation? = null
+    private var suppressInitiativeSelectionEvents: Boolean = false
+    private var suppressPlanSelectionEvents: Boolean = false
+    private var loadingInitiativeDetailId: String? = null
+    private var loadingTaskId: String? = null
 
     init {
         border = JBUI.Borders.empty(12)
@@ -203,7 +212,22 @@ class AgentsToolWindowPanel(
 
     private fun buildHeader(): JComponent {
         titleLabel.font = titleLabel.font.deriveFont(Font.BOLD, 20f)
-        subtitleLabel.foreground = Color(0x6B7280)
+        goalLabel.font = goalLabel.font.deriveFont(Font.BOLD, 16f)
+        contextLabel.foreground = Color(0x6B7280)
+
+        val primaryActions = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+            isOpaque = false
+            add(refreshButton)
+            add(createInitiativeButton)
+            add(resetWorkspaceButton)
+        }
+        val supportActions = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+            isOpaque = false
+            add(approvalsDrawerButton)
+            add(bridgeDrawerButton)
+            add(capabilitiesDrawerButton)
+            add(initiativeDrawerButton)
+        }
         val badges = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
             isOpaque = false
             add(projectBadge)
@@ -211,27 +235,18 @@ class AgentsToolWindowPanel(
             add(bridgeBadge)
             add(approvalsBadge)
         }
-        val actions = JPanel(FlowLayout(FlowLayout.RIGHT, 8, 0)).apply {
-            isOpaque = false
-            add(refreshButton)
-            add(createInitiativeButton)
-            add(resetWorkspaceButton)
-            add(approvalsDrawerButton)
-            add(bridgeDrawerButton)
-            add(capabilitiesDrawerButton)
-            add(initiativeDrawerButton)
-        }
-        val topRow = JPanel(BorderLayout()).apply {
-            isOpaque = false
-            add(titleLabel, BorderLayout.WEST)
-            add(actions, BorderLayout.EAST)
-        }
         val content = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
-            add(topRow)
+            add(titleLabel)
             add(Box.createVerticalStrut(8))
-            add(subtitleLabel)
+            add(goalLabel)
+            add(Box.createVerticalStrut(6))
+            add(contextLabel)
+            add(Box.createVerticalStrut(8))
+            add(primaryActions)
+            add(Box.createVerticalStrut(6))
+            add(supportActions)
             add(Box.createVerticalStrut(8))
             add(badges)
         }
@@ -247,42 +262,53 @@ class AgentsToolWindowPanel(
     private fun buildWorkbench(): JComponent {
         val leftControls = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            add(JLabel("Active Initiative"))
+            minimumSize = Dimension(220, 120)
+            add(JLabel("Goal"))
             add(Box.createVerticalStrut(4))
+            initiativeSelector.maximumSize = Dimension(Int.MAX_VALUE, initiativeSelector.preferredSize.height)
             add(initiativeSelector)
             add(Box.createVerticalStrut(10))
-            add(JLabel("Task Filters"))
+            add(JLabel("Plan filters"))
             add(Box.createVerticalStrut(4))
-            add(JPanel(GridLayout(1, 2, 8, 0)).apply {
+            add(JPanel().apply {
+                layout = BoxLayout(this, BoxLayout.X_AXIS)
                 isOpaque = false
+                statusFilterCombo.maximumSize = Dimension(160, statusFilterCombo.preferredSize.height)
+                agentFilterCombo.maximumSize = Dimension(160, agentFilterCombo.preferredSize.height)
                 add(statusFilterCombo)
+                add(Box.createHorizontalStrut(8))
                 add(agentFilterCombo)
             })
         }
 
-        val left = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.emptyRight(8)
-            add(section("Work", leftControls), BorderLayout.NORTH)
-            add(section("Task Backlog", JBScrollPane(taskList)), BorderLayout.CENTER)
+        val left = section(
+            "Plan",
+            JPanel(BorderLayout()).apply {
+                add(leftControls, BorderLayout.NORTH)
+                add(JBScrollPane(planList), BorderLayout.CENTER)
+            },
+        ).apply {
+            minimumSize = Dimension(250, 240)
         }
 
-        val detailHeader = JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.empty(0, 0, 10, 0)
-            add(
-                JPanel().apply {
-                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
-                    isOpaque = false
-                    add(taskHeadlineLabel)
-                    add(Box.createVerticalStrut(4))
-                    add(taskMetaLabel)
-                    add(Box.createVerticalStrut(4))
-                    add(taskBadgesLabel)
-                },
-                BorderLayout.CENTER,
-            )
+        val detailHeader = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            add(stepTitleLabel)
+            add(Box.createVerticalStrut(4))
+            add(stepMetaLabel)
+            add(Box.createVerticalStrut(4))
+            add(stepBadgesLabel)
         }
 
-        val actionBar = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+        val phaseActions = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+            isOpaque = false
+            add(advanceButton)
+            add(approvePhaseButton)
+            add(rejectPhaseButton)
+            add(generateTasksButton)
+        }
+        val taskActions = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
             isOpaque = false
             add(setModeButton)
             add(launchButton)
@@ -291,11 +317,17 @@ class AgentsToolWindowPanel(
             add(openChangedFileButton)
             add(openEvidenceButton)
         }
-
-        val detailTop = JPanel(BorderLayout()).apply {
-            add(detailHeader, BorderLayout.NORTH)
-            add(approvalCalloutPanel, BorderLayout.CENTER)
-            add(actionBar, BorderLayout.SOUTH)
+        val detailTop = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            border = JBUI.Borders.emptyBottom(8)
+            add(detailHeader)
+            add(Box.createVerticalStrut(8))
+            add(approvalCalloutPanel)
+            add(Box.createVerticalStrut(8))
+            add(phaseActions)
+            add(Box.createVerticalStrut(6))
+            add(taskActions)
         }
 
         val right = JPanel(BorderLayout()).apply {
@@ -304,15 +336,17 @@ class AgentsToolWindowPanel(
             add(drawerWrapper, BorderLayout.SOUTH)
         }
 
-        return JBSplitter(false, 0.30f).apply {
+        return JBSplitter(false, 0.28f).apply {
             border = JBUI.Borders.emptyTop(12)
+            dividerWidth = 10
             firstComponent = left
             secondComponent = right
         }
     }
 
     private fun buildDetailTabs() {
-        detailTabs.addTab("Summary", section("Task / Initiative Summary", JBScrollPane(summaryArea)))
+        detailTabs.addTab("Overview", section("Plan Step", JBScrollPane(overviewArea)))
+        detailTabs.addTab("Output", section("Execution Output", JBScrollPane(outputArea)))
         detailTabs.addTab("Diff", section("Diff Preview", JBScrollPane(diffArea)))
         detailTabs.addTab(
             "Evidence",
@@ -324,7 +358,7 @@ class AgentsToolWindowPanel(
         detailTabs.addTab(
             "Artifacts",
             JBSplitter(false, 0.34f).apply {
-                firstComponent = section("Task Artifacts", JBScrollPane(taskArtifactList))
+                firstComponent = section("Relevant Artifacts", JBScrollPane(taskArtifactList))
                 secondComponent = section("Artifact Detail", JBScrollPane(artifactDetailArea))
             },
         )
@@ -367,7 +401,7 @@ class AgentsToolWindowPanel(
             BorderLayout.NORTH,
         )
         drawerWrapper.add(drawerCards, BorderLayout.CENTER)
-        drawerWrapper.preferredSize = Dimension(100, 250)
+        drawerWrapper.preferredSize = Dimension(100, 220)
     }
 
     private fun buildApprovalsDrawer(): JComponent {
@@ -378,7 +412,7 @@ class AgentsToolWindowPanel(
         }
         return JPanel(BorderLayout()).apply {
             add(
-                JBSplitter(false, 0.36f).apply {
+                JBSplitter(false, 0.38f).apply {
                     firstComponent = section("Pending Approvals", JBScrollPane(approvalsList))
                     secondComponent = section("Approval Detail", JBScrollPane(approvalsArea))
                 },
@@ -426,10 +460,6 @@ class AgentsToolWindowPanel(
                 JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
                     isOpaque = false
                     add(refreshInitiativeButton)
-                    add(advanceButton)
-                    add(approvePhaseButton)
-                    add(rejectPhaseButton)
-                    add(generateTasksButton)
                 },
                 BorderLayout.SOUTH,
             )
@@ -449,6 +479,9 @@ class AgentsToolWindowPanel(
         initiativeDrawerButton.addActionListener { showDrawer(DrawerMode.INITIATIVE) }
         closeDrawerButton.addActionListener { showDrawer(DrawerMode.NONE) }
         initiativeSelector.addActionListener {
+            if (suppressInitiativeSelectionEvents) {
+                return@addActionListener
+            }
             val selected = initiativeSelector.selectedItem as? InitiativeWorkbenchItem ?: return@addActionListener
             if (selected.id != selectedInitiative?.id) {
                 currentInitiatives.firstOrNull { it.id == selected.id }?.let {
@@ -457,11 +490,13 @@ class AgentsToolWindowPanel(
                 }
             }
         }
-        statusFilterCombo.addActionListener { rebuildTaskList() }
-        agentFilterCombo.addActionListener { rebuildTaskList() }
-        taskList.addListSelectionListener {
-            handleTaskSelectionChanged()
-            updateActionState()
+        statusFilterCombo.addActionListener { rebuildPlanList() }
+        agentFilterCombo.addActionListener { rebuildPlanList() }
+        planList.addListSelectionListener {
+            if (suppressPlanSelectionEvents) {
+                return@addListSelectionListener
+            }
+            handlePlanSelectionChanged()
         }
         evidenceList.addListSelectionListener {
             selectedEvidenceLocation = evidenceList.selectedValue
@@ -491,7 +526,7 @@ class AgentsToolWindowPanel(
         rejectPhaseButton.addActionListener { resolveSelectedInitiative(false) }
         generateTasksButton.addActionListener { generateSelectedInitiativeTasks() }
         setModeButton.addActionListener { setSelectedTaskMode() }
-        launchButton.addActionListener { launchSelectedTasks() }
+        launchButton.addActionListener { launchSelectedTask() }
         previewDiffButton.addActionListener { previewSelectedTaskDiff() }
         applyPatchButton.addActionListener { applySelectedTaskPatch() }
         openChangedFileButton.addActionListener { openSelectedTaskChangedFile() }
@@ -512,7 +547,7 @@ class AgentsToolWindowPanel(
             DrawerMode.APPROVALS -> "Approvals"
             DrawerMode.BRIDGE -> "Bridge"
             DrawerMode.CAPABILITIES -> "Capabilities"
-            DrawerMode.INITIATIVE -> "Initiative Info"
+            DrawerMode.INITIATIVE -> "Raw Initiative"
             DrawerMode.NONE -> "Support Panel"
         }
         (drawerCards.layout as CardLayout).show(drawerCards, mode.name)
@@ -521,38 +556,55 @@ class AgentsToolWindowPanel(
     }
 
     private fun updateActionState() {
-        val selectedItems = taskList.selectedValuesList
-        val selectedTask = selectedItems.singleOrNull()
+        val detail = selectedDetailOrNull()
         val availability = WorkbenchStateMapper.buildTaskActionAvailability(
-            selectedTask = selectedTask,
+            selectedStep = selectedStep,
             patchView = selectedTaskPatchView,
             evidence = selectedTaskEvidence,
             resolution = currentBridgeResolution,
             degraded = currentProjectContext?.degraded == true,
+            initiativeStatus = detail?.initiative?.status,
         )
-        setModeButton.isEnabled = availability.canSetMode && selectedTask != null
-        launchButton.isEnabled = selectedItems.isNotEmpty() && currentBridgeResolution?.executable == true
+        val isPhase = selectedStep?.kind == PlanStepKind.PHASE
+        val isTask = selectedStep?.kind == PlanStepKind.TASK
+
+        advanceButton.isVisible = isPhase
+        approvePhaseButton.isVisible = isPhase
+        rejectPhaseButton.isVisible = isPhase
+        generateTasksButton.isVisible = isPhase
+        setModeButton.isVisible = isTask
+        launchButton.isVisible = isTask
+        previewDiffButton.isVisible = isTask
+        applyPatchButton.isVisible = isTask
+        openChangedFileButton.isVisible = isTask
+        openEvidenceButton.isVisible = isTask
+
+        advanceButton.isEnabled = availability.canAdvancePhase
+        approvePhaseButton.isEnabled = availability.canApprovePhase
+        rejectPhaseButton.isEnabled = availability.canRejectPhase
+        generateTasksButton.isEnabled = availability.canGenerateTasks
+        setModeButton.isEnabled = availability.canSetMode
+        launchButton.isEnabled = availability.canLaunch
         previewDiffButton.isEnabled = availability.canPreviewDiff
         applyPatchButton.isEnabled = availability.canApplyPatch
         openChangedFileButton.isEnabled = availability.canOpenChangedFile
         openEvidenceButton.isEnabled = availability.canOpenEvidence
-        val pendingPhaseAction = selectedDetailOrNull()
-        val phase = pendingPhaseAction?.initiative?.currentPhase
-        val status = pendingPhaseAction?.initiative?.status
-        advanceButton.isEnabled = phase in setOf("requirements", "design") && status?.endsWith("_draft") == true
-        approvePhaseButton.isEnabled = phase in setOf("requirements", "design", "plan") && status?.endsWith("_review") == true
-        rejectPhaseButton.isEnabled = approvePhaseButton.isEnabled
-        generateTasksButton.isEnabled = phase == "plan" && status == "plan_draft"
-        refreshInitiativeButton.isEnabled = pendingPhaseAction != null
-        val hasApproval = selectedApproval != null
-        approveApprovalButton.isEnabled = hasApproval
-        rejectApprovalButton.isEnabled = hasApproval
-        val inlineApproval = WorkbenchStateMapper.buildApprovalSummary(currentApprovals, selectedTask?.taskId).selectedTaskApproval
-        approvalCalloutPanel.isVisible = inlineApproval != null
-        approvalCalloutLabel.text = inlineApproval?.let {
-            "Task ${it.taskId} is blocked by approval '${it.actionType}'. Resolve it here without leaving the work view."
-        } ?: ""
-        taskMetaLabel.toolTipText = availability.blockingReason
+
+        val approvalSummary = WorkbenchStateMapper.buildApprovalSummary(currentApprovals, selectedStep?.taskId)
+        val selectedApprovalForTask = approvalSummary.selectedTaskApproval
+        val taskCallout = selectedApprovalForTask?.let {
+            "This step is waiting for approval '${it.actionType}'. Resolve it here or from the approvals panel."
+        }
+        val phaseCallout = if (isPhase && detail?.initiative?.status?.endsWith("_review") == true) {
+            "This phase is waiting for review. Approve it or send it back with feedback."
+        } else {
+            null
+        }
+        approvalCalloutPanel.isVisible = taskCallout != null || phaseCallout != null
+        approvalCalloutLabel.text = taskCallout ?: phaseCallout.orEmpty()
+        approveInlineButton.isVisible = taskCallout != null
+        rejectInlineButton.isVisible = taskCallout != null
+        stepMetaLabel.toolTipText = availability.blockingReason
     }
 
     private fun loadStatus() {
@@ -579,7 +631,12 @@ class AgentsToolWindowPanel(
                 val bridges = client.listBridges()
                 val bridge = BridgeResolver.resolve(bridges.items, context.workspaceRoot, settings.currentState.bridgeName)
                 val projectCaps = context.repositoryUrl?.let { client.getProjectCapabilities(it, "needs_repo_static_analysis", "reviewer") }
-                StatusBundle(ready.ready, bridges.items, bridge, buildCapabilitiesText(projectCaps?.mode, capabilities.capabilities, projectCaps?.capabilities.orEmpty()))
+                StatusBundle(
+                    backendReady = ready.ready,
+                    bridges = bridges.items,
+                    bridgeResolution = bridge,
+                    capabilitiesText = buildCapabilitiesText(projectCaps?.mode, capabilities.capabilities, projectCaps?.capabilities.orEmpty()),
+                )
             }.onSuccess { bundle ->
                 StrateCodeProjectStore.write(context, bridgeName = settings.currentState.bridgeName)
                 SwingUtilities.invokeLater {
@@ -620,7 +677,7 @@ class AgentsToolWindowPanel(
             currentInitiatives = emptyList()
             refreshInitiativeSelector(selectInitiativeId ?: context.metadata?.lastInitiativeId)
             selectedInitiative = null
-            clearInitiativeState("No local initiatives registered in .stratecode/project.json.\n\nCreate a new initiative from the plugin or from editor selection to seed this workspace.")
+            clearPlanState("No local goals registered in .stratecode/project.json.\n\nCreate a new goal from the plugin or from editor selection to seed this workspace.")
             refreshHeader()
             return
         }
@@ -630,36 +687,40 @@ class AgentsToolWindowPanel(
             }.onSuccess { response ->
                 SwingUtilities.invokeLater {
                     currentInitiatives = response.items.filter { it.id in knownInitiativeIds }
-                    refreshInitiativeSelector(selectInitiativeId ?: selectedInitiative?.id ?: context.metadata?.lastInitiativeId)
+                    val target = refreshInitiativeSelector(selectInitiativeId ?: selectedInitiative?.id ?: context.metadata?.lastInitiativeId)
                     if (currentInitiatives.isEmpty()) {
                         selectedInitiative = null
-                        clearInitiativeState("No locally tracked initiatives are currently available on the server.")
+                        clearPlanState("No locally tracked initiatives are currently available on the server.")
+                    } else if (target != null && selectedDetailOrNull()?.initiative?.id != target.id) {
+                        loadInitiativeDetail(target.id)
                     }
                     refreshHeader()
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
                     currentInitiatives = emptyList()
-                    clearInitiativeState(error.message ?: error.toString())
+                    clearPlanState(error.message ?: error.toString())
                 }
             }
         }
     }
 
-    private fun refreshInitiativeSelector(selectInitiativeId: String?) {
+    private fun refreshInitiativeSelector(selectInitiativeId: String?): InitiativeWorkbenchItem? {
         val detailById = initiativeDetailCache.toMap()
         val artifactCountById = initiativeArtifactCache.mapValues { it.value.size }
         val items = WorkbenchStateMapper.buildInitiatives(currentInitiatives, detailById, artifactCountById)
+        suppressInitiativeSelectionEvents = true
         initiativeSelectorModel.removeAllElements()
         items.forEach(initiativeSelectorModel::addElement)
         val target = items.firstOrNull { it.id == selectInitiativeId } ?: items.firstOrNull()
         if (target != null) {
             initiativeSelector.selectedItem = target
             selectedInitiative = currentInitiatives.firstOrNull { it.id == target.id }
-            if (selectedInitiative != null && selectedDetailOrNull()?.initiative?.id != selectedInitiative?.id) {
-                loadInitiativeDetail(selectedInitiative!!.id)
-            }
+        } else {
+            selectedInitiative = null
         }
+        suppressInitiativeSelectionEvents = false
+        return target
     }
 
     private fun loadInitiativeDetail(initiativeId: String) {
@@ -668,6 +729,10 @@ class AgentsToolWindowPanel(
         if (apiKey.isBlank()) {
             return
         }
+        if (loadingInitiativeDetailId == initiativeId) {
+            return
+        }
+        loadingInitiativeDetailId = initiativeId
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
                 val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
@@ -690,22 +755,32 @@ class AgentsToolWindowPanel(
                     initiativeArtifactCache[initiativeId] = bundle.artifacts
                     selectedInitiative = currentInitiatives.firstOrNull { it.id == initiativeId }
                     refreshInitiativeSelector(initiativeId)
-                    rebuildTaskList()
+                    rebuildPlanList()
                     renderInitiativeSnapshot()
+                    refreshHeader()
                     updateActionState()
+                    loadingInitiativeDetailId = null
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
-                    clearInitiativeState("Failed to load initiative detail:\n${error.message ?: error}")
+                    loadingInitiativeDetailId = null
+                    clearPlanState("Failed to load initiative detail:\n${error.message ?: error}")
                 }
             }
         }
     }
 
-    private fun rebuildTaskList() {
+    private fun rebuildPlanList(selectStepId: String? = selectedStep?.stepId) {
         val detail = selectedDetailOrNull()
-        val tasks = detail?.initiative?.id?.let { initiativeTaskCache[it] }.orEmpty()
-        val items = WorkbenchStateMapper.buildTaskItems(
+        if (detail == null) {
+            planModel.clear()
+            currentPlanSteps = emptyList()
+            renderInitiativeSnapshot()
+            return
+        }
+        val tasks = initiativeTaskCache[detail.initiative.id].orEmpty()
+        currentPlanSteps = WorkbenchStateMapper.buildPlanSteps(
+            detail = detail,
             tasks = tasks,
             approvals = currentApprovals,
             patchByTaskId = taskPatchCache,
@@ -713,48 +788,58 @@ class AgentsToolWindowPanel(
             statusFilter = statusFilterCombo.selectedItem?.toString() ?: "all",
             agentFilter = agentFilterCombo.selectedItem?.toString() ?: "all",
         )
-        val selectedIds = taskList.selectedValuesList.map { it.taskId }.toSet()
-        taskModel.clear()
-        items.forEach(taskModel::addElement)
-        if (selectedIds.isNotEmpty()) {
-            val indices = items.mapIndexedNotNull { index, item -> if (item.taskId in selectedIds) index else null }.toIntArray()
-            if (indices.isNotEmpty()) {
-                taskList.setSelectedIndices(indices)
-            }
+        suppressPlanSelectionEvents = true
+        planModel.clear()
+        currentPlanSteps.forEach(planModel::addElement)
+        val target = currentPlanSteps.firstOrNull { it.stepId == selectStepId }
+            ?: currentPlanSteps.firstOrNull { it.status == PlanStepStatus.ACTIVE || it.status == PlanStepStatus.BLOCKED }
+            ?: currentPlanSteps.firstOrNull()
+        if (target != null) {
+            planList.setSelectedValue(target, true)
+            selectedStep = target
+        } else {
+            selectedStep = null
         }
-        if (taskList.selectedValuesList.isEmpty()) {
-            renderInitiativeSnapshot()
-        }
+        suppressPlanSelectionEvents = false
+        handlePlanSelectionChanged()
     }
 
-    private fun handleTaskSelectionChanged() {
-        val selectedTasks = taskList.selectedValuesList
-        if (selectedTasks.size == 1) {
-            loadTaskExecutionDetail(selectedTasks.first().taskId)
+    private fun handlePlanSelectionChanged() {
+        val step = planList.selectedValue
+        selectedStep = step
+        if (step == null) {
+            renderInitiativeSnapshot()
+            updateActionState()
             return
         }
-        selectedTaskDetail = null
-        selectedTaskPatchView = null
-        selectedTaskEvidence = null
-        selectedTaskSourceArtifacts = emptyList()
-        selectedEvidenceLocation = null
-        selectedArtifact = null
-        evidenceModel.clear()
-        taskArtifactModel.clear()
-        if (selectedTasks.isEmpty()) {
-            renderInitiativeSnapshot()
+        if (step.kind == PlanStepKind.TASK && step.taskId != null) {
+            loadTaskExecutionDetail(step.taskId)
         } else {
-            renderMultiTaskSelection(selectedTasks)
+            renderPhaseStep(step)
+            updateActionState()
         }
     }
 
     private fun loadTaskExecutionDetail(taskId: String) {
+        if (loadingTaskId == taskId) {
+            return
+        }
+        val cachedTask = selectedTaskDetail?.takeIf { it.id == taskId }
+        val cachedSources = taskSourcesCache[taskId]
+        val cachedPatch = taskPatchCache[taskId]
+        val cachedEvidence = taskEvidenceCache[taskId]
+        if (cachedTask != null && cachedSources != null && cachedEvidence != null) {
+            renderTaskDetail(cachedTask, cachedSources, cachedPatch, cachedEvidence)
+            updateActionState()
+            return
+        }
         val settings = settings()
         val apiKey = settings.getApiKey()
         if (apiKey.isBlank()) {
             return
         }
-        summaryArea.text = "Loading task detail…"
+        loadingTaskId = taskId
+        overviewArea.text = "Loading step detail…"
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
                 val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
@@ -765,6 +850,7 @@ class AgentsToolWindowPanel(
                 TaskExecutionBundle(task, sources, patch, evidence)
             }.onSuccess { bundle ->
                 SwingUtilities.invokeLater {
+                    loadingTaskId = null
                     selectedTaskDetail = bundle.task
                     selectedTaskPatchView = bundle.patchView
                     selectedTaskEvidence = bundle.evidence
@@ -773,23 +859,17 @@ class AgentsToolWindowPanel(
                     taskEvidenceCache[taskId] = bundle.evidence
                     taskSourcesCache[taskId] = bundle.sources
                     renderTaskDetail(bundle.task, bundle.sources, bundle.patchView, bundle.evidence)
-                    rebuildTaskList()
+                    rebuildPlanList(selectStepId = selectedStep?.stepId)
                     updateActionState()
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
+                    loadingTaskId = null
                     selectedTaskDetail = null
                     selectedTaskPatchView = null
                     selectedTaskEvidence = null
                     selectedTaskSourceArtifacts = emptyList()
-                    taskHeadlineLabel.text = "Task detail failed"
-                    taskMetaLabel.text = error.message ?: error.toString()
-                    summaryArea.text = "Failed to load task detail:\n${error.message ?: error}"
-                    diffArea.text = "No diff available."
-                    evidenceArea.text = "No evidence available."
-                    artifactDetailArea.text = "No artifacts available."
-                    evidenceModel.clear()
-                    taskArtifactModel.clear()
+                    renderErrorDetail("Step detail failed", error.message ?: error.toString())
                     updateActionState()
                 }
             }
@@ -802,79 +882,49 @@ class AgentsToolWindowPanel(
         patchView: TaskResultPatchView?,
         evidence: EvidenceExtractionResult,
     ) {
-        val selectedTask = taskList.selectedValuesList.singleOrNull()
-        val approvalSummary = WorkbenchStateMapper.buildApprovalSummary(currentApprovals, selectedTask?.taskId)
+        val step = selectedStep ?: return
+        val approvalSummary = WorkbenchStateMapper.buildApprovalSummary(currentApprovals, step.taskId)
         val viewState = TaskDetailViewState(
-            taskId = task.id,
-            title = selectedTask?.title ?: task.description,
-            agent = selectedTask?.agent ?: "unknown",
-            state = task.state,
-            executionMode = selectedTask?.executionMode ?: "-",
-            updatedAt = task.updatedAt,
-            summaryText = renderTaskSummaryText(task, patchView, evidence),
-            diffText = patchView?.diff ?: "No diff available for this task.",
+            title = step.title,
+            subtitle = "${step.agent ?: "unknown"} · ${task.state} · ${step.executionMode ?: "-"} · ${task.updatedAt}",
+            badgesText = buildBadgesText(patchView != null, evidence.locations.isNotEmpty(), approvalSummary.selectedTaskApproval != null, artifacts.isNotEmpty()),
+            overviewText = renderTaskOverviewText(task, patchView, evidence),
+            outputText = renderTaskOutputText(task, patchView, evidence),
+            diffText = patchView?.diff ?: "No diff available for this step.",
             patchView = patchView,
             evidenceLocations = evidence.locations,
             evidenceDetailText = renderEvidenceDetail(null, evidence),
             artifacts = artifacts,
             artifactDetailText = if (artifacts.isEmpty()) "No task-scoped artifacts." else renderArtifactDetail(artifacts.first()),
             approvalCallout = approvalSummary.selectedTaskApproval?.let {
-                "Task ${it.taskId} is blocked by approval '${it.actionType}'. Resolve it directly here."
+                "Task ${it.taskId} is blocked by approval '${it.actionType}'. Resolve it inline or from the approvals panel."
             },
         )
-        renderTaskViewState(viewState)
+        renderDetailViewState(viewState)
     }
 
-    private fun renderTaskViewState(viewState: TaskDetailViewState) {
-        taskHeadlineLabel.text = viewState.title
-        taskMetaLabel.text = "${viewState.agent} · ${viewState.state} · ${viewState.executionMode} · ${viewState.updatedAt}"
-        taskBadgesLabel.text = buildBadgesText(viewState.patchView != null, viewState.evidenceLocations.isNotEmpty(), viewState.approvalCallout != null, viewState.artifacts.isNotEmpty())
-        summaryArea.text = viewState.summaryText
-        diffArea.text = viewState.diffText
-        evidenceModel.clear()
-        viewState.evidenceLocations.forEach(evidenceModel::addElement)
-        evidenceArea.text = viewState.evidenceDetailText
-        taskArtifactModel.clear()
-        viewState.artifacts.forEach(taskArtifactModel::addElement)
-        selectedArtifact = viewState.artifacts.firstOrNull()
-        artifactDetailArea.text = if (selectedArtifact != null) renderArtifactDetail(selectedArtifact) else "No task-scoped artifacts."
-        approvalCalloutPanel.isVisible = viewState.approvalCallout != null
-        approvalCalloutLabel.text = viewState.approvalCallout ?: ""
-    }
-
-    private fun renderInitiativeSnapshot() {
+    private fun renderPhaseStep(step: PlanStepWorkbenchItem) {
         val detail = selectedDetailOrNull()
-        val artifacts = detail?.initiative?.id?.let { initiativeArtifactCache[it] }.orEmpty()
         if (detail == null) {
-            taskHeadlineLabel.text = "No initiative selected"
-            taskMetaLabel.text = "Create one or pick an existing initiative for this project."
-            taskBadgesLabel.text = ""
-            summaryArea.text = "No initiative loaded for this workspace."
-            diffArea.text = "Select a task to inspect its diff."
-            evidenceArea.text = "Select a task to inspect its evidence."
-            artifactDetailArea.text = "Select a task to inspect its artifacts."
-            initiativeInfoArea.text = "No initiative loaded."
+            renderInitiativeSnapshot()
             return
         }
-        taskHeadlineLabel.text = detail.initiative.title
-        taskMetaLabel.text = "${detail.initiative.status} · ${detail.initiative.currentPhase} · ${detail.executionSummary.taskCount} tasks"
-        taskBadgesLabel.text = buildBadgeLine(
-            badgeText("phase", detail.initiative.currentPhase),
-            badgeText("status", detail.initiative.status),
-            badgeText("artifacts", artifacts.size.toString()),
-        )
-        summaryArea.text = buildString {
+        val artifacts = initiativeArtifactCache[detail.initiative.id].orEmpty()
+        val phase = step.phase ?: detail.initiative.currentPhase
+        val phaseHistory = detail.histories.firstOrNull { it.phase == phase }
+        val reviews = detail.reviews.filter { it.phase == phase }
+        val overview = buildString {
             appendLine("Goal")
             appendLine("====")
             appendLine(detail.initiative.goal)
             appendLine()
-            appendLine("Snapshot")
-            appendLine("========")
-            appendLine("Workspace: ${detail.initiative.workspaceRoot}")
+            appendLine("Plan step")
+            appendLine("=========")
+            appendLine("Phase: ${phase.replaceFirstChar { it.uppercase() }}")
+            appendLine("Status: ${detail.initiative.status}")
+            appendLine("Current phase: ${detail.initiative.currentPhase}")
             appendLine("Execution mode: ${detail.initiative.executionMode}")
-            appendLine("Aggregated status: ${detail.executionSummary.aggregatedStatus}")
-            appendLine("Pending manual: ${detail.executionSummary.pendingManual}")
-            appendLine("Last review: ${detail.reviews.maxByOrNull { it.createdAt }?.let { "${it.phase} / ${it.decision}" } ?: "-"}")
+            appendLine("Task count: ${detail.executionSummary.taskCount}")
             currentBridgeResolution?.executionBlockReason()?.let {
                 appendLine()
                 appendLine("Bridge block")
@@ -882,54 +932,149 @@ class AgentsToolWindowPanel(
                 appendLine(it)
             }
         }.trim()
-        diffArea.text = "Select a coder task to preview its diff."
-        evidenceArea.text = "Select a reviewer task to inspect findings."
-        artifactDetailArea.text = if (artifacts.isEmpty()) "No initiative artifacts generated yet." else renderArtifactDetail(artifacts.first())
-        initiativeInfoArea.text = renderInitiativeInfo(detail, artifacts)
-        evidenceModel.clear()
-        taskArtifactModel.clear()
-        approvalCalloutPanel.isVisible = false
-    }
-
-    private fun renderMultiTaskSelection(selectedTasks: List<TaskWorkbenchItem>) {
-        taskHeadlineLabel.text = "${selectedTasks.size} tasks selected"
-        taskMetaLabel.text = "Bulk launch is enabled; diff, evidence and patch stay single-task."
-        taskBadgesLabel.text = buildBadgeLine(badgeText("selection", selectedTasks.size.toString()))
-        summaryArea.text = buildString {
-            appendLine("${selectedTasks.size} tasks selected")
-            appendLine("======================")
-            selectedTasks.forEach { task ->
-                appendLine("#${task.launchOrder} ${task.title}")
-                appendLine("${task.agent} · ${task.state} · ${task.executionMode} · ${task.executionTarget}")
-                appendLine()
+        val output = buildString {
+            appendLine("Phase history")
+            appendLine("=============")
+            val items = phaseHistory?.items.orEmpty()
+            if (items.isEmpty()) {
+                appendLine("No stored versions for this phase yet.")
+            } else {
+                items.forEach { entry ->
+                    appendLine("v${entry.version} · ${entry.createdAt}")
+                    entry.diffSummary?.let { appendLine(it) }
+                    entry.artifactType?.let { appendLine("artifact: $it") }
+                    appendLine()
+                }
+            }
+            appendLine()
+            appendLine("Reviews")
+            appendLine("=======")
+            if (reviews.isEmpty()) {
+                appendLine("No review decisions recorded yet.")
+            } else {
+                reviews.forEach { review ->
+                    appendLine("${review.phase} · ${review.decision} · ${review.createdAt}")
+                    review.feedback?.takeIf { it.isNotBlank() }?.let { appendLine(it) }
+                    appendLine()
+                }
             }
         }.trim()
-        diffArea.text = "Preview Diff requires a single selected task."
-        evidenceArea.text = "Evidence requires a single selected task."
-        artifactDetailArea.text = "Artifacts require a single selected task."
+        renderDetailViewState(
+            TaskDetailViewState(
+                title = step.title,
+                subtitle = step.subtitle,
+                badgesText = buildBadgeLine(
+                    badgeText("status", step.status.name.lowercase()),
+                    badgeText("phase", phase),
+                    badgeText("artifacts", artifacts.size.toString()),
+                ),
+                overviewText = overview,
+                outputText = output,
+                diffText = "Diff preview is only available on executable coder steps.",
+                patchView = null,
+                evidenceLocations = emptyList(),
+                evidenceDetailText = "Evidence navigation is available on reviewer steps with concrete findings.",
+                artifacts = artifacts,
+                artifactDetailText = if (artifacts.isEmpty()) "No initiative artifacts generated yet." else renderArtifactDetail(artifacts.first()),
+                approvalCallout = if (detail.initiative.status.endsWith("_review") && detail.initiative.currentPhase == phase) {
+                    "This phase is waiting for review. Use the phase actions above."
+                } else {
+                    null
+                },
+            ),
+        )
+    }
+
+    private fun renderDetailViewState(viewState: TaskDetailViewState) {
+        stepTitleLabel.text = viewState.title
+        stepMetaLabel.text = viewState.subtitle
+        stepBadgesLabel.text = viewState.badgesText
+        overviewArea.text = viewState.overviewText
+        outputArea.text = viewState.outputText
+        diffArea.text = viewState.diffText
+        evidenceModel.clear()
+        viewState.evidenceLocations.forEach(evidenceModel::addElement)
+        evidenceArea.text = viewState.evidenceDetailText
+        taskArtifactModel.clear()
+        viewState.artifacts.forEach(taskArtifactModel::addElement)
+        selectedArtifact = viewState.artifacts.firstOrNull()
+        artifactDetailArea.text = if (selectedArtifact != null) renderArtifactDetail(selectedArtifact) else "No relevant artifacts."
+        approvalCalloutPanel.isVisible = viewState.approvalCallout != null
+        approvalCalloutLabel.text = viewState.approvalCallout ?: ""
+        approveInlineButton.isVisible = selectedStep?.kind == PlanStepKind.TASK && selectedStep?.approvalRequired == true
+        rejectInlineButton.isVisible = approveInlineButton.isVisible
+        initiativeInfoArea.text = selectedDetailOrNull()?.let { renderInitiativeInfo(it, initiativeArtifactCache[it.initiative.id].orEmpty()) } ?: "No initiative loaded."
+    }
+
+    private fun renderInitiativeSnapshot() {
+        val detail = selectedDetailOrNull()
+        val artifacts = detail?.initiative?.id?.let { initiativeArtifactCache[it] }.orEmpty()
+        if (detail == null) {
+            goalLabel.text = "No active goal"
+            contextLabel.text = "Create a local initiative to start a plan for this workspace."
+            stepTitleLabel.text = "No goal selected"
+            stepMetaLabel.text = "Create one or pick an existing local goal for this project."
+            stepBadgesLabel.text = ""
+            overviewArea.text = "No initiative loaded for this workspace."
+            outputArea.text = "When a goal exists, this panel will show the current step and its output."
+            diffArea.text = "Select a coder step to inspect its diff."
+            evidenceArea.text = "Select a reviewer step to inspect its evidence."
+            artifactDetailArea.text = "Select a step to inspect its artifacts."
+            initiativeInfoArea.text = "No initiative loaded."
+            evidenceModel.clear()
+            taskArtifactModel.clear()
+            approvalCalloutPanel.isVisible = false
+            return
+        }
+        goalLabel.text = detail.initiative.title
+        contextLabel.text = """
+            <html>
+            <b>Goal:</b> ${escapeHtml(detail.initiative.goal.take(180))}<br/>
+            <b>Phase:</b> ${escapeHtml(detail.initiative.currentPhase)} · <b>Status:</b> ${escapeHtml(detail.initiative.status)} · <b>Tasks:</b> ${detail.executionSummary.taskCount}
+            </html>
+        """.trimIndent()
+        renderPhaseStep(
+            selectedStep ?: currentPlanSteps.firstOrNull { it.kind == PlanStepKind.PHASE && it.phase == detail.initiative.currentPhase }
+                ?: PlanStepWorkbenchItem(
+                    stepId = "phase:${detail.initiative.currentPhase}",
+                    initiativeId = detail.initiative.id,
+                    kind = PlanStepKind.PHASE,
+                    title = detail.initiative.title,
+                    subtitle = detail.initiative.status,
+                    status = PlanStepStatus.ACTIVE,
+                    phase = detail.initiative.currentPhase,
+                ),
+        )
+        initiativeInfoArea.text = renderInitiativeInfo(detail, artifacts)
+    }
+
+    private fun renderErrorDetail(title: String, message: String) {
+        stepTitleLabel.text = title
+        stepMetaLabel.text = message
+        stepBadgesLabel.text = ""
+        overviewArea.text = message
+        outputArea.text = message
+        diffArea.text = "No diff available."
+        evidenceArea.text = "No evidence available."
+        artifactDetailArea.text = "No artifacts available."
         evidenceModel.clear()
         taskArtifactModel.clear()
         approvalCalloutPanel.isVisible = false
     }
 
-    private fun clearInitiativeState(message: String) {
-        taskModel.clear()
-        evidenceModel.clear()
-        taskArtifactModel.clear()
+    private fun clearPlanState(message: String) {
+        planModel.clear()
+        currentPlanSteps = emptyList()
+        selectedStep = null
         selectedTaskDetail = null
         selectedTaskPatchView = null
         selectedTaskEvidence = null
         selectedTaskSourceArtifacts = emptyList()
         selectedArtifact = null
-        taskHeadlineLabel.text = "No initiative selected"
-        taskMetaLabel.text = message
-        taskBadgesLabel.text = ""
-        summaryArea.text = message
-        diffArea.text = "Select a task to inspect its diff."
-        evidenceArea.text = "Select a task to inspect its evidence."
-        artifactDetailArea.text = "Select a task to inspect its artifacts."
+        renderErrorDetail("No goal selected", message)
+        goalLabel.text = "No active goal"
+        contextLabel.text = message
         initiativeInfoArea.text = message
-        approvalCalloutPanel.isVisible = false
         updateActionState()
     }
 
@@ -948,13 +1093,15 @@ class AgentsToolWindowPanel(
         setBadgeTone(backendBadge, state.backendTone)
         setBadgeTone(bridgeBadge, state.bridgeTone)
         setBadgeTone(approvalsBadge, state.approvalsTone)
-        subtitleLabel.text = """
+        val currentGoal = selectedDetailOrNull()?.initiative?.goal?.take(180)
+        if (!currentGoal.isNullOrBlank()) {
+            goalLabel.text = selectedDetailOrNull()?.initiative?.title ?: state.projectName
+        }
+        contextLabel.text = """
             <html>
-            <div style='width:960px'>
-            <b>Workspace:</b> ${escapeHtml(state.workspaceRoot)}<br/>
-            <b>Repository:</b> ${escapeHtml(state.repositoryUrl ?: "degraded")}<br/>
+            <b>Workspace:</b> ${escapeHtml(shortPath(state.workspaceRoot))}<br/>
+            <b>Repository:</b> ${escapeHtml(shortRepo(state.repositoryUrl))}<br/>
             <b>Local state:</b> ${escapeHtml(state.metadataSummary)}
-            </div>
             </html>
         """.trimIndent()
     }
@@ -964,13 +1111,13 @@ class AgentsToolWindowPanel(
         val apiKey = settings.getApiKey()
         val context = ProjectContextResolver.resolve(project)
         if (apiKey.isBlank()) {
-            notify("Initiative blocked", "Configure an API key first.", NotificationType.WARNING)
+            notify("Goal blocked", "Configure an API key first.", NotificationType.WARNING)
             return
         }
         val form = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             add(JLabel("Title"))
-            val titleField = JBTextField("IDE initiative for ${context.projectName}")
+            val titleField = JBTextField("Goal for ${context.projectName}")
             add(titleField)
             add(Box.createVerticalStrut(8))
             add(JLabel("Goal"))
@@ -983,14 +1130,14 @@ class AgentsToolWindowPanel(
             putClientProperty("titleField", titleField)
             putClientProperty("goalArea", goalArea)
         }
-        val result = JOptionPane.showConfirmDialog(this, form, "Create Initiative", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE)
+        val result = JOptionPane.showConfirmDialog(this, form, "Create Goal", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE)
         if (result != JOptionPane.OK_OPTION) {
             return
         }
-        val title = (form.getClientProperty("titleField") as JBTextField).text.trim().ifBlank { "IDE initiative for ${context.projectName}" }
+        val title = (form.getClientProperty("titleField") as JBTextField).text.trim().ifBlank { "Goal for ${context.projectName}" }
         val goal = (form.getClientProperty("goalArea") as JBTextArea).text.trim()
         if (goal.isBlank()) {
-            notify("Initiative blocked", "Goal is required.", NotificationType.WARNING)
+            notify("Goal blocked", "Goal is required.", NotificationType.WARNING)
             return
         }
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -1004,14 +1151,14 @@ class AgentsToolWindowPanel(
                     bridgeName = settings.currentState.bridgeName,
                 )
                 SwingUtilities.invokeLater {
-                    notify("Initiative created", "${it.title} (${it.id})", NotificationType.INFORMATION)
+                    notify("Goal created", "${it.title} (${it.id})", NotificationType.INFORMATION)
                     loadStatus()
                     loadInitiatives(selectInitiativeId = it.id)
                     loadApprovals()
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
-                    notify("Initiative creation failed", error.message ?: error.toString(), NotificationType.ERROR)
+                    notify("Goal creation failed", error.message ?: error.toString(), NotificationType.ERROR)
                 }
             }
         }
@@ -1062,7 +1209,9 @@ class AgentsToolWindowPanel(
         taskEvidenceCache.clear()
         taskSourcesCache.clear()
         currentInitiatives = emptyList()
+        currentPlanSteps = emptyList()
         selectedInitiative = null
+        selectedStep = null
         selectedTaskDetail = null
         selectedTaskPatchView = null
         selectedTaskEvidence = null
@@ -1072,7 +1221,7 @@ class AgentsToolWindowPanel(
         selectedEvidenceLocation = null
         currentProjectContext = ProjectContextResolver.resolve(project)
         refreshHeader()
-        clearInitiativeState("Local workspace state reset.\n\nCreate a new initiative to repopulate this workspace.")
+        clearPlanState("Local workspace state reset.\n\nCreate a new goal to repopulate this workspace.")
         notify("Local state reset", "The workspace metadata has been cleared.", NotificationType.INFORMATION)
     }
 
@@ -1121,7 +1270,7 @@ class AgentsToolWindowPanel(
                     approvalsArea.text = if (response.items.isEmpty()) "No pending approvals." else renderApprovalDetail(response.items.first())
                     selectedApproval = response.items.firstOrNull()
                     refreshHeader()
-                    rebuildTaskList()
+                    rebuildPlanList()
                     updateActionState()
                 }
             }.onFailure { error ->
@@ -1143,8 +1292,8 @@ class AgentsToolWindowPanel(
     }
 
     private fun resolveBlockingApproval(approve: Boolean) {
-        val selectedTaskId = taskList.selectedValuesList.singleOrNull()?.taskId ?: return
-        val approval = currentApprovals.firstOrNull { it.taskId == selectedTaskId } ?: return
+        val taskId = selectedStep?.taskId ?: return
+        val approval = currentApprovals.firstOrNull { it.taskId == taskId } ?: return
         resolveApproval(approval, approve)
     }
 
@@ -1201,10 +1350,10 @@ class AgentsToolWindowPanel(
     }
 
     private fun setSelectedTaskMode() {
-        val selectedTask = taskList.selectedValuesList.singleOrNull() ?: return
+        val selectedTask = selectedStep?.takeIf { it.kind == PlanStepKind.TASK } ?: return
         val choice = JOptionPane.showInputDialog(
             this,
-            "Execution mode for selected task:",
+            "Execution mode for selected step:",
             selectedTask.executionMode,
         )?.trim().orEmpty()
         if (choice !in setOf("manual", "agent_local", "agent_remote")) {
@@ -1215,16 +1364,13 @@ class AgentsToolWindowPanel(
         }
         val detail = selectedDetailOrNull() ?: return
         runInitiativeMutation("Task mode updated") { client ->
-            client.updateInitiativeTaskMode(detail.initiative.id, selectedTask.taskId, choice)
+            client.updateInitiativeTaskMode(detail.initiative.id, selectedTask.taskId!!, choice)
         }
     }
 
-    private fun launchSelectedTasks() {
+    private fun launchSelectedTask() {
         val detail = selectedDetailOrNull() ?: return
-        val selectedTasks = taskList.selectedValuesList
-        if (selectedTasks.isEmpty()) {
-            return
-        }
+        val selectedTask = selectedStep?.takeIf { it.kind == PlanStepKind.TASK && it.taskId != null } ?: return
         val resolution = currentBridgeResolution
         val blockReason = if (resolution == null) "No bridge state is loaded for this project." else resolution.executionBlockReason()
         if (blockReason != null) {
@@ -1233,7 +1379,7 @@ class AgentsToolWindowPanel(
             return
         }
         runInitiativeMutation("Task launch queued") { client ->
-            client.launchInitiativeTasks(detail.initiative.id, selectedTasks.map { it.taskId })
+            client.launchInitiativeTasks(detail.initiative.id, listOf(selectedTask.taskId!!))
         }
     }
 
@@ -1265,13 +1411,13 @@ class AgentsToolWindowPanel(
                     TaskExecutionSupport.openChangedFile(project, context.workspaceRoot, result.changedFiles)
                     loadStatus()
                     selectedInitiative?.let { loadInitiativeDetail(it.id) }
-                    taskList.selectedValuesList.singleOrNull()?.let { loadTaskExecutionDetail(it.taskId) }
+                    selectedStep?.taskId?.let { loadTaskExecutionDetail(it) }
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
                     notify("Patch apply failed", error.message ?: error.toString(), NotificationType.ERROR)
-                    summaryArea.text = buildString {
-                        appendLine(summaryArea.text)
+                    outputArea.text = buildString {
+                        appendLine(outputArea.text)
                         appendLine()
                         appendLine("Patch apply error")
                         appendLine("=================")
@@ -1286,7 +1432,7 @@ class AgentsToolWindowPanel(
         val context = currentProjectContext ?: return
         val patchView = selectedTaskPatchView ?: return
         if (!TaskExecutionSupport.openChangedFile(project, context.workspaceRoot, patchView.changedFiles)) {
-            notify("Open changed file failed", "No changed file could be opened from this task.", NotificationType.WARNING)
+            notify("Open changed file failed", "No changed file could be opened from this step.", NotificationType.WARNING)
         }
     }
 
@@ -1344,7 +1490,7 @@ class AgentsToolWindowPanel(
     private fun selectedDetailOrNull(): InitiativeDetailResponseRecord? =
         selectedInitiative?.id?.let { initiativeDetailCache[it] }
 
-    private fun renderTaskSummaryText(
+    private fun renderTaskOverviewText(
         task: TaskDetailRecord,
         patchView: TaskResultPatchView?,
         evidence: EvidenceExtractionResult,
@@ -1355,7 +1501,25 @@ class AgentsToolWindowPanel(
         appendLine("State: ${task.state}")
         appendLine("Updated: ${task.updatedAt}")
         appendLine("Workspace path: ${task.workspacePath ?: "-"}")
+        task.errorMessage?.takeIf { it.isNotBlank() }?.let {
+            appendLine()
+            appendLine("Task error")
+            appendLine("==========")
+            appendLine(it)
+        }
         appendLine()
+        appendLine("Signal")
+        appendLine("======")
+        appendLine("Diff: ${if (patchView != null) "available" else "none"}")
+        appendLine("Evidence findings: ${evidence.locations.size}")
+        appendLine("Raw artifacts: ${evidence.rawArtifacts.size}")
+    }.trim()
+
+    private fun renderTaskOutputText(
+        task: TaskDetailRecord,
+        patchView: TaskResultPatchView?,
+        evidence: EvidenceExtractionResult,
+    ): String = buildString {
         appendLine("Patch")
         appendLine("=====")
         if (patchView == null) {
@@ -1378,11 +1542,11 @@ class AgentsToolWindowPanel(
             appendLine("Parse errors: ${evidence.errors.size}")
             evidence.errors.forEach { appendLine("- $it") }
         }
-        task.errorMessage?.takeIf { it.isNotBlank() }?.let {
+        task.results?.let {
             appendLine()
-            appendLine("Task error")
-            appendLine("==========")
-            appendLine(it)
+            appendLine("Raw results")
+            appendLine("===========")
+            appendLine(it.toString().take(1600))
         }
     }.trim()
 
@@ -1402,7 +1566,7 @@ class AgentsToolWindowPanel(
             }.trim()
         }
         if (evidence == null) {
-            return "Select a reviewer task to inspect its evidence."
+            return "Select a reviewer step to inspect its evidence."
         }
         return buildString {
             appendLine("Navigable findings: ${evidence.locations.size}")
@@ -1416,16 +1580,6 @@ class AgentsToolWindowPanel(
             if (evidence.locations.isNotEmpty()) {
                 appendLine()
                 appendLine("Double click a finding or use 'Open First Evidence'.")
-            }
-            if (evidence.rawArtifacts.isNotEmpty()) {
-                appendLine()
-                appendLine("Raw artifact preview")
-                appendLine("====================")
-                evidence.rawArtifacts.take(2).forEach { artifact ->
-                    appendLine("[${artifact.artifactType}] ${artifact.title ?: artifact.id}")
-                    appendLine((artifact.contentText ?: "(no textual content)").take(800))
-                    appendLine()
-                }
             }
         }.trim()
     }
@@ -1636,6 +1790,25 @@ class AgentsToolWindowPanel(
     private fun escapeHtml(value: String): String =
         value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+    private fun shortPath(value: String): String {
+        val normalized = value.trim()
+        if (normalized.length <= 72) {
+            return normalized
+        }
+        return "…" + normalized.takeLast(69)
+    }
+
+    private fun shortRepo(value: String?): String {
+        val normalized = value?.trim().orEmpty()
+        if (normalized.isBlank()) {
+            return "degraded"
+        }
+        if (normalized.length <= 72) {
+            return normalized
+        }
+        return normalized.take(32) + "…" + normalized.takeLast(32)
+    }
+
     private data class StatusBundle(
         val backendReady: Boolean,
         val bridges: List<LocalBridgeResponse>,
@@ -1669,8 +1842,8 @@ private class InitiativeWorkbenchItemRenderer : DefaultListCellRenderer() {
             it.border = JBUI.Borders.empty(6)
             it.text = """
                 <html>
-                <b>${escape(value.title)}</b>
-                <span style='color:#6B7280'> · ${escape(value.status)} / ${escape(value.currentPhase)} / ${value.taskCount} tasks</span>
+                <b>${escape(value.title)}</b><br/>
+                <span style='color:#6B7280'>${escape(value.currentPhase)} / ${escape(value.status)} / ${value.taskCount} tasks</span>
                 </html>
             """.trimIndent()
         }
@@ -1680,7 +1853,7 @@ private class InitiativeWorkbenchItemRenderer : DefaultListCellRenderer() {
         value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 }
 
-private class TaskWorkbenchItemCellRenderer : DefaultListCellRenderer() {
+private class PlanStepWorkbenchItemCellRenderer : DefaultListCellRenderer() {
     override fun getListCellRendererComponent(
         list: JList<*>,
         value: Any?,
@@ -1688,17 +1861,23 @@ private class TaskWorkbenchItemCellRenderer : DefaultListCellRenderer() {
         isSelected: Boolean,
         cellHasFocus: Boolean,
     ) = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus).also {
-        if (value is TaskWorkbenchItem && it is JLabel) {
+        if (value is PlanStepWorkbenchItem && it is JLabel) {
             it.border = JBUI.Borders.empty(8)
-            val badges = buildString {
-                if (value.diffAvailable) append(" diff")
-                if (value.evidenceAvailable) append(" evidence")
-                if (value.approvalRequired) append(" approval")
-            }.trim()
+            val dot = when (value.status) {
+                PlanStepStatus.DONE -> "done"
+                PlanStepStatus.ACTIVE -> "active"
+                PlanStepStatus.BLOCKED -> "blocked"
+                PlanStepStatus.PENDING -> "pending"
+            }
+            val suffix = buildString {
+                if (value.diffAvailable) append(" · diff")
+                if (value.evidenceAvailable) append(" · evidence")
+                if (value.approvalRequired) append(" · approval")
+            }
             it.text = """
                 <html>
-                <b>#${value.launchOrder} ${escape(value.title)}</b><br/>
-                <span style='color:#6B7280'>${escape(value.agent)} / ${escape(value.state)} / ${escape(value.executionMode)}${if (badges.isNotBlank()) " / ${escape(badges)}" else ""}</span>
+                <b>${escape(value.title)}</b><br/>
+                <span style='color:#6B7280'>${escape(dot)} · ${escape(value.subtitle)}${escape(suffix)}</span>
                 </html>
             """.trimIndent()
         }

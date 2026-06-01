@@ -138,7 +138,7 @@ data class InitiativeHistoryEntryRecord(
 data class InitiativePhaseHistoryRecord(
     val phase: String,
     @SerialName("active_version") val activeVersion: Int,
-    val items: List<InitiativeHistoryEntryRecord> = emptyList(),
+    val items: List<InitiativeHistoryEntryRecord>? = emptyList(),
 )
 
 @Serializable

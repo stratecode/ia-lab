@@ -3,6 +3,10 @@ package com.stratecode.lab.jetbrains.workbench
 import com.stratecode.lab.jetbrains.bridge.BridgeConsistency
 import com.stratecode.lab.jetbrains.bridge.BridgeResolution
 import com.stratecode.lab.jetbrains.client.ApprovalRecord
+import com.stratecode.lab.jetbrains.client.InitiativeDetailResponseRecord
+import com.stratecode.lab.jetbrains.client.InitiativeExecutionPolicyRecord
+import com.stratecode.lab.jetbrains.client.InitiativeExecutionSummaryRecord
+import com.stratecode.lab.jetbrains.client.InitiativeRecord
 import com.stratecode.lab.jetbrains.client.InitiativeTaskLinkRecord
 import com.stratecode.lab.jetbrains.client.InitiativeTaskRecord
 import com.stratecode.lab.jetbrains.project.ProjectContext
@@ -17,11 +21,14 @@ import kotlin.test.assertTrue
 
 class WorkbenchStateMapperTest {
     @Test
-    fun `build task items applies filters and badges`() {
+    fun `build plan steps keeps phases and filters task steps`() {
+        val detail = initiativeDetail(status = "design_review", currentPhase = "design", taskCount = 2)
         val taskA = taskLink("task-a", "coder", "pending", "agent_local", 1)
         val taskB = taskLink("task-b", "reviewer", "waiting_approval", "manual", 2)
         val approvals = listOf(approval("task-b"))
-        val tasks = WorkbenchStateMapper.buildTaskItems(
+
+        val steps = WorkbenchStateMapper.buildPlanSteps(
+            detail = detail,
             tasks = listOf(taskA, taskB),
             approvals = approvals,
             patchByTaskId = mapOf("task-a" to TaskResultPatchView("diff --git a/a b/a\n", listOf("a"))),
@@ -36,25 +43,31 @@ class WorkbenchStateMapperTest {
             agentFilter = "reviewer",
         )
 
-        assertEquals(1, tasks.size)
-        assertEquals("task-b", tasks.first().taskId)
-        assertTrue(tasks.first().approvalRequired)
-        assertTrue(tasks.first().evidenceAvailable)
-        assertFalse(tasks.first().diffAvailable)
+        assertEquals(5, steps.size)
+        assertEquals(PlanStepKind.PHASE, steps.first().kind)
+        assertEquals(PlanStepStatus.BLOCKED, steps[1].status)
+        val taskStep = steps.last()
+        assertEquals("task:task-b", taskStep.stepId)
+        assertEquals(PlanStepKind.TASK, taskStep.kind)
+        assertTrue(taskStep.approvalRequired)
+        assertTrue(taskStep.evidenceAvailable)
+        assertFalse(taskStep.diffAvailable)
     }
 
     @Test
     fun `task action availability blocks patch on stale bridge`() {
-        val selected = taskLink("task-a", "coder", "pending", "agent_local", 1)
+        val selected = PlanStepWorkbenchItem(
+            stepId = "task:task-a",
+            initiativeId = "initiative-1",
+            kind = PlanStepKind.TASK,
+            title = "Task A",
+            subtitle = "coder",
+            status = PlanStepStatus.PENDING,
+            taskId = "task-a",
+            executionMode = "agent_local",
+        )
         val availability = WorkbenchStateMapper.buildTaskActionAvailability(
-            selectedTask = WorkbenchStateMapper.buildTaskItems(
-                listOf(selected),
-                approvals = emptyList(),
-                patchByTaskId = mapOf("task-a" to TaskResultPatchView("diff --git a/a b/a\n", listOf("a"))),
-                evidenceByTaskId = emptyMap(),
-                statusFilter = "all",
-                agentFilter = "all",
-            ).first(),
+            selectedStep = selected,
             patchView = TaskResultPatchView("diff --git a/a b/a\n", listOf("a")),
             evidence = null,
             resolution = BridgeResolution(
@@ -66,6 +79,7 @@ class WorkbenchStateMapperTest {
                 executable = false,
             ),
             degraded = false,
+            initiativeStatus = "execution",
         )
 
         assertFalse(availability.canApplyPatch)
@@ -103,6 +117,35 @@ class WorkbenchStateMapperTest {
         assertEquals(StatusTone.WARNING, header.approvalsTone)
         assertTrue(header.degraded)
     }
+
+    private fun initiativeDetail(
+        status: String,
+        currentPhase: String,
+        taskCount: Int,
+    ) = InitiativeDetailResponseRecord(
+        initiative = InitiativeRecord(
+            id = "initiative-1",
+            title = "Test initiative",
+            workspaceRoot = "/repo",
+            goal = "Ship the feature",
+            status = status,
+            currentPhase = currentPhase,
+            createdBy = "tester",
+            executionMode = "selective",
+            createdAt = "2026-06-01T00:00:00Z",
+            updatedAt = "2026-06-01T00:00:00Z",
+        ),
+        executionSummary = InitiativeExecutionSummaryRecord(
+            backlogMaterialized = taskCount > 0,
+            aggregatedStatus = currentPhase,
+            taskCount = taskCount,
+            pendingManual = 0,
+        ),
+        executionPolicy = InitiativeExecutionPolicyRecord(
+            workspaceRoot = "/repo",
+            scope = "local_bridge",
+        ),
+    )
 
     private fun taskLink(
         taskId: String,
