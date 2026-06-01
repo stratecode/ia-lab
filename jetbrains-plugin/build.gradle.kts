@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.1.8"
+version = "0.1.9"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Added per-request HTTP tracing in plugin logs, plus timeouts, clearer network failure messages, and visible status refresh progress.
+        Added per-request HTTP tracing, retryable bridge auto-registration with cooldown, and clearer status/network diagnostics.
         """.trimIndent()
     )
 }

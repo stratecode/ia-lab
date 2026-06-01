@@ -89,6 +89,7 @@ class AgentsToolWindowPanel(
     companion object {
         private val LOG = Logger.getInstance(AgentsToolWindowPanel::class.java)
         private val logTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault())
+        private const val autoRegisterCooldownMillis: Long = 30_000
     }
 
     private val titleLabel = JLabel("StrateCode Plan")
@@ -214,7 +215,7 @@ class AgentsToolWindowPanel(
     private var selectedApproval: ApprovalRecord? = null
     private var selectedEvidenceLocation: EvidenceLocation? = null
     private val recentDiagnostics: ArrayDeque<String> = ArrayDeque()
-    private val autoRegisterAttempts: MutableSet<String> = linkedSetOf()
+    private val autoRegisterAttempts: MutableMap<String, Long> = linkedMapOf()
     private var suppressInitiativeSelectionEvents: Boolean = false
     private var suppressPlanSelectionEvents: Boolean = false
     private var loadingInitiativeDetailId: String? = null
@@ -1314,7 +1315,7 @@ class AgentsToolWindowPanel(
         selectedApproval = null
         selectedEvidenceLocation = null
         currentProjectContext = ProjectContextResolver.resolve(project)
-        autoRegisterAttempts.removeIf { it.startsWith("${context.workspaceRoot}|") }
+        autoRegisterAttempts.keys.removeIf { it.startsWith("${context.workspaceRoot}|") }
         recordDiagnostic("info", "Local state reset", "Workspace metadata cleared for ${context.workspaceRoot}.")
         refreshHeader()
         clearPlanState("Local workspace state reset.\n\nCreate a new goal to repopulate this workspace.")
@@ -1927,9 +1928,12 @@ class AgentsToolWindowPanel(
             return
         }
         val attemptKey = "${context.workspaceRoot}|${settings().currentState.bridgeName}"
-        if (!autoRegisterAttempts.add(attemptKey)) {
+        val now = System.currentTimeMillis()
+        val lastAttemptAt = autoRegisterAttempts[attemptKey]
+        if (lastAttemptAt != null && now - lastAttemptAt < autoRegisterCooldownMillis) {
             return
         }
+        autoRegisterAttempts[attemptKey] = now
         val reason = resolution.executionBlockReason() ?: "No bridge was registered for this workspace."
         recordDiagnostic("info", "Auto-registering bridge", "$reason Attempting automatic registration.")
         val settings = settings()
