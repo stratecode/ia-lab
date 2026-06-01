@@ -15,6 +15,9 @@ object StrateCodeProjectStore {
     fun metadataFile(workspaceRoot: String): File =
         File(workspaceRoot, ".stratecode/project.json")
 
+    fun diagnosticsFile(workspaceRoot: String): File =
+        File(workspaceRoot, ".stratecode/plugin-diagnostics.log")
+
     fun read(workspaceRoot: String): StrateCodeProjectMetadata? {
         val file = metadataFile(workspaceRoot)
         if (!file.isFile) {
@@ -85,6 +88,19 @@ object StrateCodeProjectStore {
         if (file.exists()) {
             file.delete()
         }
+        val diagnostics = diagnosticsFile(workspaceRoot)
+        if (diagnostics.exists()) {
+            diagnostics.delete()
+        }
+    }
+
+    fun appendDiagnostic(workspaceRoot: String, line: String) {
+        if (workspaceRoot.isBlank()) {
+            return
+        }
+        val file = diagnosticsFile(workspaceRoot)
+        file.parentFile.mkdirs()
+        file.appendText(line + System.lineSeparator() + System.lineSeparator())
     }
 
     private fun mergeKnownInitiatives(

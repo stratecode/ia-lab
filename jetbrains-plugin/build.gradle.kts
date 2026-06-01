@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.2.3"
+version = "0.2.4"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Added copyable diagnostics export, plus tested startup badge state logic, retryable auto-registration, and richer network/bridge tracing.
+        Added persistent workspace diagnostics, copyable diagnostics export, and richer bridge/network troubleshooting signals.
         """.trimIndent()
     )
 }

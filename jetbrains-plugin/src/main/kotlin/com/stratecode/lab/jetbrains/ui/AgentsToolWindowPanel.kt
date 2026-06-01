@@ -191,6 +191,7 @@ class AgentsToolWindowPanel(
     private val diagnosticsArea = infoArea(14)
     private val refreshInitiativeButton = JButton("Refresh Goal")
     private val openIdeLogButton = JButton("Open idea.log")
+    private val openWorkspaceLogButton = JButton("Open workspace log")
     private val refreshLogsButton = JButton("Refresh Logs")
     private val copyLogsButton = JButton("Copy Logs")
 
@@ -508,6 +509,7 @@ class AgentsToolWindowPanel(
                     isOpaque = false
                     add(refreshLogsButton)
                     add(copyLogsButton)
+                    add(openWorkspaceLogButton)
                     add(openIdeLogButton)
                 },
                 BorderLayout.SOUTH,
@@ -573,6 +575,7 @@ class AgentsToolWindowPanel(
         refreshInitiativeButton.addActionListener { selectedInitiative?.let { loadInitiativeDetail(it.id) } }
         refreshLogsButton.addActionListener { diagnosticsArea.text = renderDiagnostics() }
         copyLogsButton.addActionListener { copyDiagnostics() }
+        openWorkspaceLogButton.addActionListener { openWorkspaceDiagnostics() }
         openIdeLogButton.addActionListener { openIdeLog() }
         advanceButton.addActionListener { advanceSelectedInitiative() }
         approvePhaseButton.addActionListener { resolveSelectedInitiative(true) }
@@ -1997,6 +2000,7 @@ class AgentsToolWindowPanel(
         }
         recentDiagnostics.addLast(line)
         diagnosticsArea.text = renderDiagnostics()
+        currentProjectContext?.let { StrateCodeProjectStore.appendDiagnostic(it.workspaceRoot, line) }
         when (level.lowercase()) {
             "error" -> LOG.warn("$title: $message")
             "warning" -> LOG.warn("$title: $message")
@@ -2045,6 +2049,23 @@ class AgentsToolWindowPanel(
         if (virtualFile == null) {
             recordDiagnostic("warning", "IDE log unresolved", logFile.absolutePath)
             notify("IDE log unresolved", logFile.absolutePath, NotificationType.WARNING)
+            return
+        }
+        FileEditorManager.getInstance(project).openEditor(OpenFileDescriptor(project, virtualFile), true)
+    }
+
+    private fun openWorkspaceDiagnostics() {
+        val context = currentProjectContext ?: return
+        val logFile = StrateCodeProjectStore.diagnosticsFile(context.workspaceRoot)
+        if (!logFile.isFile) {
+            recordDiagnostic("warning", "Workspace log missing", logFile.absolutePath)
+            notify("Workspace log missing", logFile.absolutePath, NotificationType.WARNING)
+            return
+        }
+        val virtualFile = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(logFile)
+        if (virtualFile == null) {
+            recordDiagnostic("warning", "Workspace log unresolved", logFile.absolutePath)
+            notify("Workspace log unresolved", logFile.absolutePath, NotificationType.WARNING)
             return
         }
         FileEditorManager.getInstance(project).openEditor(OpenFileDescriptor(project, virtualFile), true)
