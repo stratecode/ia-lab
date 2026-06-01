@@ -9,6 +9,7 @@ import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.application.ApplicationManager
 import com.stratecode.lab.jetbrains.client.OrchestratorClient
 import com.stratecode.lab.jetbrains.project.ProjectContextResolver
+import com.stratecode.lab.jetbrains.project.StrateCodeProjectStore
 import com.stratecode.lab.jetbrains.settings.PluginSettingsService
 
 class CreateInitiativeFromSelectionAction : AnAction() {
@@ -34,6 +35,12 @@ class CreateInitiativeFromSelectionAction : AnAction() {
                 OrchestratorClient(settings.currentState.baseUrl, apiKey)
                     .createInitiative(title, selection, context.workspaceRoot)
             }.onSuccess {
+                StrateCodeProjectStore.rememberInitiative(
+                    context = context,
+                    initiativeId = it.id,
+                    initiativeTitle = it.title,
+                    bridgeName = settings.currentState.bridgeName,
+                )
                 notify(project, "Initiative created", "${it.title} (${it.id})", NotificationType.INFORMATION)
             }.onFailure { error ->
                 notify(project, "Initiative failed", error.message ?: error.toString(), NotificationType.ERROR)

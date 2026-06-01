@@ -12,7 +12,7 @@ Implemented now:
 - IntelliJ Platform plugin scaffold in Kotlin under `/jetbrains-plugin`
 - secure settings for orchestrator `base_url`, `api_key`, `bridge_name`, and policy mode
 - project context resolution for `workspace_root`, branch, and normalized `repository_url`
-- local project metadata persisted in `.stratecode/project.json`
+- local project metadata and initiative registry persisted in `.stratecode/project.json`
 - `Agents` tool window redesigned as a task-first workbench with:
   - operational header for project, backend, bridge, and approvals
   - active initiative selector
@@ -138,6 +138,7 @@ Rules:
 - if the current project path and bridge `workspace_root` do not match, execution is blocked
 - if `repository_url` is missing, the plugin enters degraded mode
 - if the project-scoped policy denies the required capability, the plugin shows a governed denial and stops
+- initiative visibility is local-first: server initiatives are shown only when tracked in local workspace metadata
 
 ### Security model
 

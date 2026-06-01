@@ -41,6 +41,7 @@ object WorkbenchStateMapper {
                 append(".stratecode/project.json")
                 metadata.bridgeName?.let { append(" · bridge=$it") }
                 metadata.lastInitiativeTitle?.let { append(" · last=$it") }
+                append(" · known=${metadata.knownInitiatives.size}")
             }
         }
         return HeaderStatusViewState(

@@ -74,7 +74,7 @@ class AgentsToolWindowPanel(
     }
 
     private val titleLabel = JLabel("StrateCode Workbench")
-    private val subtitleLabel = JLabel("Task-first console for governed initiative execution.")
+    private val subtitleLabel = JLabel("<html>Task-first console for governed initiative execution.</html>")
     private val projectBadge = badge("Project", "unresolved", StatusTone.NEUTRAL)
     private val backendBadge = badge("Backend", "unknown", StatusTone.NEUTRAL)
     private val bridgeBadge = badge("Bridge", "unresolved", StatusTone.NEUTRAL)
@@ -82,6 +82,7 @@ class AgentsToolWindowPanel(
 
     private val refreshButton = JButton("Refresh")
     private val createInitiativeButton = JButton("Create Initiative")
+    private val resetWorkspaceButton = JButton("Reset Local State")
     private val approvalsDrawerButton = JButton("Approvals")
     private val bridgeDrawerButton = JButton("Bridge")
     private val capabilitiesDrawerButton = JButton("Capabilities")
@@ -203,13 +204,6 @@ class AgentsToolWindowPanel(
     private fun buildHeader(): JComponent {
         titleLabel.font = titleLabel.font.deriveFont(Font.BOLD, 20f)
         subtitleLabel.foreground = Color(0x6B7280)
-        val titleBlock = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            isOpaque = false
-            add(titleLabel)
-            add(Box.createVerticalStrut(4))
-            add(subtitleLabel)
-        }
         val badges = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
             isOpaque = false
             add(projectBadge)
@@ -221,19 +215,32 @@ class AgentsToolWindowPanel(
             isOpaque = false
             add(refreshButton)
             add(createInitiativeButton)
+            add(resetWorkspaceButton)
             add(approvalsDrawerButton)
             add(bridgeDrawerButton)
             add(capabilitiesDrawerButton)
             add(initiativeDrawerButton)
+        }
+        val topRow = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            add(titleLabel, BorderLayout.WEST)
+            add(actions, BorderLayout.EAST)
+        }
+        val content = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            add(topRow)
+            add(Box.createVerticalStrut(8))
+            add(subtitleLabel)
+            add(Box.createVerticalStrut(8))
+            add(badges)
         }
         return JPanel(BorderLayout()).apply {
             border = BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(Color(0xD8DEE9)),
                 JBUI.Borders.empty(14),
             )
-            add(titleBlock, BorderLayout.WEST)
-            add(badges, BorderLayout.CENTER)
-            add(actions, BorderLayout.EAST)
+            add(content, BorderLayout.CENTER)
         }
     }
 
@@ -435,6 +442,7 @@ class AgentsToolWindowPanel(
             loadApprovals()
         }
         createInitiativeButton.addActionListener { createInitiative() }
+        resetWorkspaceButton.addActionListener { resetWorkspaceState() }
         approvalsDrawerButton.addActionListener { showDrawer(DrawerMode.APPROVALS) }
         bridgeDrawerButton.addActionListener { showDrawer(DrawerMode.BRIDGE) }
         capabilitiesDrawerButton.addActionListener { showDrawer(DrawerMode.CAPABILITIES) }
@@ -607,16 +615,25 @@ class AgentsToolWindowPanel(
         if (apiKey.isBlank()) {
             return
         }
+        val knownInitiativeIds = buildKnownInitiativeIds(context)
+        if (knownInitiativeIds.isEmpty()) {
+            currentInitiatives = emptyList()
+            refreshInitiativeSelector(selectInitiativeId ?: context.metadata?.lastInitiativeId)
+            selectedInitiative = null
+            clearInitiativeState("No local initiatives registered in .stratecode/project.json.\n\nCreate a new initiative from the plugin or from editor selection to seed this workspace.")
+            refreshHeader()
+            return
+        }
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
                 OrchestratorClient(settings.currentState.baseUrl, apiKey).listInitiatives(context.workspaceRoot)
             }.onSuccess { response ->
                 SwingUtilities.invokeLater {
-                    currentInitiatives = response.items
+                    currentInitiatives = response.items.filter { it.id in knownInitiativeIds }
                     refreshInitiativeSelector(selectInitiativeId ?: selectedInitiative?.id ?: context.metadata?.lastInitiativeId)
-                    if (response.items.isEmpty()) {
+                    if (currentInitiatives.isEmpty()) {
                         selectedInitiative = null
-                        clearInitiativeState("No initiatives found for this workspace.")
+                        clearInitiativeState("No locally tracked initiatives are currently available on the server.")
                     }
                     refreshHeader()
                 }
@@ -661,11 +678,11 @@ class AgentsToolWindowPanel(
                 )
             }.onSuccess { bundle ->
                 val context = ProjectContextResolver.resolve(project)
-                StrateCodeProjectStore.write(
+                StrateCodeProjectStore.rememberInitiative(
                     context,
+                    initiativeId = bundle.detail.initiative.id,
+                    initiativeTitle = bundle.detail.initiative.title,
                     bridgeName = settings.currentState.bridgeName,
-                    lastInitiativeId = bundle.detail.initiative.id,
-                    lastInitiativeTitle = bundle.detail.initiative.title,
                 )
                 SwingUtilities.invokeLater {
                     initiativeDetailCache[initiativeId] = bundle.detail
@@ -931,13 +948,15 @@ class AgentsToolWindowPanel(
         setBadgeTone(backendBadge, state.backendTone)
         setBadgeTone(bridgeBadge, state.bridgeTone)
         setBadgeTone(approvalsBadge, state.approvalsTone)
-        subtitleLabel.text = buildString {
-            append(state.workspaceRoot)
-            append(" · ")
-            append(state.repositoryUrl ?: "degraded")
-            append(" · ")
-            append(state.metadataSummary)
-        }
+        subtitleLabel.text = """
+            <html>
+            <div style='width:960px'>
+            <b>Workspace:</b> ${escapeHtml(state.workspaceRoot)}<br/>
+            <b>Repository:</b> ${escapeHtml(state.repositoryUrl ?: "degraded")}<br/>
+            <b>Local state:</b> ${escapeHtml(state.metadataSummary)}
+            </div>
+            </html>
+        """.trimIndent()
     }
 
     private fun createInitiative() {
@@ -978,11 +997,11 @@ class AgentsToolWindowPanel(
             runCatching {
                 OrchestratorClient(settings.currentState.baseUrl, apiKey).createInitiative(title, goal, context.workspaceRoot)
             }.onSuccess {
-                StrateCodeProjectStore.write(
+                StrateCodeProjectStore.rememberInitiative(
                     context,
+                    initiativeId = it.id,
+                    initiativeTitle = it.title,
                     bridgeName = settings.currentState.bridgeName,
-                    lastInitiativeId = it.id,
-                    lastInitiativeTitle = it.title,
                 )
                 SwingUtilities.invokeLater {
                     notify("Initiative created", "${it.title} (${it.id})", NotificationType.INFORMATION)
@@ -1023,6 +1042,40 @@ class AgentsToolWindowPanel(
         }
     }
 
+    private fun resetWorkspaceState() {
+        val context = ProjectContextResolver.resolve(project)
+        val confirmed = JOptionPane.showConfirmDialog(
+            this,
+            "Delete .stratecode/project.json and clear locally tracked initiatives for this workspace?",
+            "Reset Local State",
+            JOptionPane.OK_CANCEL_OPTION,
+            JOptionPane.WARNING_MESSAGE,
+        )
+        if (confirmed != JOptionPane.OK_OPTION) {
+            return
+        }
+        StrateCodeProjectStore.clear(context.workspaceRoot)
+        initiativeDetailCache.clear()
+        initiativeTaskCache.clear()
+        initiativeArtifactCache.clear()
+        taskPatchCache.clear()
+        taskEvidenceCache.clear()
+        taskSourcesCache.clear()
+        currentInitiatives = emptyList()
+        selectedInitiative = null
+        selectedTaskDetail = null
+        selectedTaskPatchView = null
+        selectedTaskEvidence = null
+        selectedTaskSourceArtifacts = emptyList()
+        selectedArtifact = null
+        selectedApproval = null
+        selectedEvidenceLocation = null
+        currentProjectContext = ProjectContextResolver.resolve(project)
+        refreshHeader()
+        clearInitiativeState("Local workspace state reset.\n\nCreate a new initiative to repopulate this workspace.")
+        notify("Local state reset", "The workspace metadata has been cleared.", NotificationType.INFORMATION)
+    }
+
     private fun runBridgeSmoke() {
         val context = ProjectContextResolver.resolve(project)
         val resolution = currentBridgeResolution
@@ -1038,6 +1091,12 @@ class AgentsToolWindowPanel(
             notify("Bridge smoke failed", problem, NotificationType.WARNING)
         }
     }
+
+    private fun buildKnownInitiativeIds(context: ProjectContext): Set<String> =
+        buildSet {
+            context.metadata?.knownInitiatives?.forEach { add(it.id) }
+            context.metadata?.lastInitiativeId?.let { add(it) }
+        }
 
     private fun loadApprovals() {
         val settings = settings()
@@ -1573,6 +1632,9 @@ class AgentsToolWindowPanel(
 
     private fun settings(): PluginSettingsService =
         ApplicationManager.getApplication().getService(PluginSettingsService::class.java)
+
+    private fun escapeHtml(value: String): String =
+        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     private data class StatusBundle(
         val backendReady: Boolean,

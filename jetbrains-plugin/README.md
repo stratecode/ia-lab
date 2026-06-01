@@ -6,6 +6,7 @@ Current scope:
 
 - project context detection
 - `.stratecode/project.json` local metadata for bridge and initiative context
+- local-only initiative registry from `.stratecode/project.json`
 - secure orchestrator settings
 - task-first `Work` view with:
   - operational header for project, backend, bridge, and approval count
@@ -22,6 +23,7 @@ Current scope:
 - bridge smoke validation from the IDE
 - project-scoped capability visibility
 - recent initiative listing and detail fetch, scoped to the current `workspace_root`
+- server initiatives are only shown if they are already tracked in local workspace metadata
 - initiative creation from the tool window or editor selection
 - initiative phase actions from the IDE:
   - advance requirements/design drafts
@@ -43,6 +45,10 @@ Current scope:
   - list pending approvals
   - approve or reject them
   - resolve blocking approvals inline from selected task context
+- local reset action:
+  - clears `.stratecode/project.json`
+  - forgets tracked initiatives for the workspace
+  - forces a clean local state
 - typed initiative summary, review timeline, task backlog, and artifact rendering
 - packaged plugin zip generation via Gradle
 
