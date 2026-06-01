@@ -1166,12 +1166,17 @@ class AgentsToolWindowPanel(
     private fun applyHeaderState(state: HeaderStatusViewState) {
         projectBadge.text = "Project  ${state.projectName}"
         backendBadge.text = "Backend  ${state.backendLabel}"
-        bridgeBadge.text = "Bridge  ${state.bridgeLabel}"
         approvalsBadge.text = "Approvals  ${state.approvalsLabel}"
         setBadgeTone(projectBadge, if (state.degraded) StatusTone.WARNING else StatusTone.NEUTRAL)
         setBadgeTone(backendBadge, state.backendTone)
-        setBadgeTone(bridgeBadge, state.bridgeTone)
         setBadgeTone(approvalsBadge, state.approvalsTone)
+        if (currentOperationStatus?.startsWith("Auto-registering bridge") == true) {
+            bridgeBadge.text = "Bridge  repairing"
+            setBadgeTone(bridgeBadge, StatusTone.NEUTRAL)
+        } else {
+            bridgeBadge.text = "Bridge  ${state.bridgeLabel}"
+            setBadgeTone(bridgeBadge, state.bridgeTone)
+        }
         val currentGoal = selectedDetailOrNull()?.initiative?.goal?.take(180)
         if (!currentGoal.isNullOrBlank()) {
             goalLabel.text = selectedDetailOrNull()?.initiative?.title ?: state.projectName

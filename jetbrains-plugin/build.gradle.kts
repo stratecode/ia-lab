@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.1.9"
+version = "0.2.0"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Added per-request HTTP tracing, retryable bridge auto-registration with cooldown, and clearer status/network diagnostics.
+        Improved bridge recovery UX with repairing state, retryable auto-registration, HTTP tracing, and clearer diagnostics around goal creation and backend connectivity.
         """.trimIndent()
     )
 }
