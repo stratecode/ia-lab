@@ -345,6 +345,13 @@ class AgentsToolWindowPanel(
             add(rejectPhaseButton)
             add(generateTasksButton)
         }
+        val phaseActionsGroup = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            add(JLabel("Phase actions"))
+            add(Box.createVerticalStrut(4))
+            add(phaseActions)
+        }
         val taskActions = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
             isOpaque = false
             add(setModeButton)
@@ -354,6 +361,13 @@ class AgentsToolWindowPanel(
             add(openChangedFileButton)
             add(openEvidenceButton)
         }
+        val taskActionsGroup = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            isOpaque = false
+            add(JLabel("Task actions"))
+            add(Box.createVerticalStrut(4))
+            add(taskActions)
+        }
         val detailTop = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
@@ -362,9 +376,9 @@ class AgentsToolWindowPanel(
             add(Box.createVerticalStrut(8))
             add(approvalCalloutPanel)
             add(Box.createVerticalStrut(8))
-            add(phaseActions)
+            add(phaseActionsGroup)
             add(Box.createVerticalStrut(6))
-            add(taskActions)
+            add(taskActionsGroup)
         }
 
         val right = JPanel(BorderLayout()).apply {
@@ -628,27 +642,16 @@ class AgentsToolWindowPanel(
         val isPhase = selectedStep?.kind == PlanStepKind.PHASE
         val isTask = selectedStep?.kind == PlanStepKind.TASK
 
-        advanceButton.isVisible = isPhase
-        approvePhaseButton.isVisible = isPhase
-        rejectPhaseButton.isVisible = isPhase
-        generateTasksButton.isVisible = isPhase
-        setModeButton.isVisible = isTask
-        launchButton.isVisible = isTask
-        previewDiffButton.isVisible = isTask
-        applyPatchButton.isVisible = isTask
-        openChangedFileButton.isVisible = isTask
-        openEvidenceButton.isVisible = isTask
-
-        advanceButton.isEnabled = availability.canAdvancePhase && !actionLocked
-        approvePhaseButton.isEnabled = availability.canApprovePhase && !actionLocked
-        rejectPhaseButton.isEnabled = availability.canRejectPhase && !actionLocked
-        generateTasksButton.isEnabled = availability.canGenerateTasks && !actionLocked
-        setModeButton.isEnabled = availability.canSetMode && !actionLocked
-        launchButton.isEnabled = availability.canLaunch && !actionLocked
-        previewDiffButton.isEnabled = availability.canPreviewDiff && !actionLocked
-        applyPatchButton.isEnabled = availability.canApplyPatch && !actionLocked
-        openChangedFileButton.isEnabled = availability.canOpenChangedFile && !actionLocked
-        openEvidenceButton.isEnabled = availability.canOpenEvidence && !actionLocked
+        advanceButton.isEnabled = isPhase && availability.canAdvancePhase && !actionLocked
+        approvePhaseButton.isEnabled = isPhase && availability.canApprovePhase && !actionLocked
+        rejectPhaseButton.isEnabled = isPhase && availability.canRejectPhase && !actionLocked
+        generateTasksButton.isEnabled = isPhase && availability.canGenerateTasks && !actionLocked
+        setModeButton.isEnabled = isTask && availability.canSetMode && !actionLocked
+        launchButton.isEnabled = isTask && availability.canLaunch && !actionLocked
+        previewDiffButton.isEnabled = isTask && availability.canPreviewDiff && !actionLocked
+        applyPatchButton.isEnabled = isTask && availability.canApplyPatch && !actionLocked
+        openChangedFileButton.isEnabled = isTask && availability.canOpenChangedFile && !actionLocked
+        openEvidenceButton.isEnabled = isTask && availability.canOpenEvidence && !actionLocked
 
         val approvalSummary = WorkbenchStateMapper.buildApprovalSummary(currentApprovals, selectedStep?.taskId)
         val selectedApprovalForTask = approvalSummary.selectedTaskApproval
