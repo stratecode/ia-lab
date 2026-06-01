@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.2.7"
+version = "0.2.8"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Fixed diagnostics updates crossing threads, reduced risk of IDE freezes, and kept freshly created goals stable during backend consistency lag.
+        Added explicit operation and waiting states, improved approval visibility, and reduced ambiguity after goal or phase actions.
         """.trimIndent()
     )
 }

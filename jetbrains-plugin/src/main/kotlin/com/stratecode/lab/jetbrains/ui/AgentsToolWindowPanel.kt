@@ -849,6 +849,7 @@ class AgentsToolWindowPanel(
                     bridgeName = settings.currentState.bridgeName,
                 )
                 SwingUtilities.invokeLater {
+                    clearOperationStatus()
                     initiativeDetailCache[initiativeId] = bundle.detail
                     initiativeTaskCache[initiativeId] = bundle.tasks
                     initiativeArtifactCache[initiativeId] = bundle.artifacts
@@ -862,6 +863,7 @@ class AgentsToolWindowPanel(
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
+                    clearOperationStatus()
                     loadingInitiativeDetailId = null
                     handleFailure("Initiative detail failed", error.message ?: error.toString(), notifyUser = false)
                     clearPlanState("Failed to load initiative detail:\n${error.message ?: error}")
@@ -939,6 +941,7 @@ class AgentsToolWindowPanel(
             return
         }
         loadingTaskId = taskId
+        setOperationStatus("Loading task detail…")
         overviewArea.text = "Loading step detail…"
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
@@ -950,6 +953,7 @@ class AgentsToolWindowPanel(
                 TaskExecutionBundle(task, sources, patch, evidence)
             }.onSuccess { bundle ->
                 SwingUtilities.invokeLater {
+                    clearOperationStatus()
                     loadingTaskId = null
                     selectedTaskDetail = bundle.task
                     selectedTaskPatchView = bundle.patchView
@@ -964,6 +968,7 @@ class AgentsToolWindowPanel(
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
+                    clearOperationStatus()
                     loadingTaskId = null
                     selectedTaskDetail = null
                     selectedTaskPatchView = null
@@ -1228,7 +1233,31 @@ class AgentsToolWindowPanel(
             <b>Local state:</b> ${escapeHtml(state.metadataSummary)}
             </html>
         """.trimIndent()
-        operationLabel.text = currentOperationStatus ?: "Idle"
+        operationLabel.text = currentOperationStatus ?: derivePassiveOperationStatus()
+    }
+
+    private fun derivePassiveOperationStatus(): String {
+        if (loadingInitiativeDetailId != null) {
+            return "Loading initiative detail…"
+        }
+        if (loadingTaskId != null) {
+            return "Loading task detail…"
+        }
+        val selectedTaskApproval = selectedStep?.taskId?.let { taskId ->
+            currentApprovals.firstOrNull { it.taskId == taskId }
+        }
+        if (selectedTaskApproval != null) {
+            return "Waiting for approval: ${selectedTaskApproval.actionType}"
+        }
+        val detail = selectedDetailOrNull()
+        if (detail != null && detail.initiative.status.endsWith("_review")) {
+            return "Waiting for phase review approval."
+        }
+        val taskState = selectedTaskDetail?.state?.lowercase().orEmpty()
+        if (taskState in setOf("running", "executing", "in_progress", "working")) {
+            return "Task running on the current bridge."
+        }
+        return "Idle"
     }
 
     private fun createInitiative() {
@@ -1279,7 +1308,6 @@ class AgentsToolWindowPanel(
                     bridgeName = settings.currentState.bridgeName,
                 )
                 SwingUtilities.invokeLater {
-                    clearOperationStatus()
                     createInitiativeButton.isEnabled = true
                     recordDiagnostic("info", "Goal created", "${it.title} (${it.id})")
                     notify("Goal created", "${it.title} (${it.id})", NotificationType.INFORMATION)
@@ -1287,8 +1315,8 @@ class AgentsToolWindowPanel(
                     selectedInitiative = it
                     refreshInitiativeSelector(it.id)
                     clearPlanState("Goal created.\n\nLoading initiative detail from the server…")
+                    setOperationStatus("Goal created. Waiting for initiative detail…")
                     loadInitiativeDetail(it.id)
-                    loadStatus()
                     loadInitiatives(selectInitiativeId = it.id)
                     loadApprovals()
                 }
@@ -1454,12 +1482,14 @@ class AgentsToolWindowPanel(
             notify("Approval blocked", "Configure an API key first.", NotificationType.WARNING)
             return
         }
+        setOperationStatus(if (approve) "Approving pending action…" else "Rejecting pending action…")
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
                 val client = buildClient(settings.currentState.baseUrl, apiKey)
                 if (approve) client.approveApproval(approval.id, "jetbrains-plugin") else client.rejectApproval(approval.id, "jetbrains-plugin")
             }.onSuccess {
                 SwingUtilities.invokeLater {
+                    setOperationStatus("Approval resolved. Refreshing goal state…")
                     recordDiagnostic("info", if (approve) "Approval granted" else "Approval rejected", approval.id)
                     notify(if (approve) "Approval granted" else "Approval rejected", approval.id, NotificationType.INFORMATION)
                     loadApprovals()
@@ -1467,6 +1497,7 @@ class AgentsToolWindowPanel(
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
+                    clearOperationStatus()
                     handleFailure("Approval resolution failed", error.message ?: error.toString())
                 }
             }
@@ -1603,11 +1634,13 @@ class AgentsToolWindowPanel(
             notify("Action blocked", "Configure an API key first.", NotificationType.WARNING)
             return
         }
+        setOperationStatus("$successTitle…")
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
                 action(buildClient(settings.currentState.baseUrl, apiKey))
             }.onSuccess {
                 SwingUtilities.invokeLater {
+                    setOperationStatus("$successTitle. Refreshing goal state…")
                     recordDiagnostic("info", successTitle, selected.title)
                     notify(successTitle, selected.title, NotificationType.INFORMATION)
                     loadInitiatives(selectInitiativeId = selected.id)
@@ -1616,6 +1649,7 @@ class AgentsToolWindowPanel(
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
+                    clearOperationStatus()
                     handleFailure("Initiative action failed", error.message ?: error.toString())
                 }
             }
