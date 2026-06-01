@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.2.0"
+version = "0.2.1"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Improved bridge recovery UX with repairing state, retryable auto-registration, HTTP tracing, and clearer diagnostics around goal creation and backend connectivity.
+        Improved startup status signaling with loading/repairing bridge badges, plus retryable auto-registration, HTTP tracing, and clearer diagnostics around goal creation and backend connectivity.
         """.trimIndent()
     )
 }

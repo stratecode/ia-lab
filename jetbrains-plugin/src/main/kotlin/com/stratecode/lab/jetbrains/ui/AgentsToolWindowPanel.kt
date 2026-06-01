@@ -1165,13 +1165,22 @@ class AgentsToolWindowPanel(
 
     private fun applyHeaderState(state: HeaderStatusViewState) {
         projectBadge.text = "Project  ${state.projectName}"
-        backendBadge.text = "Backend  ${state.backendLabel}"
         approvalsBadge.text = "Approvals  ${state.approvalsLabel}"
         setBadgeTone(projectBadge, if (state.degraded) StatusTone.WARNING else StatusTone.NEUTRAL)
-        setBadgeTone(backendBadge, state.backendTone)
         setBadgeTone(approvalsBadge, state.approvalsTone)
+        val refreshingStatus = currentOperationStatus?.startsWith("Refreshing workspace status") == true
+        if (refreshingStatus && backendReady == null) {
+            backendBadge.text = "Backend  loading"
+            setBadgeTone(backendBadge, StatusTone.NEUTRAL)
+        } else {
+            backendBadge.text = "Backend  ${state.backendLabel}"
+            setBadgeTone(backendBadge, state.backendTone)
+        }
         if (currentOperationStatus?.startsWith("Auto-registering bridge") == true) {
             bridgeBadge.text = "Bridge  repairing"
+            setBadgeTone(bridgeBadge, StatusTone.NEUTRAL)
+        } else if (refreshingStatus && currentBridgeResolution == null) {
+            bridgeBadge.text = "Bridge  loading"
             setBadgeTone(bridgeBadge, StatusTone.NEUTRAL)
         } else {
             bridgeBadge.text = "Bridge  ${state.bridgeLabel}"
