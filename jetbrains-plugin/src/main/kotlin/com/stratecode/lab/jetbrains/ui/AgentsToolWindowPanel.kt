@@ -616,6 +616,7 @@ class AgentsToolWindowPanel(
 
     private fun updateActionState() {
         val detail = selectedDetailOrNull()
+        val actionLocked = currentOperationStatus != null
         val availability = WorkbenchStateMapper.buildTaskActionAvailability(
             selectedStep = selectedStep,
             patchView = selectedTaskPatchView,
@@ -638,16 +639,16 @@ class AgentsToolWindowPanel(
         openChangedFileButton.isVisible = isTask
         openEvidenceButton.isVisible = isTask
 
-        advanceButton.isEnabled = availability.canAdvancePhase
-        approvePhaseButton.isEnabled = availability.canApprovePhase
-        rejectPhaseButton.isEnabled = availability.canRejectPhase
-        generateTasksButton.isEnabled = availability.canGenerateTasks
-        setModeButton.isEnabled = availability.canSetMode
-        launchButton.isEnabled = availability.canLaunch
-        previewDiffButton.isEnabled = availability.canPreviewDiff
-        applyPatchButton.isEnabled = availability.canApplyPatch
-        openChangedFileButton.isEnabled = availability.canOpenChangedFile
-        openEvidenceButton.isEnabled = availability.canOpenEvidence
+        advanceButton.isEnabled = availability.canAdvancePhase && !actionLocked
+        approvePhaseButton.isEnabled = availability.canApprovePhase && !actionLocked
+        rejectPhaseButton.isEnabled = availability.canRejectPhase && !actionLocked
+        generateTasksButton.isEnabled = availability.canGenerateTasks && !actionLocked
+        setModeButton.isEnabled = availability.canSetMode && !actionLocked
+        launchButton.isEnabled = availability.canLaunch && !actionLocked
+        previewDiffButton.isEnabled = availability.canPreviewDiff && !actionLocked
+        applyPatchButton.isEnabled = availability.canApplyPatch && !actionLocked
+        openChangedFileButton.isEnabled = availability.canOpenChangedFile && !actionLocked
+        openEvidenceButton.isEnabled = availability.canOpenEvidence && !actionLocked
 
         val approvalSummary = WorkbenchStateMapper.buildApprovalSummary(currentApprovals, selectedStep?.taskId)
         val selectedApprovalForTask = approvalSummary.selectedTaskApproval
@@ -663,6 +664,8 @@ class AgentsToolWindowPanel(
         approvalCalloutLabel.text = taskCallout ?: phaseCallout.orEmpty()
         approveInlineButton.isVisible = taskCallout != null
         rejectInlineButton.isVisible = taskCallout != null
+        approveInlineButton.isEnabled = taskCallout != null && !actionLocked
+        rejectInlineButton.isEnabled = taskCallout != null && !actionLocked
         stepMetaLabel.toolTipText = availability.blockingReason
     }
 

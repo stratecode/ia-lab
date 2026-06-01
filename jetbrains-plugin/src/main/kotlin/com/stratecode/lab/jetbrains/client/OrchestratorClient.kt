@@ -297,6 +297,7 @@ class OrchestratorClient(
     companion object {
         private val connectTimeout: Duration = Duration.ofSeconds(5)
         private val requestTimeout: Duration = Duration.ofSeconds(20)
+        private val longRunningRequestTimeout: Duration = Duration.ofSeconds(120)
     }
 
     private val json = Json {
@@ -393,6 +394,7 @@ class OrchestratorClient(
         val response = post<InitiativeActionRequest, JsonElement>(
             "/initiatives/$initiativeId/advance",
             InitiativeActionRequest(feedback = feedback),
+            longRunningRequestTimeout,
         )
         return decodeInitiativeRecord(response)
     }
@@ -410,7 +412,7 @@ class OrchestratorClient(
         )
 
     fun generateInitiativeTasks(initiativeId: String, feedback: String = ""): InitiativeGenerateTasksResponse =
-        post("/initiatives/$initiativeId/tasks/generate", InitiativeActionRequest(feedback = feedback))
+        post("/initiatives/$initiativeId/tasks/generate", InitiativeActionRequest(feedback = feedback), longRunningRequestTimeout)
 
     fun launchInitiativeTasks(
         initiativeId: String,
@@ -456,9 +458,13 @@ class OrchestratorClient(
         return send(request)
     }
 
-    private inline fun <reified Req, reified Res> post(path: String, body: Req): Res {
+    private inline fun <reified Req, reified Res> post(
+        path: String,
+        body: Req,
+        timeout: Duration = requestTimeout,
+    ): Res {
         val request = HttpRequest.newBuilder(buildUri(path))
-            .timeout(requestTimeout)
+            .timeout(timeout)
             .header("Authorization", "Bearer $apiKey")
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")

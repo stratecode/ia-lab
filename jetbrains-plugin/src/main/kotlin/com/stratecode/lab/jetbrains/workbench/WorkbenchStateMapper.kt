@@ -82,7 +82,7 @@ object WorkbenchStateMapper {
         when {
             operationStatus?.startsWith("Auto-registering bridge") == true ->
                 BadgeViewState("repairing", StatusTone.NEUTRAL)
-            operationStatus?.startsWith("Refreshing workspace status") == true && bridge == null ->
+            operationStatus?.startsWith("Refreshing workspace status") == true ->
                 BadgeViewState("loading", StatusTone.NEUTRAL)
             else ->
                 BadgeViewState(state.bridgeLabel, state.bridgeTone)

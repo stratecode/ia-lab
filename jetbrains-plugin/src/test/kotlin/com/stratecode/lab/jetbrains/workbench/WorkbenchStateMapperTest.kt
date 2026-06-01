@@ -193,6 +193,46 @@ class WorkbenchStateMapperTest {
         assertEquals(StatusTone.NEUTRAL, badge.tone)
     }
 
+    @Test
+    fun `bridge badge shows loading during refresh even with stale cached bridge`() {
+        val header = WorkbenchStateMapper.buildHeaderState(
+            context = ProjectContext(
+                projectName = "lab",
+                workspaceRoot = "/repo",
+                branch = "main",
+                repositoryUrl = null,
+                stableBridgeId = "bridge",
+                degraded = false,
+            ),
+            backendReady = true,
+            bridge = BridgeResolution(
+                matched = null,
+                status = "missing",
+                detail = "stale cached state",
+                consistency = BridgeConsistency.MISSING,
+                stale = true,
+                executable = false,
+            ),
+            approvalCount = 0,
+        )
+
+        val badge = WorkbenchStateMapper.buildBridgeBadgeState(
+            state = header,
+            bridge = BridgeResolution(
+                matched = null,
+                status = "missing",
+                detail = "stale cached state",
+                consistency = BridgeConsistency.MISSING,
+                stale = true,
+                executable = false,
+            ),
+            operationStatus = "Refreshing workspace status…",
+        )
+
+        assertEquals("loading", badge.label)
+        assertEquals(StatusTone.NEUTRAL, badge.tone)
+    }
+
     private fun initiativeDetail(
         status: String,
         currentPhase: String,
