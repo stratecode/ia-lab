@@ -24,6 +24,7 @@ import com.stratecode.lab.jetbrains.bridge.shouldAttemptAutoRegister
 import com.stratecode.lab.jetbrains.client.ApprovalRecord
 import com.stratecode.lab.jetbrains.client.InitiativeArtifactRecord
 import com.stratecode.lab.jetbrains.client.InitiativeDetailResponseRecord
+import com.stratecode.lab.jetbrains.client.InitiativeRecord
 import com.stratecode.lab.jetbrains.client.InitiativeSummary
 import com.stratecode.lab.jetbrains.client.InitiativeTaskLinkRecord
 import com.stratecode.lab.jetbrains.client.LocalBridgeResponse
@@ -819,6 +820,8 @@ class AgentsToolWindowPanel(
         if (target != null) {
             initiativeSelector.selectedItem = target
             selectedInitiative = currentInitiatives.firstOrNull { it.id == target.id }
+                ?: selectedInitiative?.takeIf { it.id == target.id }
+                ?: detailById[target.id]?.initiative?.toSummary()
         } else {
             selectedInitiative = null
         }
@@ -853,7 +856,9 @@ class AgentsToolWindowPanel(
                     initiativeDetailCache[initiativeId] = bundle.detail
                     initiativeTaskCache[initiativeId] = bundle.tasks
                     initiativeArtifactCache[initiativeId] = bundle.artifacts
-                    selectedInitiative = currentInitiatives.firstOrNull { it.id == initiativeId }
+                    val summary = bundle.detail.initiative.toSummary()
+                    currentInitiatives = (listOf(summary) + currentInitiatives.filterNot { it.id == initiativeId }).distinctBy { it.id }
+                    selectedInitiative = summary
                     refreshInitiativeSelector(initiativeId)
                     rebuildPlanList()
                     renderInitiativeSnapshot()
@@ -1675,6 +1680,16 @@ class AgentsToolWindowPanel(
 
     private fun selectedDetailOrNull(): InitiativeDetailResponseRecord? =
         selectedInitiative?.id?.let { initiativeDetailCache[it] }
+
+    private fun InitiativeRecord.toSummary(): InitiativeSummary =
+        InitiativeSummary(
+            id = id,
+            title = title,
+            status = status,
+            currentPhase = currentPhase,
+            workspaceRoot = workspaceRoot,
+            createdAt = createdAt,
+        )
 
     private fun renderTaskOverviewText(
         task: TaskDetailRecord,

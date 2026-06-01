@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.2.8"
+version = "0.2.9"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Added explicit operation and waiting states, improved approval visibility, and reduced ambiguity after goal or phase actions.
+        Fixed initiative selection loss after detail loads, improved operation visibility, and reduced ambiguity after goal creation or approvals.
         """.trimIndent()
     )
 }
