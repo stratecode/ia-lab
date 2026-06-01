@@ -3,7 +3,12 @@ package com.stratecode.lab.jetbrains.ui
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.PathManager
+import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.JBSplitter
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
@@ -46,6 +51,11 @@ import java.awt.Color
 import java.awt.Dimension
 import java.awt.FlowLayout
 import java.awt.Font
+import java.io.File
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.ArrayDeque
 import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.BoxLayout
@@ -72,6 +82,12 @@ class AgentsToolWindowPanel(
         BRIDGE,
         CAPABILITIES,
         INITIATIVE,
+        LOGS,
+    }
+
+    companion object {
+        private val LOG = Logger.getInstance(AgentsToolWindowPanel::class.java)
+        private val logTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault())
     }
 
     private val titleLabel = JLabel("StrateCode Plan")
@@ -89,6 +105,7 @@ class AgentsToolWindowPanel(
     private val bridgeDrawerButton = JButton("Bridge")
     private val capabilitiesDrawerButton = JButton("Capabilities")
     private val initiativeDrawerButton = JButton("Raw Initiative")
+    private val logsDrawerButton = JButton("Logs")
 
     private val initiativeSelectorModel = DefaultComboBoxModel<InitiativeWorkbenchItem>()
     private val initiativeSelector = JComboBox(initiativeSelectorModel).apply {
@@ -166,7 +183,10 @@ class AgentsToolWindowPanel(
 
     private val capabilitiesArea = infoArea(16)
     private val initiativeInfoArea = infoArea(16)
+    private val diagnosticsArea = infoArea(14)
     private val refreshInitiativeButton = JButton("Refresh Goal")
+    private val openIdeLogButton = JButton("Open idea.log")
+    private val refreshLogsButton = JButton("Refresh Logs")
 
     private var drawerMode: DrawerMode = DrawerMode.NONE
     private var backendReady: Boolean? = null
@@ -191,6 +211,8 @@ class AgentsToolWindowPanel(
     private var selectedArtifact: InitiativeArtifactRecord? = null
     private var selectedApproval: ApprovalRecord? = null
     private var selectedEvidenceLocation: EvidenceLocation? = null
+    private val recentDiagnostics: ArrayDeque<String> = ArrayDeque()
+    private val autoRegisterAttempts: MutableSet<String> = linkedSetOf()
     private var suppressInitiativeSelectionEvents: Boolean = false
     private var suppressPlanSelectionEvents: Boolean = false
     private var loadingInitiativeDetailId: String? = null
@@ -227,6 +249,7 @@ class AgentsToolWindowPanel(
             add(bridgeDrawerButton)
             add(capabilitiesDrawerButton)
             add(initiativeDrawerButton)
+            add(logsDrawerButton)
         }
         val badges = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
             isOpaque = false
@@ -388,6 +411,7 @@ class AgentsToolWindowPanel(
         drawerCards.add(buildBridgeDrawer(), DrawerMode.BRIDGE.name)
         drawerCards.add(buildCapabilitiesDrawer(), DrawerMode.CAPABILITIES.name)
         drawerCards.add(buildInitiativeDrawer(), DrawerMode.INITIATIVE.name)
+        drawerCards.add(buildLogsDrawer(), DrawerMode.LOGS.name)
         drawerWrapper.border = BorderFactory.createCompoundBorder(
             BorderFactory.createMatteBorder(1, 0, 0, 0, Color(0xD8DEE9)),
             JBUI.Borders.emptyTop(8),
@@ -465,6 +489,19 @@ class AgentsToolWindowPanel(
             )
         }
 
+    private fun buildLogsDrawer(): JComponent =
+        JPanel(BorderLayout()).apply {
+            add(section("Plugin Diagnostics", JBScrollPane(diagnosticsArea)), BorderLayout.CENTER)
+            add(
+                JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+                    isOpaque = false
+                    add(refreshLogsButton)
+                    add(openIdeLogButton)
+                },
+                BorderLayout.SOUTH,
+            )
+        }
+
     private fun bindActions() {
         refreshButton.addActionListener {
             loadStatus()
@@ -477,6 +514,7 @@ class AgentsToolWindowPanel(
         bridgeDrawerButton.addActionListener { showDrawer(DrawerMode.BRIDGE) }
         capabilitiesDrawerButton.addActionListener { showDrawer(DrawerMode.CAPABILITIES) }
         initiativeDrawerButton.addActionListener { showDrawer(DrawerMode.INITIATIVE) }
+        logsDrawerButton.addActionListener { showDrawer(DrawerMode.LOGS) }
         closeDrawerButton.addActionListener { showDrawer(DrawerMode.NONE) }
         initiativeSelector.addActionListener {
             if (suppressInitiativeSelectionEvents) {
@@ -521,6 +559,8 @@ class AgentsToolWindowPanel(
         registerBridgeButton.addActionListener { registerBridge() }
         bridgeSmokeButton.addActionListener { runBridgeSmoke() }
         refreshInitiativeButton.addActionListener { selectedInitiative?.let { loadInitiativeDetail(it.id) } }
+        refreshLogsButton.addActionListener { diagnosticsArea.text = renderDiagnostics() }
+        openIdeLogButton.addActionListener { openIdeLog() }
         advanceButton.addActionListener { advanceSelectedInitiative() }
         approvePhaseButton.addActionListener { resolveSelectedInitiative(true) }
         rejectPhaseButton.addActionListener { resolveSelectedInitiative(false) }
@@ -548,6 +588,7 @@ class AgentsToolWindowPanel(
             DrawerMode.BRIDGE -> "Bridge"
             DrawerMode.CAPABILITIES -> "Capabilities"
             DrawerMode.INITIATIVE -> "Raw Initiative"
+            DrawerMode.LOGS -> "Logs"
             DrawerMode.NONE -> "Support Panel"
         }
         (drawerCards.layout as CardLayout).show(drawerCards, mode.name)
@@ -619,6 +660,7 @@ class AgentsToolWindowPanel(
             capabilitiesArea.text = "Configure the API key in Settings > StrateCode Agents."
             bridgeSummaryArea.text = "Configure the API key first. No bridge checks can run without it."
             bridgeCandidatesArea.text = ""
+            recordDiagnostic("warning", "Missing API key", "Configure StrateCode Agents settings first.")
             refreshHeader()
             updateActionState()
             return
@@ -646,6 +688,7 @@ class AgentsToolWindowPanel(
                     capabilitiesArea.text = bundle.capabilitiesText
                     bridgeSummaryArea.text = renderBridgeSummary(context, bundle.bridgeResolution)
                     bridgeCandidatesArea.text = renderBridgeCandidates(context.workspaceRoot, bundle.bridges)
+                    maybeAutoRegisterBridge(context, bundle.bridgeResolution)
                     refreshHeader()
                     updateActionState()
                 }
@@ -657,6 +700,7 @@ class AgentsToolWindowPanel(
                     capabilitiesArea.text = error.message ?: error.toString()
                     bridgeSummaryArea.text = error.message ?: error.toString()
                     bridgeCandidatesArea.text = ""
+                    recordDiagnostic("error", "Status refresh failed", error.message ?: error.toString())
                     refreshHeader()
                     updateActionState()
                     notify("Status refresh failed", error.message ?: error.toString(), NotificationType.ERROR)
@@ -699,6 +743,7 @@ class AgentsToolWindowPanel(
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
                     currentInitiatives = emptyList()
+                    recordDiagnostic("error", "Initiative list failed", error.message ?: error.toString())
                     clearPlanState(error.message ?: error.toString())
                 }
             }
@@ -764,6 +809,7 @@ class AgentsToolWindowPanel(
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
                     loadingInitiativeDetailId = null
+                    recordDiagnostic("error", "Initiative detail failed", error.message ?: error.toString())
                     clearPlanState("Failed to load initiative detail:\n${error.message ?: error}")
                 }
             }
@@ -869,6 +915,7 @@ class AgentsToolWindowPanel(
                     selectedTaskPatchView = null
                     selectedTaskEvidence = null
                     selectedTaskSourceArtifacts = emptyList()
+                    recordDiagnostic("error", "Task detail failed", error.message ?: error.toString())
                     renderErrorDetail("Step detail failed", error.message ?: error.toString())
                     updateActionState()
                 }
@@ -1151,6 +1198,7 @@ class AgentsToolWindowPanel(
                     bridgeName = settings.currentState.bridgeName,
                 )
                 SwingUtilities.invokeLater {
+                    recordDiagnostic("info", "Goal created", "${it.title} (${it.id})")
                     notify("Goal created", "${it.title} (${it.id})", NotificationType.INFORMATION)
                     loadStatus()
                     loadInitiatives(selectInitiativeId = it.id)
@@ -1158,6 +1206,7 @@ class AgentsToolWindowPanel(
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
+                    recordDiagnostic("error", "Goal creation failed", error.message ?: error.toString())
                     notify("Goal creation failed", error.message ?: error.toString(), NotificationType.ERROR)
                 }
             }
@@ -1178,11 +1227,13 @@ class AgentsToolWindowPanel(
             }.onSuccess {
                 StrateCodeProjectStore.write(context, bridgeName = settings.currentState.bridgeName)
                 SwingUtilities.invokeLater {
+                    recordDiagnostic("info", "Bridge registered", "Bridge ${it.name} bound to ${it.workspaceRoot}.")
                     notify("Bridge registered", "Bridge ${it.name} is now bound to ${it.workspaceRoot}.", NotificationType.INFORMATION)
                     loadStatus()
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
+                    recordDiagnostic("error", "Bridge registration failed", error.message ?: error.toString())
                     notify("Bridge registration failed", error.message ?: error.toString(), NotificationType.ERROR)
                 }
             }
@@ -1220,6 +1271,8 @@ class AgentsToolWindowPanel(
         selectedApproval = null
         selectedEvidenceLocation = null
         currentProjectContext = ProjectContextResolver.resolve(project)
+        autoRegisterAttempts.removeIf { it.startsWith("${context.workspaceRoot}|") }
+        recordDiagnostic("info", "Local state reset", "Workspace metadata cleared for ${context.workspaceRoot}.")
         refreshHeader()
         clearPlanState("Local workspace state reset.\n\nCreate a new goal to repopulate this workspace.")
         notify("Local state reset", "The workspace metadata has been cleared.", NotificationType.INFORMATION)
@@ -1235,8 +1288,10 @@ class AgentsToolWindowPanel(
         }
         val problem = resolution.executionBlockReason()
         if (problem == null) {
+            recordDiagnostic("info", "Bridge smoke passed", "Bridge ${resolution.matched?.name ?: "-"} is executable.")
             notify("Bridge smoke passed", "Bridge ${resolution.matched?.name ?: "-"} is executable for ${context.workspaceRoot}.", NotificationType.INFORMATION)
         } else {
+            recordDiagnostic("warning", "Bridge smoke failed", problem)
             notify("Bridge smoke failed", problem, NotificationType.WARNING)
         }
     }
@@ -1279,6 +1334,7 @@ class AgentsToolWindowPanel(
                     approvalsModel.clear()
                     currentApprovals = emptyList()
                     selectedApproval = null
+                    recordDiagnostic("error", "Approvals refresh failed", error.message ?: error.toString())
                     refreshHeader()
                     updateActionState()
                 }
@@ -1310,12 +1366,14 @@ class AgentsToolWindowPanel(
                 if (approve) client.approveApproval(approval.id, "jetbrains-plugin") else client.rejectApproval(approval.id, "jetbrains-plugin")
             }.onSuccess {
                 SwingUtilities.invokeLater {
+                    recordDiagnostic("info", if (approve) "Approval granted" else "Approval rejected", approval.id)
                     notify(if (approve) "Approval granted" else "Approval rejected", approval.id, NotificationType.INFORMATION)
                     loadApprovals()
                     selectedInitiative?.let { loadInitiativeDetail(it.id) }
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
+                    recordDiagnostic("error", "Approval resolution failed", error.message ?: error.toString())
                     notify("Approval resolution failed", error.message ?: error.toString(), NotificationType.ERROR)
                 }
             }
@@ -1457,6 +1515,7 @@ class AgentsToolWindowPanel(
                 action(OrchestratorClient(settings.currentState.baseUrl, apiKey))
             }.onSuccess {
                 SwingUtilities.invokeLater {
+                    recordDiagnostic("info", successTitle, selected.title)
                     notify(successTitle, selected.title, NotificationType.INFORMATION)
                     loadInitiatives(selectInitiativeId = selected.id)
                     loadInitiativeDetail(selected.id)
@@ -1464,6 +1523,7 @@ class AgentsToolWindowPanel(
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
+                    recordDiagnostic("error", "Initiative action failed", error.message ?: error.toString())
                     notify("Initiative action failed", error.message ?: error.toString(), NotificationType.ERROR)
                 }
             }
@@ -1782,6 +1842,84 @@ class AgentsToolWindowPanel(
             .getNotificationGroup("StrateCode Agents")
             .createNotification(title, message, type)
             .notify(project)
+    }
+
+    private fun maybeAutoRegisterBridge(context: ProjectContext, resolution: BridgeResolution) {
+        if (resolution.matched != null || context.workspaceRoot.isBlank()) {
+            return
+        }
+        val attemptKey = "${context.workspaceRoot}|${settings().currentState.bridgeName}"
+        if (!autoRegisterAttempts.add(attemptKey)) {
+            return
+        }
+        recordDiagnostic("info", "Auto-registering bridge", "No bridge was registered for this workspace. Attempting automatic registration.")
+        val settings = settings()
+        val apiKey = settings.getApiKey()
+        if (apiKey.isBlank()) {
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                OrchestratorClient(settings.currentState.baseUrl, apiKey).registerBridge(context, settings.currentState.bridgeName)
+            }.onSuccess {
+                SwingUtilities.invokeLater {
+                    recordDiagnostic("info", "Auto-register succeeded", "Bridge ${it.name} bound to ${it.workspaceRoot}.")
+                    loadStatus()
+                }
+            }.onFailure { error ->
+                SwingUtilities.invokeLater {
+                    recordDiagnostic("error", "Auto-register failed", error.message ?: error.toString())
+                }
+            }
+        }
+    }
+
+    private fun recordDiagnostic(level: String, title: String, message: String) {
+        val line = "[${logTimeFormatter.format(Instant.now())}] ${level.uppercase()}  $title\n$message"
+        while (recentDiagnostics.size >= 50) {
+            recentDiagnostics.removeFirst()
+        }
+        recentDiagnostics.addLast(line)
+        diagnosticsArea.text = renderDiagnostics()
+        when (level.lowercase()) {
+            "error" -> LOG.warn("$title: $message")
+            "warning" -> LOG.warn("$title: $message")
+            else -> LOG.info("$title: $message")
+        }
+    }
+
+    private fun renderDiagnostics(): String =
+        buildString {
+            appendLine("IDE log")
+            appendLine("=======")
+            appendLine(File(PathManager.getLogPath(), "idea.log").absolutePath)
+            appendLine()
+            appendLine("Recent plugin events")
+            appendLine("====================")
+            if (recentDiagnostics.isEmpty()) {
+                appendLine("No diagnostics recorded yet.")
+            } else {
+                recentDiagnostics.forEach {
+                    appendLine(it)
+                    appendLine()
+                }
+            }
+        }.trim()
+
+    private fun openIdeLog() {
+        val logFile = File(PathManager.getLogPath(), "idea.log")
+        if (!logFile.isFile) {
+            recordDiagnostic("warning", "IDE log missing", logFile.absolutePath)
+            notify("IDE log missing", logFile.absolutePath, NotificationType.WARNING)
+            return
+        }
+        val virtualFile = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(logFile)
+        if (virtualFile == null) {
+            recordDiagnostic("warning", "IDE log unresolved", logFile.absolutePath)
+            notify("IDE log unresolved", logFile.absolutePath, NotificationType.WARNING)
+            return
+        }
+        FileEditorManager.getInstance(project).openEditor(OpenFileDescriptor(project, virtualFile), true)
     }
 
     private fun settings(): PluginSettingsService =
