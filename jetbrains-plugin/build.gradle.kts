@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.stratecode.lab"
-version = "0.1.5"
+version = "0.1.6"
 
 repositories {
     mavenCentral()
@@ -37,7 +37,7 @@ tasks.patchPluginXml {
     )
     changeNotes.set(
         """
-        Added visible operation status, automatic logs drawer on failures, and better bridge freshness detection after registration.
+        Added visible operation status, automatic logs drawer on failures, and bridge auto-repair for stale workspace matches.
         """.trimIndent()
     )
 }

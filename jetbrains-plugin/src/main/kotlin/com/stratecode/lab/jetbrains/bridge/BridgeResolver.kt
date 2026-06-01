@@ -97,3 +97,11 @@ fun BridgeResolution.executionBlockReason(): String? {
         else -> "The matched bridge status is '${matched.status}', not executable."
     }
 }
+
+fun BridgeResolution.shouldAttemptAutoRegister(): Boolean =
+    when {
+        matched == null -> true
+        consistency == BridgeConsistency.MISMATCH -> false
+        executable -> false
+        else -> true
+    }

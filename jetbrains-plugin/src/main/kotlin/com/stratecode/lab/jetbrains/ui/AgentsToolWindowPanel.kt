@@ -19,6 +19,7 @@ import com.intellij.util.ui.JBUI
 import com.stratecode.lab.jetbrains.bridge.BridgeResolution
 import com.stratecode.lab.jetbrains.bridge.BridgeResolver
 import com.stratecode.lab.jetbrains.bridge.executionBlockReason
+import com.stratecode.lab.jetbrains.bridge.shouldAttemptAutoRegister
 import com.stratecode.lab.jetbrains.client.ApprovalRecord
 import com.stratecode.lab.jetbrains.client.InitiativeArtifactRecord
 import com.stratecode.lab.jetbrains.client.InitiativeDetailResponseRecord
@@ -1918,14 +1919,15 @@ class AgentsToolWindowPanel(
     }
 
     private fun maybeAutoRegisterBridge(context: ProjectContext, resolution: BridgeResolution) {
-        if (resolution.matched != null || context.workspaceRoot.isBlank()) {
+        if (context.workspaceRoot.isBlank() || !resolution.shouldAttemptAutoRegister()) {
             return
         }
         val attemptKey = "${context.workspaceRoot}|${settings().currentState.bridgeName}"
         if (!autoRegisterAttempts.add(attemptKey)) {
             return
         }
-        recordDiagnostic("info", "Auto-registering bridge", "No bridge was registered for this workspace. Attempting automatic registration.")
+        val reason = resolution.executionBlockReason() ?: "No bridge was registered for this workspace."
+        recordDiagnostic("info", "Auto-registering bridge", "$reason Attempting automatic registration.")
         val settings = settings()
         val apiKey = settings.getApiKey()
         if (apiKey.isBlank()) {

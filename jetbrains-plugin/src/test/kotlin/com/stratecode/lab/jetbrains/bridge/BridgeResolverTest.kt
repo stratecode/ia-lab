@@ -105,4 +105,36 @@ class BridgeResolverTest {
         assertTrue(resolution.executable)
         assertFalse(resolution.stale)
     }
+
+    @Test
+    fun `stale matching bridge should trigger auto register`() {
+        val bridge = LocalBridgeResponse(
+            id = "bridge-1",
+            name = "jetbrains-bridge",
+            hostname = "devbox",
+            workspaceRoot = "/repo",
+            status = "idle",
+            lastHeartbeat = Instant.now().minusSeconds(600).toString(),
+        )
+
+        val resolution = BridgeResolver.resolve(listOf(bridge), "/repo", "jetbrains-bridge")
+
+        assertTrue(resolution.shouldAttemptAutoRegister())
+    }
+
+    @Test
+    fun `mismatched bridge should not trigger auto register`() {
+        val bridge = LocalBridgeResponse(
+            id = "bridge-1",
+            name = "jetbrains-bridge",
+            hostname = "devbox",
+            workspaceRoot = "/other-repo",
+            status = "active",
+            lastHeartbeat = Instant.now().minusSeconds(5).toString(),
+        )
+
+        val resolution = BridgeResolver.resolve(listOf(bridge), "/repo", "jetbrains-bridge")
+
+        assertFalse(resolution.shouldAttemptAutoRegister())
+    }
 }
