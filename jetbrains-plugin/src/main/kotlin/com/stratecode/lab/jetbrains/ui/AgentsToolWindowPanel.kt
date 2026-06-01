@@ -14,13 +14,13 @@ import com.intellij.util.ui.JBUI
 import com.stratecode.lab.jetbrains.bridge.BridgeResolution
 import com.stratecode.lab.jetbrains.bridge.BridgeResolver
 import com.stratecode.lab.jetbrains.bridge.executionBlockReason
+import com.stratecode.lab.jetbrains.client.ApprovalRecord
+import com.stratecode.lab.jetbrains.client.InitiativeArtifactRecord
 import com.stratecode.lab.jetbrains.client.InitiativeDetailResponseRecord
 import com.stratecode.lab.jetbrains.client.InitiativeSummary
-import com.stratecode.lab.jetbrains.client.InitiativeArtifactRecord
 import com.stratecode.lab.jetbrains.client.InitiativeTaskLinkRecord
 import com.stratecode.lab.jetbrains.client.LocalBridgeResponse
 import com.stratecode.lab.jetbrains.client.OrchestratorClient
-import com.stratecode.lab.jetbrains.client.ApprovalRecord
 import com.stratecode.lab.jetbrains.client.TaskDetailRecord
 import com.stratecode.lab.jetbrains.project.ProjectContext
 import com.stratecode.lab.jetbrains.project.ProjectContextResolver
@@ -30,7 +30,16 @@ import com.stratecode.lab.jetbrains.task.EvidenceExtractionResult
 import com.stratecode.lab.jetbrains.task.EvidenceLocation
 import com.stratecode.lab.jetbrains.task.TaskExecutionSupport
 import com.stratecode.lab.jetbrains.task.TaskResultPatchView
+import com.stratecode.lab.jetbrains.workbench.ApprovalSummaryViewState
+import com.stratecode.lab.jetbrains.workbench.HeaderStatusViewState
+import com.stratecode.lab.jetbrains.workbench.InitiativeWorkbenchItem
+import com.stratecode.lab.jetbrains.workbench.StatusTone
+import com.stratecode.lab.jetbrains.workbench.TaskActionAvailability
+import com.stratecode.lab.jetbrains.workbench.TaskDetailViewState
+import com.stratecode.lab.jetbrains.workbench.TaskWorkbenchItem
+import com.stratecode.lab.jetbrains.workbench.WorkbenchStateMapper
 import java.awt.BorderLayout
+import java.awt.CardLayout
 import java.awt.Color
 import java.awt.Dimension
 import java.awt.FlowLayout
@@ -39,115 +48,151 @@ import java.awt.GridLayout
 import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.BoxLayout
+import javax.swing.DefaultComboBoxModel
 import javax.swing.DefaultListCellRenderer
 import javax.swing.DefaultListModel
 import javax.swing.JButton
+import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JList
+import javax.swing.JOptionPane
 import javax.swing.JPanel
 import javax.swing.ListSelectionModel
-import javax.swing.JOptionPane
 import javax.swing.SwingConstants
 import javax.swing.SwingUtilities
 
 class AgentsToolWindowPanel(
     private val project: Project,
 ) : JPanel(BorderLayout()) {
-    private val headerTitle = JLabel("StrateCode Agents")
-    private val headerSubtitle = JLabel("Governed initiatives, scoped to the current repository.")
-
-    private val backendBadge = badge("Backend", "unknown", Color(0x5B6B7A))
-    private val bridgeBadge = badge("Bridge", "unresolved", Color(0x7A5B5B))
-    private val projectBadge = badge("Project", "unresolved", Color(0x5B6B7A))
-
-    private val projectSummaryLabel = htmlLabel("Project context not loaded yet.")
-    private val metadataSummaryLabel = htmlLabel("`.stratecode/project.json` not written yet.")
-    private val scopeSummaryLabel = htmlLabel("Initiatives will be scoped to the current workspace.")
-
-    private val capabilitiesArea = infoArea(12)
-    private val bridgeSummaryArea = infoArea(14)
-    private val bridgeCandidatesArea = infoArea(12)
-    private val initiativeSummaryArea = infoArea(15)
-    private val initiativeReviewsArea = infoArea(8)
-    private val tasksArea = infoArea(14)
-    private val evidenceArea = infoArea(16)
-    private val artifactsArea = infoArea(16)
-    private val approvalsArea = infoArea(14)
-    private val feedbackArea = JBTextArea(4, 60).apply {
-        lineWrap = true
-        wrapStyleWord = true
-        border = JBUI.Borders.empty(8)
+    private enum class DrawerMode {
+        NONE,
+        APPROVALS,
+        BRIDGE,
+        CAPABILITIES,
+        INITIATIVE,
     }
 
-    private val initiativesModel = DefaultListModel<InitiativeSummary>()
-    private val initiativesList = JBList(initiativesModel).apply {
-        selectionMode = ListSelectionModel.SINGLE_SELECTION
-        cellRenderer = InitiativeCellRenderer()
+    private val titleLabel = JLabel("StrateCode Workbench")
+    private val subtitleLabel = JLabel("Task-first console for governed initiative execution.")
+    private val projectBadge = badge("Project", "unresolved", StatusTone.NEUTRAL)
+    private val backendBadge = badge("Backend", "unknown", StatusTone.NEUTRAL)
+    private val bridgeBadge = badge("Bridge", "unresolved", StatusTone.NEUTRAL)
+    private val approvalsBadge = badge("Approvals", "0 pending", StatusTone.NEUTRAL)
+
+    private val refreshButton = JButton("Refresh")
+    private val createInitiativeButton = JButton("Create Initiative")
+    private val approvalsDrawerButton = JButton("Approvals")
+    private val bridgeDrawerButton = JButton("Bridge")
+    private val capabilitiesDrawerButton = JButton("Capabilities")
+    private val initiativeDrawerButton = JButton("Initiative Info")
+
+    private val initiativeSelectorModel = DefaultComboBoxModel<InitiativeWorkbenchItem>()
+    private val initiativeSelector = JComboBox(initiativeSelectorModel).apply {
+        renderer = InitiativeWorkbenchItemRenderer()
     }
-    private val taskLinksModel = DefaultListModel<InitiativeTaskLinkRecord>()
-    private val taskLinksList = JBList(taskLinksModel).apply {
+    private val statusFilterCombo = JComboBox(arrayOf("all", "pending", "running", "waiting_approval", "completed", "failed"))
+    private val agentFilterCombo = JComboBox(arrayOf("all", "planner", "researcher", "coder", "reviewer"))
+
+    private val taskModel = DefaultListModel<TaskWorkbenchItem>()
+    private val taskList = JBList(taskModel).apply {
         selectionMode = ListSelectionModel.MULTIPLE_INTERVAL_SELECTION
-        cellRenderer = InitiativeTaskCellRenderer()
+        cellRenderer = TaskWorkbenchItemCellRenderer()
     }
-    private val artifactsModel = DefaultListModel<InitiativeArtifactRecord>()
-    private val artifactsList = JBList(artifactsModel).apply {
-        selectionMode = ListSelectionModel.SINGLE_SELECTION
-        cellRenderer = InitiativeArtifactCellRenderer()
-    }
-    private val approvalsModel = DefaultListModel<ApprovalRecord>()
-    private val approvalsList = JBList(approvalsModel).apply {
-        selectionMode = ListSelectionModel.SINGLE_SELECTION
-        cellRenderer = ApprovalCellRenderer()
-    }
+
+    private val taskHeadlineLabel = JLabel("No task selected")
+    private val taskMetaLabel = JLabel("Pick a task from the backlog to inspect diff, evidence, and patch actions.")
+    private val taskBadgesLabel = JLabel("")
+
+    private val approvalCalloutPanel = JPanel(BorderLayout())
+    private val approvalCalloutLabel = JLabel("")
+    private val approveInlineButton = JButton("Approve")
+    private val rejectInlineButton = JButton("Reject")
+
+    private val setModeButton = JButton("Set Mode")
+    private val launchButton = JButton("Launch")
+    private val previewDiffButton = JButton("Preview Diff")
+    private val applyPatchButton = JButton("Apply Patch")
+    private val openChangedFileButton = JButton("Open Changed File")
+    private val openEvidenceButton = JButton("Open First Evidence")
+
+    private val summaryArea = infoArea(16)
+    private val diffArea = infoArea(18)
+    private val evidenceArea = infoArea(14)
+    private val artifactDetailArea = infoArea(14)
+
     private val evidenceModel = DefaultListModel<EvidenceLocation>()
     private val evidenceList = JBList(evidenceModel).apply {
         selectionMode = ListSelectionModel.SINGLE_SELECTION
         cellRenderer = EvidenceLocationCellRenderer()
     }
 
-    private val initiativeTitleField = JBTextField()
-    private val initiativeGoalArea = JBTextArea(6, 60).apply {
-        lineWrap = true
-        wrapStyleWord = true
-        border = JBUI.Borders.empty(8)
+    private val taskArtifactModel = DefaultListModel<InitiativeArtifactRecord>()
+    private val taskArtifactList = JBList(taskArtifactModel).apply {
+        selectionMode = ListSelectionModel.SINGLE_SELECTION
+        cellRenderer = InitiativeArtifactCellRenderer()
     }
 
-    private val advanceButton = JButton("Advance Draft")
-    private val approveButton = JButton("Approve Phase")
-    private val rejectButton = JButton("Reject Phase")
-    private val generateTasksButton = JButton("Generate Task Backlog")
-    private val refreshDetailButton = JButton("Refresh Detail")
-    private val setTaskModeButton = JButton("Set Task Mode")
-    private val launchTaskButton = JButton("Launch Selected Tasks")
-    private val previewDiffButton = JButton("Preview Diff")
-    private val applyPatchButton = JButton("Apply Patch")
-    private val openChangedFileButton = JButton("Open Changed File")
-    private val openEvidenceButton = JButton("Open First Evidence")
+    private val detailTabs = JBTabbedPane()
+
+    private val drawerTitleLabel = JLabel("Support Panel")
+    private val drawerWrapper = JPanel(BorderLayout())
+    private val drawerCards = JPanel(CardLayout())
+    private val closeDrawerButton = JButton("Hide")
+
+    private val approvalsModel = DefaultListModel<ApprovalRecord>()
+    private val approvalsList = JBList(approvalsModel).apply {
+        selectionMode = ListSelectionModel.SINGLE_SELECTION
+        cellRenderer = ApprovalCellRenderer()
+    }
+    private val approvalsArea = infoArea(12)
     private val refreshApprovalsButton = JButton("Refresh Approvals")
-    private val approveApprovalButton = JButton("Approve Approval")
-    private val rejectApprovalButton = JButton("Reject Approval")
+    private val approveApprovalButton = JButton("Approve")
+    private val rejectApprovalButton = JButton("Reject")
+
+    private val bridgeSummaryArea = infoArea(14)
+    private val bridgeCandidatesArea = infoArea(12)
     private val refreshBridgeButton = JButton("Refresh Bridge")
     private val registerBridgeButton = JButton("Register Bridge")
     private val bridgeSmokeButton = JButton("Bridge Smoke")
 
-    private var selectedInitiative: InitiativeSummary? = null
-    private var selectedDetail: InitiativeDetailResponseRecord? = null
-    private var selectedTaskLink: InitiativeTaskLinkRecord? = null
-    private var selectedTaskDetail: TaskDetailRecord? = null
-    private var selectedTaskPatchView: TaskResultPatchView? = null
-    private var selectedTaskEvidence: EvidenceExtractionResult? = null
-    private var selectedEvidenceLocation: EvidenceLocation? = null
-    private var selectedArtifact: InitiativeArtifactRecord? = null
-    private var selectedApproval: ApprovalRecord? = null
+    private val capabilitiesArea = infoArea(16)
+    private val initiativeInfoArea = infoArea(16)
+    private val refreshInitiativeButton = JButton("Refresh Initiative")
+    private val advanceButton = JButton("Advance Draft")
+    private val approvePhaseButton = JButton("Approve Phase")
+    private val rejectPhaseButton = JButton("Reject Phase")
+    private val generateTasksButton = JButton("Generate Tasks")
+
+    private var drawerMode: DrawerMode = DrawerMode.NONE
+    private var backendReady: Boolean? = null
     private var currentProjectContext: ProjectContext? = null
     private var currentBridgeResolution: BridgeResolution? = null
     private var currentBridges: List<LocalBridgeResponse> = emptyList()
+    private var currentApprovals: List<ApprovalRecord> = emptyList()
+    private var currentInitiatives: List<InitiativeSummary> = emptyList()
+    private val initiativeDetailCache = linkedMapOf<String, InitiativeDetailResponseRecord>()
+    private val initiativeTaskCache = linkedMapOf<String, List<InitiativeTaskLinkRecord>>()
+    private val initiativeArtifactCache = linkedMapOf<String, List<InitiativeArtifactRecord>>()
+    private val taskPatchCache = linkedMapOf<String, TaskResultPatchView?>()
+    private val taskEvidenceCache = linkedMapOf<String, EvidenceExtractionResult?>()
+    private val taskSourcesCache = linkedMapOf<String, List<InitiativeArtifactRecord>>()
+    private var selectedInitiative: InitiativeSummary? = null
+    private var selectedTaskDetail: TaskDetailRecord? = null
+    private var selectedTaskPatchView: TaskResultPatchView? = null
+    private var selectedTaskEvidence: EvidenceExtractionResult? = null
+    private var selectedTaskSourceArtifacts: List<InitiativeArtifactRecord> = emptyList()
+    private var selectedArtifact: InitiativeArtifactRecord? = null
+    private var selectedApproval: ApprovalRecord? = null
+    private var selectedEvidenceLocation: EvidenceLocation? = null
 
     init {
         border = JBUI.Borders.empty(12)
+        buildDetailTabs()
+        configureApprovalCallout()
+        configureDrawer()
         add(buildHeader(), BorderLayout.NORTH)
-        add(buildTabs(), BorderLayout.CENTER)
+        add(buildWorkbench(), BorderLayout.CENTER)
         bindActions()
         updateActionState()
         loadStatus()
@@ -156,101 +201,257 @@ class AgentsToolWindowPanel(
     }
 
     private fun buildHeader(): JComponent {
-        headerTitle.font = headerTitle.font.deriveFont(Font.BOLD, 20f)
-        headerSubtitle.foreground = Color(0x6B7280)
-
+        titleLabel.font = titleLabel.font.deriveFont(Font.BOLD, 20f)
+        subtitleLabel.foreground = Color(0x6B7280)
         val titleBlock = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             isOpaque = false
-            add(headerTitle)
+            add(titleLabel)
             add(Box.createVerticalStrut(4))
-            add(headerSubtitle)
+            add(subtitleLabel)
         }
-
         val badges = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
             isOpaque = false
             add(projectBadge)
             add(backendBadge)
             add(bridgeBadge)
+            add(approvalsBadge)
         }
-
+        val actions = JPanel(FlowLayout(FlowLayout.RIGHT, 8, 0)).apply {
+            isOpaque = false
+            add(refreshButton)
+            add(createInitiativeButton)
+            add(approvalsDrawerButton)
+            add(bridgeDrawerButton)
+            add(capabilitiesDrawerButton)
+            add(initiativeDrawerButton)
+        }
         return JPanel(BorderLayout()).apply {
             border = BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(Color(0xD8DEE9)),
                 JBUI.Borders.empty(14),
             )
-            add(titleBlock, BorderLayout.NORTH)
-            add(Box.createVerticalStrut(10), BorderLayout.CENTER)
-            add(badges, BorderLayout.SOUTH)
+            add(titleBlock, BorderLayout.WEST)
+            add(badges, BorderLayout.CENTER)
+            add(actions, BorderLayout.EAST)
         }
     }
 
-    private fun buildTabs(): JComponent =
-        JBTabbedPane().apply {
-            addTab("Overview", buildOverviewTab())
-            addTab("Initiatives", buildInitiativesTab())
-            addTab("Approvals", buildApprovalsTab())
-            addTab("Bridge", buildBridgeTab())
-        }
-
-    private fun buildOverviewTab(): JComponent {
-        val statusGrid = JPanel(GridLayout(3, 1, 0, 10)).apply {
-            add(section("Project Context", projectSummaryLabel))
-            add(section("Local Metadata", metadataSummaryLabel))
-            add(section("Scope", scopeSummaryLabel))
-        }
-
-        val actions = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
-            isOpaque = false
-            add(JButton("Refresh").apply { addActionListener { loadStatus() } })
-            add(JButton("Register Bridge").apply { addActionListener { registerBridge() } })
+    private fun buildWorkbench(): JComponent {
+        val leftControls = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            add(JLabel("Active Initiative"))
+            add(Box.createVerticalStrut(4))
+            add(initiativeSelector)
+            add(Box.createVerticalStrut(10))
+            add(JLabel("Task Filters"))
+            add(Box.createVerticalStrut(4))
+            add(JPanel(GridLayout(1, 2, 8, 0)).apply {
+                isOpaque = false
+                add(statusFilterCombo)
+                add(agentFilterCombo)
+            })
         }
 
         val left = JPanel(BorderLayout()).apply {
-            add(statusGrid, BorderLayout.CENTER)
-            add(actions, BorderLayout.SOUTH)
+            border = JBUI.Borders.emptyRight(8)
+            add(section("Work", leftControls), BorderLayout.NORTH)
+            add(section("Task Backlog", JBScrollPane(taskList)), BorderLayout.CENTER)
         }
 
-        val right = section("Effective Capabilities", JBScrollPane(capabilitiesArea))
-        right.preferredSize = Dimension(480, 420)
+        val detailHeader = JPanel(BorderLayout()).apply {
+            border = JBUI.Borders.empty(0, 0, 10, 0)
+            add(
+                JPanel().apply {
+                    layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                    isOpaque = false
+                    add(taskHeadlineLabel)
+                    add(Box.createVerticalStrut(4))
+                    add(taskMetaLabel)
+                    add(Box.createVerticalStrut(4))
+                    add(taskBadgesLabel)
+                },
+                BorderLayout.CENTER,
+            )
+        }
 
-        return JBSplitter(false, 0.42f).apply {
+        val actionBar = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+            isOpaque = false
+            add(setModeButton)
+            add(launchButton)
+            add(previewDiffButton)
+            add(applyPatchButton)
+            add(openChangedFileButton)
+            add(openEvidenceButton)
+        }
+
+        val detailTop = JPanel(BorderLayout()).apply {
+            add(detailHeader, BorderLayout.NORTH)
+            add(approvalCalloutPanel, BorderLayout.CENTER)
+            add(actionBar, BorderLayout.SOUTH)
+        }
+
+        val right = JPanel(BorderLayout()).apply {
+            add(detailTop, BorderLayout.NORTH)
+            add(detailTabs, BorderLayout.CENTER)
+            add(drawerWrapper, BorderLayout.SOUTH)
+        }
+
+        return JBSplitter(false, 0.30f).apply {
+            border = JBUI.Borders.emptyTop(12)
             firstComponent = left
             secondComponent = right
-            border = JBUI.Borders.emptyTop(12)
         }
     }
 
-    private fun buildInitiativesTab(): JComponent {
-        val form = JPanel().apply {
-            layout = BoxLayout(this, BoxLayout.Y_AXIS)
-            add(JLabel("Title"))
-            add(Box.createVerticalStrut(4))
-            add(initiativeTitleField)
-            add(Box.createVerticalStrut(8))
-            add(JLabel("Goal"))
-            add(Box.createVerticalStrut(4))
-            add(JBScrollPane(initiativeGoalArea))
+    private fun buildDetailTabs() {
+        detailTabs.addTab("Summary", section("Task / Initiative Summary", JBScrollPane(summaryArea)))
+        detailTabs.addTab("Diff", section("Diff Preview", JBScrollPane(diffArea)))
+        detailTabs.addTab(
+            "Evidence",
+            JBSplitter(false, 0.35f).apply {
+                firstComponent = section("Findings", JBScrollPane(evidenceList))
+                secondComponent = section("Evidence Detail", JBScrollPane(evidenceArea))
+            },
+        )
+        detailTabs.addTab(
+            "Artifacts",
+            JBSplitter(false, 0.34f).apply {
+                firstComponent = section("Task Artifacts", JBScrollPane(taskArtifactList))
+                secondComponent = section("Artifact Detail", JBScrollPane(artifactDetailArea))
+            },
+        )
+    }
+
+    private fun configureApprovalCallout() {
+        approvalCalloutPanel.isVisible = false
+        approvalCalloutPanel.border = BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(Color(0xE8B200)),
+            JBUI.Borders.empty(8),
+        )
+        approvalCalloutPanel.background = Color(0xFFF7DB)
+        approvalCalloutPanel.add(approvalCalloutLabel, BorderLayout.CENTER)
+        approvalCalloutPanel.add(
+            JPanel(FlowLayout(FlowLayout.RIGHT, 6, 0)).apply {
+                isOpaque = false
+                add(approveInlineButton)
+                add(rejectInlineButton)
+            },
+            BorderLayout.EAST,
+        )
+    }
+
+    private fun configureDrawer() {
+        drawerTitleLabel.font = drawerTitleLabel.font.deriveFont(Font.BOLD, 13f)
+        drawerCards.add(buildApprovalsDrawer(), DrawerMode.APPROVALS.name)
+        drawerCards.add(buildBridgeDrawer(), DrawerMode.BRIDGE.name)
+        drawerCards.add(buildCapabilitiesDrawer(), DrawerMode.CAPABILITIES.name)
+        drawerCards.add(buildInitiativeDrawer(), DrawerMode.INITIATIVE.name)
+        drawerWrapper.border = BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(1, 0, 0, 0, Color(0xD8DEE9)),
+            JBUI.Borders.emptyTop(8),
+        )
+        drawerWrapper.isVisible = false
+        drawerWrapper.add(
+            JPanel(BorderLayout()).apply {
+                add(drawerTitleLabel, BorderLayout.WEST)
+                add(closeDrawerButton, BorderLayout.EAST)
+            },
+            BorderLayout.NORTH,
+        )
+        drawerWrapper.add(drawerCards, BorderLayout.CENTER)
+        drawerWrapper.preferredSize = Dimension(100, 250)
+    }
+
+    private fun buildApprovalsDrawer(): JComponent {
+        approvalsList.addListSelectionListener {
+            selectedApproval = approvalsList.selectedValue
+            approvalsArea.text = renderApprovalDetail(selectedApproval)
+            updateActionState()
+        }
+        return JPanel(BorderLayout()).apply {
+            add(
+                JBSplitter(false, 0.36f).apply {
+                    firstComponent = section("Pending Approvals", JBScrollPane(approvalsList))
+                    secondComponent = section("Approval Detail", JBScrollPane(approvalsArea))
+                },
+                BorderLayout.CENTER,
+            )
+            add(
+                JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+                    isOpaque = false
+                    add(refreshApprovalsButton)
+                    add(approveApprovalButton)
+                    add(rejectApprovalButton)
+                },
+                BorderLayout.SOUTH,
+            )
+        }
+    }
+
+    private fun buildBridgeDrawer(): JComponent =
+        JPanel(BorderLayout()).apply {
+            add(
+                JBSplitter(false, 0.54f).apply {
+                    firstComponent = section("Bridge Summary", JBScrollPane(bridgeSummaryArea))
+                    secondComponent = section("Known Bridges", JBScrollPane(bridgeCandidatesArea))
+                },
+                BorderLayout.CENTER,
+            )
+            add(
+                JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+                    isOpaque = false
+                    add(refreshBridgeButton)
+                    add(registerBridgeButton)
+                    add(bridgeSmokeButton)
+                },
+                BorderLayout.SOUTH,
+            )
         }
 
-        val createControls = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
-            isOpaque = false
-            add(JButton("Create Initiative").apply { addActionListener { createInitiative() } })
-            add(JButton("Refresh Project Initiatives").apply { addActionListener { loadInitiatives() } })
+    private fun buildCapabilitiesDrawer(): JComponent =
+        section("Effective Capabilities", JBScrollPane(capabilitiesArea))
+
+    private fun buildInitiativeDrawer(): JComponent =
+        JPanel(BorderLayout()).apply {
+            add(section("Initiative Snapshot", JBScrollPane(initiativeInfoArea)), BorderLayout.CENTER)
+            add(
+                JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
+                    isOpaque = false
+                    add(refreshInitiativeButton)
+                    add(advanceButton)
+                    add(approvePhaseButton)
+                    add(rejectPhaseButton)
+                    add(generateTasksButton)
+                },
+                BorderLayout.SOUTH,
+            )
         }
 
-        val leftTop = JPanel(BorderLayout()).apply {
-            add(section("New Initiative", form), BorderLayout.CENTER)
-            add(createControls, BorderLayout.SOUTH)
+    private fun bindActions() {
+        refreshButton.addActionListener {
+            loadStatus()
+            loadInitiatives(selectInitiativeId = selectedInitiative?.id)
+            loadApprovals()
         }
-
-        initiativesList.addListSelectionListener {
-            val selected = initiativesList.selectedValue ?: return@addListSelectionListener
-            selectedInitiative = selected
-            loadInitiativeDetail(selected.id)
+        createInitiativeButton.addActionListener { createInitiative() }
+        approvalsDrawerButton.addActionListener { showDrawer(DrawerMode.APPROVALS) }
+        bridgeDrawerButton.addActionListener { showDrawer(DrawerMode.BRIDGE) }
+        capabilitiesDrawerButton.addActionListener { showDrawer(DrawerMode.CAPABILITIES) }
+        initiativeDrawerButton.addActionListener { showDrawer(DrawerMode.INITIATIVE) }
+        closeDrawerButton.addActionListener { showDrawer(DrawerMode.NONE) }
+        initiativeSelector.addActionListener {
+            val selected = initiativeSelector.selectedItem as? InitiativeWorkbenchItem ?: return@addActionListener
+            if (selected.id != selectedInitiative?.id) {
+                currentInitiatives.firstOrNull { it.id == selected.id }?.let {
+                    selectedInitiative = it
+                    loadInitiativeDetail(it.id)
+                }
+            }
         }
-        taskLinksList.addListSelectionListener {
-            selectedTaskLink = taskLinksList.selectedValue
+        statusFilterCombo.addActionListener { rebuildTaskList() }
+        agentFilterCombo.addActionListener { rebuildTaskList() }
+        taskList.addListSelectionListener {
             handleTaskSelectionChanged()
             updateActionState()
         }
@@ -261,195 +462,89 @@ class AgentsToolWindowPanel(
         }
         evidenceList.addMouseListener(object : java.awt.event.MouseAdapter() {
             override fun mouseClicked(event: java.awt.event.MouseEvent) {
-                if (event.clickCount == 2 && evidenceList.selectedValue != null) {
+                if (event.clickCount == 2) {
                     openSelectedTaskEvidence()
                 }
             }
         })
-        artifactsList.addListSelectionListener {
-            selectedArtifact = artifactsList.selectedValue
-            artifactsArea.text = renderArtifactDetail(selectedArtifact)
-            updateActionState()
+        taskArtifactList.addListSelectionListener {
+            selectedArtifact = taskArtifactList.selectedValue
+            artifactDetailArea.text = renderArtifactDetail(selectedArtifact)
         }
-
-        val detailTabs = JBTabbedPane().apply {
-            addTab("Summary", section("Initiative Summary", JBScrollPane(initiativeSummaryArea)))
-            addTab("Reviews", section("Phase Reviews", JBScrollPane(initiativeReviewsArea)))
-            addTab(
-                "Tasks",
-                JBSplitter(false, 0.42f).apply {
-                    firstComponent = section("Task Backlog", JBScrollPane(taskLinksList))
-                    secondComponent = JBTabbedPane().apply {
-                        addTab("Detail", section("Task Detail", JBScrollPane(tasksArea)))
-                        addTab(
-                            "Evidence",
-                            JBSplitter(false, 0.38f).apply {
-                                firstComponent = section("Navigable Evidence", JBScrollPane(evidenceList))
-                                secondComponent = section("Evidence Detail", JBScrollPane(evidenceArea))
-                            },
-                        )
-                    }
-                },
-            )
-            addTab(
-                "Artifacts",
-                JBSplitter(false, 0.34f).apply {
-                    firstComponent = section("Initiative Artifacts", JBScrollPane(artifactsList))
-                    secondComponent = section("Artifact Detail", JBScrollPane(artifactsArea))
-                },
-            )
-        }
-
-        val feedbackSection = section("Action Feedback", JBScrollPane(feedbackArea))
-        val actionControls = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
-            isOpaque = false
-            add(advanceButton)
-            add(approveButton)
-            add(rejectButton)
-            add(generateTasksButton)
-            add(refreshDetailButton)
-            add(setTaskModeButton)
-            add(launchTaskButton)
-            add(previewDiffButton)
-            add(applyPatchButton)
-            add(openChangedFileButton)
-            add(openEvidenceButton)
-        }
-
-        val rightTop = JPanel(BorderLayout()).apply {
-            add(detailTabs, BorderLayout.CENTER)
-            add(actionControls, BorderLayout.SOUTH)
-        }
-
-        val right = JBSplitter(true, 0.78f).apply {
-            firstComponent = rightTop
-            secondComponent = feedbackSection
-        }
-
-        val bottom = JBSplitter(false, 0.32f).apply {
-            firstComponent = section("Project Initiatives", JBScrollPane(initiativesList))
-            secondComponent = right
-        }
-
-        return JBSplitter(true, 0.30f).apply {
-            border = JBUI.Borders.emptyTop(12)
-            firstComponent = leftTop
-            secondComponent = bottom
-        }
-    }
-
-    private fun buildApprovalsTab(): JComponent {
-        approvalsList.addListSelectionListener {
-            selectedApproval = approvalsList.selectedValue
-            approvalsArea.text = renderApprovalDetail(selectedApproval)
-            updateActionState()
-        }
-
-        val controls = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
-            isOpaque = false
-            add(refreshApprovalsButton)
-            add(approveApprovalButton)
-            add(rejectApprovalButton)
-        }
-
-        val splitter = JBSplitter(false, 0.40f).apply {
-            firstComponent = section("Pending Approvals", JBScrollPane(approvalsList))
-            secondComponent = section("Approval Detail", JBScrollPane(approvalsArea))
-        }
-
-        return JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.emptyTop(12)
-            add(splitter, BorderLayout.CENTER)
-            add(controls, BorderLayout.SOUTH)
-        }
-    }
-
-    private fun buildBridgeTab(): JComponent {
-        val controls = JPanel(FlowLayout(FlowLayout.LEFT, 8, 0)).apply {
-            isOpaque = false
-            add(refreshBridgeButton)
-            add(registerBridgeButton)
-            add(bridgeSmokeButton)
-        }
-        val splitter = JBSplitter(false, 0.55f).apply {
-            firstComponent = section("Bridge Summary", JBScrollPane(bridgeSummaryArea))
-            secondComponent = section("Known Bridges", JBScrollPane(bridgeCandidatesArea))
-        }
-        return JPanel(BorderLayout()).apply {
-            border = JBUI.Borders.emptyTop(12)
-            add(splitter, BorderLayout.CENTER)
-            add(controls, BorderLayout.SOUTH)
-        }
-    }
-
-    private fun bindActions() {
-        advanceButton.addActionListener { advanceSelectedInitiative() }
-        approveButton.addActionListener { resolveSelectedInitiative(true) }
-        rejectButton.addActionListener { resolveSelectedInitiative(false) }
-        generateTasksButton.addActionListener { generateSelectedInitiativeTasks() }
-        refreshDetailButton.addActionListener {
-            selectedInitiative?.let { loadInitiativeDetail(it.id) }
-        }
-        setTaskModeButton.addActionListener { setSelectedTaskMode() }
-        launchTaskButton.addActionListener { launchSelectedTask() }
-        previewDiffButton.addActionListener { previewSelectedTaskDiff() }
-        applyPatchButton.addActionListener { applySelectedTaskPatch() }
-        openChangedFileButton.addActionListener { openSelectedTaskChangedFile() }
-        openEvidenceButton.addActionListener { openSelectedTaskEvidence() }
         refreshApprovalsButton.addActionListener { loadApprovals() }
         approveApprovalButton.addActionListener { resolveSelectedApproval(true) }
         rejectApprovalButton.addActionListener { resolveSelectedApproval(false) }
         refreshBridgeButton.addActionListener { loadStatus() }
         registerBridgeButton.addActionListener { registerBridge() }
         bridgeSmokeButton.addActionListener { runBridgeSmoke() }
+        refreshInitiativeButton.addActionListener { selectedInitiative?.let { loadInitiativeDetail(it.id) } }
+        advanceButton.addActionListener { advanceSelectedInitiative() }
+        approvePhaseButton.addActionListener { resolveSelectedInitiative(true) }
+        rejectPhaseButton.addActionListener { resolveSelectedInitiative(false) }
+        generateTasksButton.addActionListener { generateSelectedInitiativeTasks() }
+        setModeButton.addActionListener { setSelectedTaskMode() }
+        launchButton.addActionListener { launchSelectedTasks() }
+        previewDiffButton.addActionListener { previewSelectedTaskDiff() }
+        applyPatchButton.addActionListener { applySelectedTaskPatch() }
+        openChangedFileButton.addActionListener { openSelectedTaskChangedFile() }
+        openEvidenceButton.addActionListener { openSelectedTaskEvidence() }
+        approveInlineButton.addActionListener { resolveBlockingApproval(true) }
+        rejectInlineButton.addActionListener { resolveBlockingApproval(false) }
+    }
+
+    private fun showDrawer(mode: DrawerMode) {
+        drawerMode = mode
+        drawerWrapper.isVisible = mode != DrawerMode.NONE
+        if (mode == DrawerMode.NONE) {
+            revalidate()
+            repaint()
+            return
+        }
+        drawerTitleLabel.text = when (mode) {
+            DrawerMode.APPROVALS -> "Approvals"
+            DrawerMode.BRIDGE -> "Bridge"
+            DrawerMode.CAPABILITIES -> "Capabilities"
+            DrawerMode.INITIATIVE -> "Initiative Info"
+            DrawerMode.NONE -> "Support Panel"
+        }
+        (drawerCards.layout as CardLayout).show(drawerCards, mode.name)
+        revalidate()
+        repaint()
     }
 
     private fun updateActionState() {
-        val detail = selectedDetail
-        if (detail == null) {
-            advanceButton.isEnabled = false
-            approveButton.isEnabled = false
-            rejectButton.isEnabled = false
-            generateTasksButton.isEnabled = false
-            refreshDetailButton.isEnabled = false
-            setTaskModeButton.isEnabled = false
-            launchTaskButton.isEnabled = false
-            previewDiffButton.isEnabled = false
-            applyPatchButton.isEnabled = false
-            openChangedFileButton.isEnabled = false
-            openEvidenceButton.isEnabled = false
-            refreshApprovalsButton.isEnabled = true
-            approveApprovalButton.isEnabled = selectedApproval != null
-            rejectApprovalButton.isEnabled = selectedApproval != null
-            return
-        }
-        refreshDetailButton.isEnabled = true
-        val phase = detail.initiative.currentPhase
-        val status = detail.initiative.status
-        advanceButton.isEnabled = phase in setOf("requirements", "design") && status.endsWith("_draft")
-        approveButton.isEnabled = phase in setOf("requirements", "design", "plan") && status.endsWith("_review")
-        rejectButton.isEnabled = phase in setOf("requirements", "design", "plan") && status.endsWith("_review")
+        val selectedItems = taskList.selectedValuesList
+        val selectedTask = selectedItems.singleOrNull()
+        val availability = WorkbenchStateMapper.buildTaskActionAvailability(
+            selectedTask = selectedTask,
+            patchView = selectedTaskPatchView,
+            evidence = selectedTaskEvidence,
+            resolution = currentBridgeResolution,
+            degraded = currentProjectContext?.degraded == true,
+        )
+        setModeButton.isEnabled = availability.canSetMode && selectedTask != null
+        launchButton.isEnabled = selectedItems.isNotEmpty() && currentBridgeResolution?.executable == true
+        previewDiffButton.isEnabled = availability.canPreviewDiff
+        applyPatchButton.isEnabled = availability.canApplyPatch
+        openChangedFileButton.isEnabled = availability.canOpenChangedFile
+        openEvidenceButton.isEnabled = availability.canOpenEvidence
+        val pendingPhaseAction = selectedDetailOrNull()
+        val phase = pendingPhaseAction?.initiative?.currentPhase
+        val status = pendingPhaseAction?.initiative?.status
+        advanceButton.isEnabled = phase in setOf("requirements", "design") && status?.endsWith("_draft") == true
+        approvePhaseButton.isEnabled = phase in setOf("requirements", "design", "plan") && status?.endsWith("_review") == true
+        rejectPhaseButton.isEnabled = approvePhaseButton.isEnabled
         generateTasksButton.isEnabled = phase == "plan" && status == "plan_draft"
-        val selectedTasks = taskLinksList.selectedValuesList
-        setTaskModeButton.isEnabled = selectedTasks.size == 1
-        launchTaskButton.isEnabled = selectedTasks.isNotEmpty() &&
-            detail.executionSummary.taskCount > 0 &&
-            currentBridgeResolution?.executable == true
-        val singleTask = selectedTasks.size == 1
-        val hasPatch = selectedTaskPatchView != null
-        val hasChangedFile = selectedTaskPatchView?.changedFiles?.isNotEmpty() == true
-        val hasEvidence = evidenceModel.size() > 0
-        previewDiffButton.isEnabled = singleTask && hasPatch
-        applyPatchButton.isEnabled = singleTask &&
-            hasPatch &&
-            currentBridgeResolution?.executable == true &&
-            currentProjectContext?.degraded == false
-        openChangedFileButton.isEnabled = singleTask && hasChangedFile
-        openEvidenceButton.isEnabled = singleTask && hasEvidence
+        refreshInitiativeButton.isEnabled = pendingPhaseAction != null
         val hasApproval = selectedApproval != null
-        refreshApprovalsButton.isEnabled = true
         approveApprovalButton.isEnabled = hasApproval
         rejectApprovalButton.isEnabled = hasApproval
+        val inlineApproval = WorkbenchStateMapper.buildApprovalSummary(currentApprovals, selectedTask?.taskId).selectedTaskApproval
+        approvalCalloutPanel.isVisible = inlineApproval != null
+        approvalCalloutLabel.text = inlineApproval?.let {
+            "Task ${it.taskId} is blocked by approval '${it.actionType}'. Resolve it here without leaving the work view."
+        } ?: ""
+        taskMetaLabel.toolTipText = availability.blockingReason
     }
 
     private fun loadStatus() {
@@ -457,20 +552,17 @@ class AgentsToolWindowPanel(
         val apiKey = settings.getApiKey()
         val context = ProjectContextResolver.resolve(project)
         currentProjectContext = context
-        updateProjectSummary(context)
-
         if (apiKey.isBlank()) {
-            backendBadge.text = "Backend  missing key"
-            setBadgeColor(backendBadge, Color(0x8B5E3C))
+            backendReady = null
+            currentBridgeResolution = null
+            currentBridges = emptyList()
             capabilitiesArea.text = "Configure the API key in Settings > StrateCode Agents."
             bridgeSummaryArea.text = "Configure the API key first. No bridge checks can run without it."
             bridgeCandidatesArea.text = ""
-            currentBridgeResolution = null
-            currentBridges = emptyList()
+            refreshHeader()
             updateActionState()
             return
         }
-
         val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
@@ -479,37 +571,428 @@ class AgentsToolWindowPanel(
                 val bridges = client.listBridges()
                 val bridge = BridgeResolver.resolve(bridges.items, context.workspaceRoot, settings.currentState.bridgeName)
                 val projectCaps = context.repositoryUrl?.let { client.getProjectCapabilities(it, "needs_repo_static_analysis", "reviewer") }
+                StatusBundle(ready.ready, bridges.items, bridge, buildCapabilitiesText(projectCaps?.mode, capabilities.capabilities, projectCaps?.capabilities.orEmpty()))
+            }.onSuccess { bundle ->
                 StrateCodeProjectStore.write(context, bridgeName = settings.currentState.bridgeName)
                 SwingUtilities.invokeLater {
-                    currentBridgeResolution = bridge
-                    currentBridges = bridges.items
-                    backendBadge.text = "Backend  ${if (ready.ready) "ready" else "not ready"}"
-                    setBadgeColor(backendBadge, if (ready.ready) Color(0x1F7A4C) else Color(0x8B5E3C))
-                    bridgeBadge.text = "Bridge  ${bridge.status}"
-                    setBadgeColor(bridgeBadge, when (bridge.status) {
-                        "online", "idle", "busy", "ready", "active" -> if (bridge.executable) Color(0x1F7A4C) else Color(0x8B5E3C)
-                        "missing" -> Color(0x8B5E3C)
-                        else -> Color(0x5B6B7A)
-                    })
-                    metadataSummaryLabel.text = metadataSummaryHtml(ProjectContextResolver.resolve(project))
-                    capabilitiesArea.text = buildCapabilitiesText(projectCaps?.mode, capabilities.capabilities, projectCaps?.capabilities.orEmpty())
-                    bridgeSummaryArea.text = renderBridgeSummary(context, bridge)
-                    bridgeCandidatesArea.text = renderBridgeCandidates(context.workspaceRoot, bridges.items)
+                    backendReady = bundle.backendReady
+                    currentBridges = bundle.bridges
+                    currentBridgeResolution = bundle.bridgeResolution
+                    capabilitiesArea.text = bundle.capabilitiesText
+                    bridgeSummaryArea.text = renderBridgeSummary(context, bundle.bridgeResolution)
+                    bridgeCandidatesArea.text = renderBridgeCandidates(context.workspaceRoot, bundle.bridges)
+                    refreshHeader()
                     updateActionState()
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
-                    currentBridgeResolution = null
+                    backendReady = null
                     currentBridges = emptyList()
-                    backendBadge.text = "Backend  error"
-                    setBadgeColor(backendBadge, Color(0x8B2E2E))
-                    bridgeBadge.text = "Bridge  unresolved"
-                    setBadgeColor(bridgeBadge, Color(0x8B5E3C))
+                    currentBridgeResolution = null
                     capabilitiesArea.text = error.message ?: error.toString()
                     bridgeSummaryArea.text = error.message ?: error.toString()
                     bridgeCandidatesArea.text = ""
+                    refreshHeader()
                     updateActionState()
                     notify("Status refresh failed", error.message ?: error.toString(), NotificationType.ERROR)
+                }
+            }
+        }
+    }
+
+    private fun loadInitiatives(selectInitiativeId: String? = null) {
+        val settings = settings()
+        val apiKey = settings.getApiKey()
+        val context = ProjectContextResolver.resolve(project)
+        if (apiKey.isBlank()) {
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                OrchestratorClient(settings.currentState.baseUrl, apiKey).listInitiatives(context.workspaceRoot)
+            }.onSuccess { response ->
+                SwingUtilities.invokeLater {
+                    currentInitiatives = response.items
+                    refreshInitiativeSelector(selectInitiativeId ?: selectedInitiative?.id ?: context.metadata?.lastInitiativeId)
+                    if (response.items.isEmpty()) {
+                        selectedInitiative = null
+                        clearInitiativeState("No initiatives found for this workspace.")
+                    }
+                    refreshHeader()
+                }
+            }.onFailure { error ->
+                SwingUtilities.invokeLater {
+                    currentInitiatives = emptyList()
+                    clearInitiativeState(error.message ?: error.toString())
+                }
+            }
+        }
+    }
+
+    private fun refreshInitiativeSelector(selectInitiativeId: String?) {
+        val detailById = initiativeDetailCache.toMap()
+        val artifactCountById = initiativeArtifactCache.mapValues { it.value.size }
+        val items = WorkbenchStateMapper.buildInitiatives(currentInitiatives, detailById, artifactCountById)
+        initiativeSelectorModel.removeAllElements()
+        items.forEach(initiativeSelectorModel::addElement)
+        val target = items.firstOrNull { it.id == selectInitiativeId } ?: items.firstOrNull()
+        if (target != null) {
+            initiativeSelector.selectedItem = target
+            selectedInitiative = currentInitiatives.firstOrNull { it.id == target.id }
+            if (selectedInitiative != null && selectedDetailOrNull()?.initiative?.id != selectedInitiative?.id) {
+                loadInitiativeDetail(selectedInitiative!!.id)
+            }
+        }
+    }
+
+    private fun loadInitiativeDetail(initiativeId: String) {
+        val settings = settings()
+        val apiKey = settings.getApiKey()
+        if (apiKey.isBlank()) {
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
+                InitiativeDetailBundle(
+                    detail = client.getInitiativeDetail(initiativeId),
+                    tasks = client.listInitiativeTasks(initiativeId).items,
+                    artifacts = client.listInitiativeArtifacts(initiativeId).items,
+                )
+            }.onSuccess { bundle ->
+                val context = ProjectContextResolver.resolve(project)
+                StrateCodeProjectStore.write(
+                    context,
+                    bridgeName = settings.currentState.bridgeName,
+                    lastInitiativeId = bundle.detail.initiative.id,
+                    lastInitiativeTitle = bundle.detail.initiative.title,
+                )
+                SwingUtilities.invokeLater {
+                    initiativeDetailCache[initiativeId] = bundle.detail
+                    initiativeTaskCache[initiativeId] = bundle.tasks
+                    initiativeArtifactCache[initiativeId] = bundle.artifacts
+                    selectedInitiative = currentInitiatives.firstOrNull { it.id == initiativeId }
+                    refreshInitiativeSelector(initiativeId)
+                    rebuildTaskList()
+                    renderInitiativeSnapshot()
+                    updateActionState()
+                }
+            }.onFailure { error ->
+                SwingUtilities.invokeLater {
+                    clearInitiativeState("Failed to load initiative detail:\n${error.message ?: error}")
+                }
+            }
+        }
+    }
+
+    private fun rebuildTaskList() {
+        val detail = selectedDetailOrNull()
+        val tasks = detail?.initiative?.id?.let { initiativeTaskCache[it] }.orEmpty()
+        val items = WorkbenchStateMapper.buildTaskItems(
+            tasks = tasks,
+            approvals = currentApprovals,
+            patchByTaskId = taskPatchCache,
+            evidenceByTaskId = taskEvidenceCache,
+            statusFilter = statusFilterCombo.selectedItem?.toString() ?: "all",
+            agentFilter = agentFilterCombo.selectedItem?.toString() ?: "all",
+        )
+        val selectedIds = taskList.selectedValuesList.map { it.taskId }.toSet()
+        taskModel.clear()
+        items.forEach(taskModel::addElement)
+        if (selectedIds.isNotEmpty()) {
+            val indices = items.mapIndexedNotNull { index, item -> if (item.taskId in selectedIds) index else null }.toIntArray()
+            if (indices.isNotEmpty()) {
+                taskList.setSelectedIndices(indices)
+            }
+        }
+        if (taskList.selectedValuesList.isEmpty()) {
+            renderInitiativeSnapshot()
+        }
+    }
+
+    private fun handleTaskSelectionChanged() {
+        val selectedTasks = taskList.selectedValuesList
+        if (selectedTasks.size == 1) {
+            loadTaskExecutionDetail(selectedTasks.first().taskId)
+            return
+        }
+        selectedTaskDetail = null
+        selectedTaskPatchView = null
+        selectedTaskEvidence = null
+        selectedTaskSourceArtifacts = emptyList()
+        selectedEvidenceLocation = null
+        selectedArtifact = null
+        evidenceModel.clear()
+        taskArtifactModel.clear()
+        if (selectedTasks.isEmpty()) {
+            renderInitiativeSnapshot()
+        } else {
+            renderMultiTaskSelection(selectedTasks)
+        }
+    }
+
+    private fun loadTaskExecutionDetail(taskId: String) {
+        val settings = settings()
+        val apiKey = settings.getApiKey()
+        if (apiKey.isBlank()) {
+            return
+        }
+        summaryArea.text = "Loading task detail…"
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
+                val task = client.getTask(taskId)
+                val sources = client.getTaskSources(taskId).items
+                val patch = TaskExecutionSupport.resolvePatch(task, sources)
+                val evidence = TaskExecutionSupport.extractEvidence(task, sources)
+                TaskExecutionBundle(task, sources, patch, evidence)
+            }.onSuccess { bundle ->
+                SwingUtilities.invokeLater {
+                    selectedTaskDetail = bundle.task
+                    selectedTaskPatchView = bundle.patchView
+                    selectedTaskEvidence = bundle.evidence
+                    selectedTaskSourceArtifacts = bundle.sources
+                    taskPatchCache[taskId] = bundle.patchView
+                    taskEvidenceCache[taskId] = bundle.evidence
+                    taskSourcesCache[taskId] = bundle.sources
+                    renderTaskDetail(bundle.task, bundle.sources, bundle.patchView, bundle.evidence)
+                    rebuildTaskList()
+                    updateActionState()
+                }
+            }.onFailure { error ->
+                SwingUtilities.invokeLater {
+                    selectedTaskDetail = null
+                    selectedTaskPatchView = null
+                    selectedTaskEvidence = null
+                    selectedTaskSourceArtifacts = emptyList()
+                    taskHeadlineLabel.text = "Task detail failed"
+                    taskMetaLabel.text = error.message ?: error.toString()
+                    summaryArea.text = "Failed to load task detail:\n${error.message ?: error}"
+                    diffArea.text = "No diff available."
+                    evidenceArea.text = "No evidence available."
+                    artifactDetailArea.text = "No artifacts available."
+                    evidenceModel.clear()
+                    taskArtifactModel.clear()
+                    updateActionState()
+                }
+            }
+        }
+    }
+
+    private fun renderTaskDetail(
+        task: TaskDetailRecord,
+        artifacts: List<InitiativeArtifactRecord>,
+        patchView: TaskResultPatchView?,
+        evidence: EvidenceExtractionResult,
+    ) {
+        val selectedTask = taskList.selectedValuesList.singleOrNull()
+        val approvalSummary = WorkbenchStateMapper.buildApprovalSummary(currentApprovals, selectedTask?.taskId)
+        val viewState = TaskDetailViewState(
+            taskId = task.id,
+            title = selectedTask?.title ?: task.description,
+            agent = selectedTask?.agent ?: "unknown",
+            state = task.state,
+            executionMode = selectedTask?.executionMode ?: "-",
+            updatedAt = task.updatedAt,
+            summaryText = renderTaskSummaryText(task, patchView, evidence),
+            diffText = patchView?.diff ?: "No diff available for this task.",
+            patchView = patchView,
+            evidenceLocations = evidence.locations,
+            evidenceDetailText = renderEvidenceDetail(null, evidence),
+            artifacts = artifacts,
+            artifactDetailText = if (artifacts.isEmpty()) "No task-scoped artifacts." else renderArtifactDetail(artifacts.first()),
+            approvalCallout = approvalSummary.selectedTaskApproval?.let {
+                "Task ${it.taskId} is blocked by approval '${it.actionType}'. Resolve it directly here."
+            },
+        )
+        renderTaskViewState(viewState)
+    }
+
+    private fun renderTaskViewState(viewState: TaskDetailViewState) {
+        taskHeadlineLabel.text = viewState.title
+        taskMetaLabel.text = "${viewState.agent} · ${viewState.state} · ${viewState.executionMode} · ${viewState.updatedAt}"
+        taskBadgesLabel.text = buildBadgesText(viewState.patchView != null, viewState.evidenceLocations.isNotEmpty(), viewState.approvalCallout != null, viewState.artifacts.isNotEmpty())
+        summaryArea.text = viewState.summaryText
+        diffArea.text = viewState.diffText
+        evidenceModel.clear()
+        viewState.evidenceLocations.forEach(evidenceModel::addElement)
+        evidenceArea.text = viewState.evidenceDetailText
+        taskArtifactModel.clear()
+        viewState.artifacts.forEach(taskArtifactModel::addElement)
+        selectedArtifact = viewState.artifacts.firstOrNull()
+        artifactDetailArea.text = if (selectedArtifact != null) renderArtifactDetail(selectedArtifact) else "No task-scoped artifacts."
+        approvalCalloutPanel.isVisible = viewState.approvalCallout != null
+        approvalCalloutLabel.text = viewState.approvalCallout ?: ""
+    }
+
+    private fun renderInitiativeSnapshot() {
+        val detail = selectedDetailOrNull()
+        val artifacts = detail?.initiative?.id?.let { initiativeArtifactCache[it] }.orEmpty()
+        if (detail == null) {
+            taskHeadlineLabel.text = "No initiative selected"
+            taskMetaLabel.text = "Create one or pick an existing initiative for this project."
+            taskBadgesLabel.text = ""
+            summaryArea.text = "No initiative loaded for this workspace."
+            diffArea.text = "Select a task to inspect its diff."
+            evidenceArea.text = "Select a task to inspect its evidence."
+            artifactDetailArea.text = "Select a task to inspect its artifacts."
+            initiativeInfoArea.text = "No initiative loaded."
+            return
+        }
+        taskHeadlineLabel.text = detail.initiative.title
+        taskMetaLabel.text = "${detail.initiative.status} · ${detail.initiative.currentPhase} · ${detail.executionSummary.taskCount} tasks"
+        taskBadgesLabel.text = buildBadgeLine(
+            badgeText("phase", detail.initiative.currentPhase),
+            badgeText("status", detail.initiative.status),
+            badgeText("artifacts", artifacts.size.toString()),
+        )
+        summaryArea.text = buildString {
+            appendLine("Goal")
+            appendLine("====")
+            appendLine(detail.initiative.goal)
+            appendLine()
+            appendLine("Snapshot")
+            appendLine("========")
+            appendLine("Workspace: ${detail.initiative.workspaceRoot}")
+            appendLine("Execution mode: ${detail.initiative.executionMode}")
+            appendLine("Aggregated status: ${detail.executionSummary.aggregatedStatus}")
+            appendLine("Pending manual: ${detail.executionSummary.pendingManual}")
+            appendLine("Last review: ${detail.reviews.maxByOrNull { it.createdAt }?.let { "${it.phase} / ${it.decision}" } ?: "-"}")
+            currentBridgeResolution?.executionBlockReason()?.let {
+                appendLine()
+                appendLine("Bridge block")
+                appendLine("============")
+                appendLine(it)
+            }
+        }.trim()
+        diffArea.text = "Select a coder task to preview its diff."
+        evidenceArea.text = "Select a reviewer task to inspect findings."
+        artifactDetailArea.text = if (artifacts.isEmpty()) "No initiative artifacts generated yet." else renderArtifactDetail(artifacts.first())
+        initiativeInfoArea.text = renderInitiativeInfo(detail, artifacts)
+        evidenceModel.clear()
+        taskArtifactModel.clear()
+        approvalCalloutPanel.isVisible = false
+    }
+
+    private fun renderMultiTaskSelection(selectedTasks: List<TaskWorkbenchItem>) {
+        taskHeadlineLabel.text = "${selectedTasks.size} tasks selected"
+        taskMetaLabel.text = "Bulk launch is enabled; diff, evidence and patch stay single-task."
+        taskBadgesLabel.text = buildBadgeLine(badgeText("selection", selectedTasks.size.toString()))
+        summaryArea.text = buildString {
+            appendLine("${selectedTasks.size} tasks selected")
+            appendLine("======================")
+            selectedTasks.forEach { task ->
+                appendLine("#${task.launchOrder} ${task.title}")
+                appendLine("${task.agent} · ${task.state} · ${task.executionMode} · ${task.executionTarget}")
+                appendLine()
+            }
+        }.trim()
+        diffArea.text = "Preview Diff requires a single selected task."
+        evidenceArea.text = "Evidence requires a single selected task."
+        artifactDetailArea.text = "Artifacts require a single selected task."
+        evidenceModel.clear()
+        taskArtifactModel.clear()
+        approvalCalloutPanel.isVisible = false
+    }
+
+    private fun clearInitiativeState(message: String) {
+        taskModel.clear()
+        evidenceModel.clear()
+        taskArtifactModel.clear()
+        selectedTaskDetail = null
+        selectedTaskPatchView = null
+        selectedTaskEvidence = null
+        selectedTaskSourceArtifacts = emptyList()
+        selectedArtifact = null
+        taskHeadlineLabel.text = "No initiative selected"
+        taskMetaLabel.text = message
+        taskBadgesLabel.text = ""
+        summaryArea.text = message
+        diffArea.text = "Select a task to inspect its diff."
+        evidenceArea.text = "Select a task to inspect its evidence."
+        artifactDetailArea.text = "Select a task to inspect its artifacts."
+        initiativeInfoArea.text = message
+        approvalCalloutPanel.isVisible = false
+        updateActionState()
+    }
+
+    private fun refreshHeader() {
+        val context = currentProjectContext ?: return
+        val state = WorkbenchStateMapper.buildHeaderState(context, backendReady, currentBridgeResolution, currentApprovals.size)
+        applyHeaderState(state)
+    }
+
+    private fun applyHeaderState(state: HeaderStatusViewState) {
+        projectBadge.text = "Project  ${state.projectName}"
+        backendBadge.text = "Backend  ${state.backendLabel}"
+        bridgeBadge.text = "Bridge  ${state.bridgeLabel}"
+        approvalsBadge.text = "Approvals  ${state.approvalsLabel}"
+        setBadgeTone(projectBadge, if (state.degraded) StatusTone.WARNING else StatusTone.NEUTRAL)
+        setBadgeTone(backendBadge, state.backendTone)
+        setBadgeTone(bridgeBadge, state.bridgeTone)
+        setBadgeTone(approvalsBadge, state.approvalsTone)
+        subtitleLabel.text = buildString {
+            append(state.workspaceRoot)
+            append(" · ")
+            append(state.repositoryUrl ?: "degraded")
+            append(" · ")
+            append(state.metadataSummary)
+        }
+    }
+
+    private fun createInitiative() {
+        val settings = settings()
+        val apiKey = settings.getApiKey()
+        val context = ProjectContextResolver.resolve(project)
+        if (apiKey.isBlank()) {
+            notify("Initiative blocked", "Configure an API key first.", NotificationType.WARNING)
+            return
+        }
+        val form = JPanel().apply {
+            layout = BoxLayout(this, BoxLayout.Y_AXIS)
+            add(JLabel("Title"))
+            val titleField = JBTextField("IDE initiative for ${context.projectName}")
+            add(titleField)
+            add(Box.createVerticalStrut(8))
+            add(JLabel("Goal"))
+            val goalArea = JBTextArea(6, 48).apply {
+                lineWrap = true
+                wrapStyleWord = true
+                border = JBUI.Borders.empty(6)
+            }
+            add(JBScrollPane(goalArea))
+            putClientProperty("titleField", titleField)
+            putClientProperty("goalArea", goalArea)
+        }
+        val result = JOptionPane.showConfirmDialog(this, form, "Create Initiative", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE)
+        if (result != JOptionPane.OK_OPTION) {
+            return
+        }
+        val title = (form.getClientProperty("titleField") as JBTextField).text.trim().ifBlank { "IDE initiative for ${context.projectName}" }
+        val goal = (form.getClientProperty("goalArea") as JBTextArea).text.trim()
+        if (goal.isBlank()) {
+            notify("Initiative blocked", "Goal is required.", NotificationType.WARNING)
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            runCatching {
+                OrchestratorClient(settings.currentState.baseUrl, apiKey).createInitiative(title, goal, context.workspaceRoot)
+            }.onSuccess {
+                StrateCodeProjectStore.write(
+                    context,
+                    bridgeName = settings.currentState.bridgeName,
+                    lastInitiativeId = it.id,
+                    lastInitiativeTitle = it.title,
+                )
+                SwingUtilities.invokeLater {
+                    notify("Initiative created", "${it.title} (${it.id})", NotificationType.INFORMATION)
+                    loadStatus()
+                    loadInitiatives(selectInitiativeId = it.id)
+                    loadApprovals()
+                }
+            }.onFailure { error ->
+                SwingUtilities.invokeLater {
+                    notify("Initiative creation failed", error.message ?: error.toString(), NotificationType.ERROR)
                 }
             }
         }
@@ -540,198 +1023,130 @@ class AgentsToolWindowPanel(
         }
     }
 
-    private fun createInitiative() {
-        val settings = settings()
-        val apiKey = settings.getApiKey()
+    private fun runBridgeSmoke() {
         val context = ProjectContextResolver.resolve(project)
-        val title = initiativeTitleField.text.trim().ifBlank { "IDE initiative for ${context.projectName}" }
-        val goal = initiativeGoalArea.text.trim()
-        if (apiKey.isBlank()) {
-            notify("Initiative blocked", "Configure an API key first.", NotificationType.WARNING)
+        val resolution = currentBridgeResolution
+        if (resolution == null) {
+            loadStatus()
+            notify("Bridge smoke inconclusive", "Bridge state was not loaded yet. Refreshed instead.", NotificationType.WARNING)
             return
         }
-        if (goal.isBlank()) {
-            notify("Initiative blocked", "Goal is required.", NotificationType.WARNING)
-            return
-        }
-        ApplicationManager.getApplication().executeOnPooledThread {
-            runCatching {
-                OrchestratorClient(settings.currentState.baseUrl, apiKey).createInitiative(title, goal, context.workspaceRoot)
-            }.onSuccess {
-                StrateCodeProjectStore.write(
-                    context,
-                    bridgeName = settings.currentState.bridgeName,
-                    lastInitiativeId = it.id,
-                    lastInitiativeTitle = it.title,
-                )
-                SwingUtilities.invokeLater {
-                    notify("Initiative created", "${it.title} (${it.id})", NotificationType.INFORMATION)
-                    initiativeGoalArea.text = ""
-                    initiativeTitleField.text = it.title
-        loadStatus()
-        loadInitiatives(selectInitiativeId = it.id)
-        loadApprovals()
-                }
-            }.onFailure { error ->
-                SwingUtilities.invokeLater {
-                    notify("Initiative creation failed", error.message ?: error.toString(), NotificationType.ERROR)
-                }
-            }
+        val problem = resolution.executionBlockReason()
+        if (problem == null) {
+            notify("Bridge smoke passed", "Bridge ${resolution.matched?.name ?: "-"} is executable for ${context.workspaceRoot}.", NotificationType.INFORMATION)
+        } else {
+            notify("Bridge smoke failed", problem, NotificationType.WARNING)
         }
     }
 
-    private fun loadInitiatives(selectInitiativeId: String? = null) {
+    private fun loadApprovals() {
         val settings = settings()
         val apiKey = settings.getApiKey()
-        val context = ProjectContextResolver.resolve(project)
         if (apiKey.isBlank()) {
+            approvalsArea.text = "Configure an API key first."
+            approvalsModel.clear()
+            currentApprovals = emptyList()
+            selectedApproval = null
+            refreshHeader()
+            updateActionState()
             return
         }
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
-                OrchestratorClient(settings.currentState.baseUrl, apiKey).listInitiatives(context.workspaceRoot)
+                OrchestratorClient(settings.currentState.baseUrl, apiKey).listApprovals()
             }.onSuccess { response ->
                 SwingUtilities.invokeLater {
-                    initiativesModel.clear()
-                    response.items.forEach(initiativesModel::addElement)
-                    val targetId = selectInitiativeId ?: context.metadata?.lastInitiativeId
-                    if (targetId != null) {
-                        val target = response.items.firstOrNull { it.id == targetId }
-                        if (target != null) {
-                            initiativesList.setSelectedValue(target, true)
-                        }
-                    }
-                    if (response.items.isEmpty()) {
-                        initiativeSummaryArea.text = "No initiatives found for:\n${context.workspaceRoot}\n\nThis panel is scoped to the current project only."
-                        initiativeReviewsArea.text = ""
-                        tasksArea.text = ""
-                        evidenceArea.text = ""
-                        taskLinksModel.clear()
-                        evidenceModel.clear()
-                        selectedDetail = null
-                        selectedTaskLink = null
-                        selectedTaskDetail = null
-                        selectedTaskPatchView = null
-                        selectedTaskEvidence = null
-                        selectedEvidenceLocation = null
-                        updateActionState()
-                    }
+                    currentApprovals = response.items
+                    approvalsModel.clear()
+                    response.items.forEach(approvalsModel::addElement)
+                    approvalsArea.text = if (response.items.isEmpty()) "No pending approvals." else renderApprovalDetail(response.items.first())
+                    selectedApproval = response.items.firstOrNull()
+                    refreshHeader()
+                    rebuildTaskList()
+                    updateActionState()
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
-                    initiativeSummaryArea.text = error.message ?: error.toString()
-                    selectedDetail = null
+                    approvalsArea.text = error.message ?: error.toString()
+                    approvalsModel.clear()
+                    currentApprovals = emptyList()
+                    selectedApproval = null
+                    refreshHeader()
                     updateActionState()
                 }
             }
         }
     }
 
-    private fun loadInitiativeDetail(initiativeId: String) {
+    private fun resolveSelectedApproval(approve: Boolean) {
+        val approval = selectedApproval ?: return
+        resolveApproval(approval, approve)
+    }
+
+    private fun resolveBlockingApproval(approve: Boolean) {
+        val selectedTaskId = taskList.selectedValuesList.singleOrNull()?.taskId ?: return
+        val approval = currentApprovals.firstOrNull { it.taskId == selectedTaskId } ?: return
+        resolveApproval(approval, approve)
+    }
+
+    private fun resolveApproval(approval: ApprovalRecord, approve: Boolean) {
         val settings = settings()
         val apiKey = settings.getApiKey()
         if (apiKey.isBlank()) {
+            notify("Approval blocked", "Configure an API key first.", NotificationType.WARNING)
             return
         }
         ApplicationManager.getApplication().executeOnPooledThread {
             runCatching {
                 val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
-                val detail = client.getInitiativeDetail(initiativeId)
-                val tasks = client.listInitiativeTasks(initiativeId)
-                val artifacts = client.listInitiativeArtifacts(initiativeId)
-                Triple(detail, tasks.items, artifacts.items)
-            }.onSuccess { (detail, tasks, artifacts) ->
-                val context = ProjectContextResolver.resolve(project)
-                StrateCodeProjectStore.write(
-                    context,
-                    bridgeName = settings.currentState.bridgeName,
-                    lastInitiativeId = detail.initiative.id,
-                    lastInitiativeTitle = detail.initiative.title,
-                )
+                if (approve) client.approveApproval(approval.id, "jetbrains-plugin") else client.rejectApproval(approval.id, "jetbrains-plugin")
+            }.onSuccess {
                 SwingUtilities.invokeLater {
-                    selectedDetail = detail
-                    taskLinksModel.clear()
-                    tasks.forEach(taskLinksModel::addElement)
-                    artifactsModel.clear()
-                    artifacts.forEach(artifactsModel::addElement)
-                    if (selectedTaskLink != null) {
-                        val target = tasks.firstOrNull { it.taskId == selectedTaskLink?.taskId }
-                        if (target != null) {
-                            taskLinksList.setSelectedValue(target, true)
-                        }
-                    }
-                    if (selectedArtifact != null) {
-                        val targetArtifact = artifacts.firstOrNull { it.id == selectedArtifact?.id }
-                        if (targetArtifact != null) {
-                            artifactsList.setSelectedValue(targetArtifact, true)
-                        }
-                    }
-                    initiativeSummaryArea.text = renderInitiativeSummary(detail)
-                    initiativeReviewsArea.text = renderReviews(detail)
-                    tasksArea.text = renderTaskSelection(taskLinksList.selectedValuesList)
-                    if (artifacts.isEmpty()) {
-                        artifactsArea.text = "No artifacts generated yet."
-                        selectedArtifact = null
-                    }
-                    updateActionState()
+                    notify(if (approve) "Approval granted" else "Approval rejected", approval.id, NotificationType.INFORMATION)
+                    loadApprovals()
+                    selectedInitiative?.let { loadInitiativeDetail(it.id) }
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
-                    initiativeSummaryArea.text = error.message ?: error.toString()
-                    initiativeReviewsArea.text = ""
-                    tasksArea.text = ""
-                    evidenceArea.text = ""
-                    artifactsArea.text = ""
-                    taskLinksModel.clear()
-                    evidenceModel.clear()
-                    artifactsModel.clear()
-                    selectedDetail = null
-                    selectedTaskLink = null
-                    selectedTaskDetail = null
-                    selectedTaskPatchView = null
-                    selectedTaskEvidence = null
-                    selectedEvidenceLocation = null
-                    selectedArtifact = null
-                    updateActionState()
+                    notify("Approval resolution failed", error.message ?: error.toString(), NotificationType.ERROR)
                 }
             }
         }
     }
 
     private fun advanceSelectedInitiative() {
-        val detail = selectedDetail ?: return
-        runInitiativeMutation("Draft advanced") { client ->
-            client.advanceInitiative(detail.initiative.id, feedbackArea.text.trim())
-        }
+        val detail = selectedDetailOrNull() ?: return
+        val feedback = promptFeedback("Advance ${detail.initiative.currentPhase} draft") ?: return
+        runInitiativeMutation("Draft advanced") { client -> client.advanceInitiative(detail.initiative.id, feedback) }
     }
 
     private fun resolveSelectedInitiative(approve: Boolean) {
-        val detail = selectedDetail ?: return
+        val detail = selectedDetailOrNull() ?: return
         val phase = detail.initiative.currentPhase
-        val action = if (approve) "Phase approved" else "Phase rejected"
-        runInitiativeMutation(action) { client ->
+        val feedback = promptFeedback("${if (approve) "Approve" else "Reject"} $phase") ?: return
+        runInitiativeMutation(if (approve) "Phase approved" else "Phase rejected") { client ->
             if (approve) {
-                client.approveInitiativePhase(detail.initiative.id, phase, "jetbrains-plugin", feedbackArea.text.trim())
+                client.approveInitiativePhase(detail.initiative.id, phase, "jetbrains-plugin", feedback)
             } else {
-                client.rejectInitiativePhase(detail.initiative.id, phase, "jetbrains-plugin", feedbackArea.text.trim())
+                client.rejectInitiativePhase(detail.initiative.id, phase, "jetbrains-plugin", feedback)
             }
         }
     }
 
     private fun generateSelectedInitiativeTasks() {
-        val detail = selectedDetail ?: return
+        val detail = selectedDetailOrNull() ?: return
+        val feedback = promptFeedback("Generate task backlog", allowEmpty = true) ?: return
         runInitiativeMutation("Task backlog generated") { client ->
-            client.generateInitiativeTasks(detail.initiative.id, feedbackArea.text.trim()).initiative
+            client.generateInitiativeTasks(detail.initiative.id, feedback).initiative
         }
     }
 
     private fun setSelectedTaskMode() {
-        val detail = selectedDetail ?: return
-        val link = selectedTaskLink ?: return
+        val selectedTask = taskList.selectedValuesList.singleOrNull() ?: return
         val choice = JOptionPane.showInputDialog(
             this,
             "Execution mode for selected task:",
-            link.executionMode,
+            selectedTask.executionMode,
         )?.trim().orEmpty()
         if (choice !in setOf("manual", "agent_local", "agent_remote")) {
             if (choice.isNotBlank()) {
@@ -739,23 +1154,20 @@ class AgentsToolWindowPanel(
             }
             return
         }
+        val detail = selectedDetailOrNull() ?: return
         runInitiativeMutation("Task mode updated") { client ->
-            client.updateInitiativeTaskMode(detail.initiative.id, link.taskId, choice)
+            client.updateInitiativeTaskMode(detail.initiative.id, selectedTask.taskId, choice)
         }
     }
 
-    private fun launchSelectedTask() {
-        val detail = selectedDetail ?: return
-        val selectedTasks = taskLinksList.selectedValuesList
+    private fun launchSelectedTasks() {
+        val detail = selectedDetailOrNull() ?: return
+        val selectedTasks = taskList.selectedValuesList
         if (selectedTasks.isEmpty()) {
             return
         }
         val resolution = currentBridgeResolution
-        val blockReason = if (resolution == null) {
-            "No bridge state is loaded for this project."
-        } else {
-            resolution.executionBlockReason()
-        }
+        val blockReason = if (resolution == null) "No bridge state is loaded for this project." else resolution.executionBlockReason()
         if (blockReason != null) {
             notify("Launch blocked", blockReason, NotificationType.WARNING)
             loadStatus()
@@ -780,11 +1192,7 @@ class AgentsToolWindowPanel(
             return
         }
         val resolution = currentBridgeResolution
-        val blockReason = if (resolution == null) {
-            "No bridge state is loaded for this project."
-        } else {
-            resolution.executionBlockReason()
-        }
+        val blockReason = if (resolution == null) "No bridge state is loaded for this project." else resolution.executionBlockReason()
         if (blockReason != null) {
             notify("Patch blocked", blockReason, NotificationType.WARNING)
             return
@@ -798,13 +1206,13 @@ class AgentsToolWindowPanel(
                     TaskExecutionSupport.openChangedFile(project, context.workspaceRoot, result.changedFiles)
                     loadStatus()
                     selectedInitiative?.let { loadInitiativeDetail(it.id) }
-                    selectedTaskLink?.let { loadTaskExecutionDetail(it.taskId) }
+                    taskList.selectedValuesList.singleOrNull()?.let { loadTaskExecutionDetail(it.taskId) }
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
                     notify("Patch apply failed", error.message ?: error.toString(), NotificationType.ERROR)
-                    tasksArea.text = buildString {
-                        appendLine(tasksArea.text)
+                    summaryArea.text = buildString {
+                        appendLine(summaryArea.text)
                         appendLine()
                         appendLine("Patch apply error")
                         appendLine("=================")
@@ -831,90 +1239,6 @@ class AgentsToolWindowPanel(
         }
     }
 
-    private fun runBridgeSmoke() {
-        val context = ProjectContextResolver.resolve(project)
-        val resolution = currentBridgeResolution
-        if (resolution == null) {
-            loadStatus()
-            notify("Bridge smoke inconclusive", "Bridge state was not loaded yet. Refreshed instead.", NotificationType.WARNING)
-            return
-        }
-        val problem = resolution.executionBlockReason()
-        if (problem == null) {
-            notify(
-                "Bridge smoke passed",
-                "Bridge ${resolution.matched?.name ?: "-"} is executable for ${context.workspaceRoot}.",
-                NotificationType.INFORMATION,
-            )
-        } else {
-            notify("Bridge smoke failed", problem, NotificationType.WARNING)
-        }
-    }
-
-    private fun loadApprovals() {
-        val settings = settings()
-        val apiKey = settings.getApiKey()
-        if (apiKey.isBlank()) {
-            approvalsArea.text = "Configure an API key first."
-            approvalsModel.clear()
-            selectedApproval = null
-            updateActionState()
-            return
-        }
-        ApplicationManager.getApplication().executeOnPooledThread {
-            runCatching {
-                OrchestratorClient(settings.currentState.baseUrl, apiKey).listApprovals()
-            }.onSuccess { response ->
-                SwingUtilities.invokeLater {
-                    approvalsModel.clear()
-                    response.items.forEach(approvalsModel::addElement)
-                    if (response.items.isEmpty()) {
-                        approvalsArea.text = "No pending approvals."
-                        selectedApproval = null
-                    }
-                    updateActionState()
-                }
-            }.onFailure { error ->
-                SwingUtilities.invokeLater {
-                    approvalsArea.text = error.message ?: error.toString()
-                    approvalsModel.clear()
-                    selectedApproval = null
-                    updateActionState()
-                }
-            }
-        }
-    }
-
-    private fun resolveSelectedApproval(approve: Boolean) {
-        val approval = selectedApproval ?: return
-        val settings = settings()
-        val apiKey = settings.getApiKey()
-        if (apiKey.isBlank()) {
-            notify("Approval blocked", "Configure an API key first.", NotificationType.WARNING)
-            return
-        }
-        ApplicationManager.getApplication().executeOnPooledThread {
-            runCatching {
-                val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
-                if (approve) {
-                    client.approveApproval(approval.id, "jetbrains-plugin")
-                } else {
-                    client.rejectApproval(approval.id, "jetbrains-plugin")
-                }
-            }.onSuccess {
-                SwingUtilities.invokeLater {
-                    notify(if (approve) "Approval granted" else "Approval rejected", approval.id, NotificationType.INFORMATION)
-                    loadApprovals()
-                    selectedInitiative?.let { loadInitiativeDetail(it.id) }
-                }
-            }.onFailure { error ->
-                SwingUtilities.invokeLater {
-                    notify("Approval resolution failed", error.message ?: error.toString(), NotificationType.ERROR)
-                }
-            }
-        }
-    }
-
     private fun runInitiativeMutation(successTitle: String, action: (OrchestratorClient) -> Any) {
         val settings = settings()
         val apiKey = settings.getApiKey()
@@ -929,9 +1253,9 @@ class AgentsToolWindowPanel(
             }.onSuccess {
                 SwingUtilities.invokeLater {
                     notify(successTitle, selected.title, NotificationType.INFORMATION)
-                    feedbackArea.text = ""
                     loadInitiatives(selectInitiativeId = selected.id)
                     loadInitiativeDetail(selected.id)
+                    loadApprovals()
                 }
             }.onFailure { error ->
                 SwingUtilities.invokeLater {
@@ -941,280 +1265,34 @@ class AgentsToolWindowPanel(
         }
     }
 
-    private fun handleTaskSelectionChanged() {
-        val selectedTasks = taskLinksList.selectedValuesList
-        if (selectedTasks.size == 1) {
-            loadTaskExecutionDetail(selectedTasks.first().taskId)
-            return
+    private fun promptFeedback(title: String, allowEmpty: Boolean = false): String? {
+        val area = JBTextArea(8, 48).apply {
+            lineWrap = true
+            wrapStyleWord = true
+            border = JBUI.Borders.empty(8)
         }
-        selectedTaskDetail = null
-        selectedTaskPatchView = null
-        selectedTaskEvidence = null
-        selectedEvidenceLocation = null
-        evidenceModel.clear()
-        tasksArea.text = renderTaskSelection(selectedTasks)
-        evidenceArea.text = if (selectedTasks.isEmpty()) {
-            "Select a task to inspect its evidence."
-        } else {
-            "Evidence is only loaded for a single selected task."
+        val result = JOptionPane.showConfirmDialog(this, JBScrollPane(area), title, JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE)
+        if (result != JOptionPane.OK_OPTION) {
+            return null
         }
+        val feedback = area.text.trim()
+        if (!allowEmpty && feedback.isBlank()) {
+            return ""
+        }
+        return feedback
     }
 
-    private fun loadTaskExecutionDetail(taskId: String) {
-        val settings = settings()
-        val apiKey = settings.getApiKey()
-        if (apiKey.isBlank()) {
-            return
-        }
-        ApplicationManager.getApplication().executeOnPooledThread {
-            runCatching {
-                val client = OrchestratorClient(settings.currentState.baseUrl, apiKey)
-                val task = client.getTask(taskId)
-                val sources = client.getTaskSources(taskId)
-                val patch = TaskExecutionSupport.resolvePatch(task, sources.items)
-                val evidence = TaskExecutionSupport.extractEvidence(task, sources.items)
-                TaskExecutionBundle(task, sources.items, patch, evidence)
-            }.onSuccess { bundle ->
-                SwingUtilities.invokeLater {
-                    selectedTaskDetail = bundle.task
-                    selectedTaskPatchView = bundle.patchView
-                    selectedTaskEvidence = bundle.evidence
-                    evidenceModel.clear()
-                    bundle.evidence.locations.forEach(evidenceModel::addElement)
-                    selectedEvidenceLocation = null
-                    tasksArea.text = renderTaskDetail(bundle.task, bundle.patchView, bundle.evidence)
-                    evidenceArea.text = renderEvidenceDetail(null, bundle.evidence)
-                    updateActionState()
-                }
-            }.onFailure { error ->
-                SwingUtilities.invokeLater {
-                    selectedTaskDetail = null
-                    selectedTaskPatchView = null
-                    selectedTaskEvidence = null
-                    selectedEvidenceLocation = null
-                    evidenceModel.clear()
-                    tasksArea.text = "Failed to load task detail:\n${error.message ?: error}"
-                    evidenceArea.text = "Failed to load evidence."
-                    updateActionState()
-                }
-            }
-        }
-    }
+    private fun selectedDetailOrNull(): InitiativeDetailResponseRecord? =
+        selectedInitiative?.id?.let { initiativeDetailCache[it] }
 
-    private fun updateProjectSummary(context: ProjectContext) {
-        projectBadge.text = "Project  ${context.projectName}"
-        setBadgeColor(projectBadge, if (context.degraded) Color(0x8B5E3C) else Color(0x365A7C))
-        projectSummaryLabel.text = """
-            <html>
-            <b>${escape(context.projectName)}</b><br/>
-            Workspace: <code>${escape(context.workspaceRoot)}</code><br/>
-            Branch: <code>${escape(context.branch ?: "-")}</code><br/>
-            Repository: <code>${escape(context.repositoryUrl ?: "degraded")}</code>
-            </html>
-        """.trimIndent()
-        metadataSummaryLabel.text = metadataSummaryHtml(context)
-        scopeSummaryLabel.text = """
-            <html>
-            This plugin scopes initiative visibility to the current workspace root.<br/>
-            Only initiatives with <code>workspace_root=${escape(context.workspaceRoot)}</code> are listed.<br/>
-            Launch stays blocked if the matched bridge is stale or points elsewhere.
-            </html>
-        """.trimIndent()
-    }
-
-    private fun metadataSummaryHtml(context: ProjectContext): String {
-        val metadata = context.metadata ?: return "<html>No local metadata yet. The plugin will write <code>.stratecode/project.json</code>.</html>"
-        return """
-            <html>
-            File: <code>.stratecode/project.json</code><br/>
-            Bridge: <code>${escape(metadata.bridgeName ?: "-")}</code><br/>
-            Last initiative: <code>${escape(metadata.lastInitiativeTitle ?: metadata.lastInitiativeId ?: "-")}</code><br/>
-            Updated: <code>${escape(metadata.updatedAt)}</code>
-            </html>
-        """.trimIndent()
-    }
-
-    private fun buildCapabilitiesText(
-        mode: String?,
-        candidates: List<com.stratecode.lab.jetbrains.client.CapabilityCandidate>,
-        projectCapabilities: List<com.stratecode.lab.jetbrains.client.CapabilityCandidate>,
-    ): String {
-        val builder = StringBuilder()
-        builder.appendLine("Discovery candidates")
-        builder.appendLine("===================")
-        if (candidates.isEmpty()) {
-            builder.appendLine("No capability candidates returned.")
-        } else {
-            candidates.forEach {
-                builder.appendLine("• ${it.name}  [${it.kind}]  score=${"%.1f".format(it.score)}")
-                builder.appendLine("  tags: ${it.capabilityTags.joinToString(", ")}")
-            }
-        }
-        builder.appendLine()
-        builder.appendLine("Project effective policy")
-        builder.appendLine("========================")
-        builder.appendLine("mode: ${mode ?: "n/a"}")
-        if (projectCapabilities.isEmpty()) {
-            builder.appendLine("No project-scoped reviewer capabilities returned.")
-        } else {
-            projectCapabilities.forEach {
-                builder.appendLine("• ${it.name}  [${it.kind}]  score=${"%.1f".format(it.score)}")
-                builder.appendLine("  tags: ${it.capabilityTags.joinToString(", ")}")
-            }
-        }
-        return builder.toString()
-    }
-
-    private fun renderBridgeSummary(context: ProjectContext, resolution: BridgeResolution): String =
-        buildString {
-            appendLine("Configured bridge name: ${settings().currentState.bridgeName}")
-            appendLine("Workspace root: ${context.workspaceRoot}")
-            appendLine("Repository: ${context.repositoryUrl ?: "degraded"}")
-            appendLine()
-            appendLine("Resolution")
-            appendLine("==========")
-            appendLine("Status: ${resolution.status}")
-            appendLine("Consistency: ${resolution.consistency}")
-            appendLine("Executable: ${resolution.executable}")
-            appendLine("Detail: ${resolution.detail}")
-            appendLine("Heartbeat age: ${resolution.heartbeatAgeSeconds?.let { "${it}s" } ?: "<never>"}")
-            appendLine("Stale: ${resolution.stale}")
-            appendLine()
-            if (resolution.matched != null) {
-                appendLine("Matched bridge")
-                appendLine("==============")
-                appendLine("ID: ${resolution.matched.id}")
-                appendLine("Name: ${resolution.matched.name}")
-                appendLine("Host: ${resolution.matched.hostname}")
-                appendLine("Workspace: ${resolution.matched.workspaceRoot}")
-                appendLine("Last heartbeat: ${resolution.matched.lastHeartbeat ?: "-"}")
-                appendLine()
-            }
-            resolution.executionBlockReason()?.let {
-                appendLine("Execution block")
-                appendLine("===============")
-                appendLine(it)
-            }
-        }.trim()
-
-    private fun renderBridgeCandidates(workspaceRoot: String, bridges: List<LocalBridgeResponse>): String {
-        if (bridges.isEmpty()) {
-            return "No bridges are registered."
-        }
-        return buildString {
-            bridges.sortedWith(compareBy<LocalBridgeResponse>({ it.workspaceRoot != workspaceRoot }, { it.name })).forEach { bridge ->
-                val marker = when {
-                    bridge.workspaceRoot == workspaceRoot -> "*"
-                    else -> "-"
-                }
-                appendLine("$marker ${bridge.name} [${bridge.status}]")
-                appendLine("  workspace=${bridge.workspaceRoot}")
-                appendLine("  host=${bridge.hostname}")
-                appendLine("  heartbeat=${bridge.lastHeartbeat ?: "<never>"}")
-                appendLine()
-            }
-        }.trim()
-    }
-
-    private fun renderInitiativeSummary(detail: InitiativeDetailResponseRecord): String {
-        val initiative = detail.initiative
-        val builder = StringBuilder()
-        builder.appendLine("Title: ${initiative.title}")
-        builder.appendLine("Status: ${initiative.status}")
-        builder.appendLine("Current phase: ${initiative.currentPhase}")
-        builder.appendLine("Execution mode: ${initiative.executionMode}")
-        builder.appendLine("Workspace: ${initiative.workspaceRoot}")
-        builder.appendLine("Created by: ${initiative.createdBy}")
-        builder.appendLine("Updated: ${initiative.updatedAt}")
-        builder.appendLine()
-        builder.appendLine("Goal")
-        builder.appendLine("====")
-        builder.appendLine(initiative.goal)
-        builder.appendLine()
-        builder.appendLine("Execution summary")
-        builder.appendLine("=================")
-        builder.appendLine("Backlog materialized: ${detail.executionSummary.backlogMaterialized}")
-        builder.appendLine("Aggregated status: ${detail.executionSummary.aggregatedStatus}")
-        builder.appendLine("Task count: ${detail.executionSummary.taskCount}")
-        builder.appendLine("Pending manual: ${detail.executionSummary.pendingManual}")
-        builder.appendLine()
-        builder.appendLine("Execution policy")
-        builder.appendLine("================")
-        builder.appendLine("Scope: ${detail.executionPolicy.scope}")
-        builder.appendLine("Allowed modes: ${detail.executionPolicy.allowedModes.joinToString(", ")}")
-        builder.appendLine("Approval modes: ${detail.executionPolicy.approvalRequiredModes.joinToString(", ")}")
-        builder.appendLine()
-        builder.appendLine("Phase history")
-        builder.appendLine("=============")
-        detail.histories.forEach { history ->
-            builder.appendLine("• ${history.phase} v${history.activeVersion} (${history.items.size} entries)")
-        }
-        return builder.toString()
-    }
-
-    private fun renderReviews(detail: InitiativeDetailResponseRecord): String {
-        if (detail.reviews.isEmpty()) {
-            return "No reviews recorded yet."
-        }
-        return buildString {
-            detail.reviews.forEach { review ->
-                appendLine("${review.phase} / ${review.decision} / ${review.createdAt}")
-                appendLine("by: ${review.generatedBy ?: "-"}")
-                if (!review.feedback.isNullOrBlank()) {
-                    appendLine("feedback: ${review.feedback}")
-                }
-                appendLine()
-            }
-        }.trim()
-    }
-
-    private fun renderTasks(tasks: List<InitiativeTaskLinkRecord>): String {
-        if (tasks.isEmpty()) {
-            return "No tasks materialized yet."
-        }
-        return buildString {
-            tasks.sortedBy { it.launchOrder }.forEach { link ->
-                appendLine("#${link.launchOrder} ${link.task.description}")
-                appendLine("agent=${link.task.assignedAgent ?: link.task.plannedAgent ?: "-"} mode=${link.executionMode} target=${link.task.executionTarget} state=${link.task.state}")
-                if (!link.epic.isNullOrBlank()) {
-                    appendLine("epic=${link.epic}")
-                }
-                if (!link.launchGroup.isNullOrBlank()) {
-                    appendLine("group=${link.launchGroup}")
-                }
-                appendLine()
-            }
-        }.trim()
-    }
-
-    private fun renderTaskSelection(selectedTasks: List<InitiativeTaskLinkRecord>): String {
-        if (selectedTasks.isEmpty()) {
-            return if (taskLinksModel.isEmpty) {
-                "No tasks materialized yet."
-            } else {
-                "Select one or more tasks to inspect or launch."
-            }
-        }
-        if (selectedTasks.size == 1) {
-            return renderTasks(selectedTasks)
-        }
-        return buildString {
-            appendLine("${selectedTasks.size} tasks selected")
-            appendLine("====================")
-            selectedTasks.sortedBy { it.launchOrder }.forEach { link ->
-                appendLine("#${link.launchOrder} ${link.task.description}")
-                appendLine("mode=${link.executionMode} state=${link.task.state} target=${link.task.executionTarget}")
-                appendLine()
-            }
-        }.trim()
-    }
-
-    private fun renderTaskDetail(
+    private fun renderTaskSummaryText(
         task: TaskDetailRecord,
         patchView: TaskResultPatchView?,
         evidence: EvidenceExtractionResult,
     ): String = buildString {
-        appendLine("Task: ${task.id}")
+        appendLine("Task")
+        appendLine("====")
+        appendLine("ID: ${task.id}")
         appendLine("State: ${task.state}")
         appendLine("Updated: ${task.updatedAt}")
         appendLine("Workspace path: ${task.workspacePath ?: "-"}")
@@ -1227,8 +1305,10 @@ class AgentsToolWindowPanel(
             appendLine("Source: ${patchView.sourceType}")
             appendLine("Changed files: ${patchView.changedFiles.size}")
             patchView.summary?.let { appendLine("Summary: $it") }
-            appendLine()
-            appendLine(patchView.changedFiles.joinToString("\n").ifBlank { "(none)" })
+            if (patchView.changedFiles.isNotEmpty()) {
+                appendLine()
+                patchView.changedFiles.forEach { appendLine("- $it") }
+            }
         }
         appendLine()
         appendLine("Evidence")
@@ -1263,7 +1343,7 @@ class AgentsToolWindowPanel(
             }.trim()
         }
         if (evidence == null) {
-            return "Select a single task to inspect its evidence."
+            return "Select a reviewer task to inspect its evidence."
         }
         return buildString {
             appendLine("Navigable findings: ${evidence.locations.size}")
@@ -1293,11 +1373,7 @@ class AgentsToolWindowPanel(
 
     private fun renderArtifactDetail(artifact: InitiativeArtifactRecord?): String {
         if (artifact == null) {
-            return if (artifactsModel.isEmpty) {
-                "No artifacts generated yet."
-            } else {
-                "Select an artifact to inspect its payload."
-            }
+            return "No artifact selected."
         }
         return buildString {
             appendLine("Artifact: ${artifact.id}")
@@ -1318,7 +1394,7 @@ class AgentsToolWindowPanel(
             appendLine("Content")
             appendLine("=======")
             appendLine(artifact.contentText?.take(12000) ?: "(no textual content)")
-        }
+        }.trim()
     }
 
     private fun renderApprovalDetail(approval: ApprovalRecord?): String {
@@ -1336,20 +1412,139 @@ class AgentsToolWindowPanel(
             appendLine("Timeout seconds: ${approval.timeoutSeconds}")
             appendLine("Escalation: ${approval.escalationLevel}")
             appendLine("Operator: ${approval.operator ?: "-"}")
-        }
+        }.trim()
     }
 
-    private fun badge(title: String, value: String, color: Color): JLabel =
+    private fun renderBridgeSummary(context: ProjectContext, resolution: BridgeResolution): String =
+        buildString {
+            appendLine("Configured bridge name: ${settings().currentState.bridgeName}")
+            appendLine("Workspace root: ${context.workspaceRoot}")
+            appendLine("Repository: ${context.repositoryUrl ?: "degraded"}")
+            appendLine()
+            appendLine("Resolution")
+            appendLine("==========")
+            appendLine("Status: ${resolution.status}")
+            appendLine("Consistency: ${resolution.consistency}")
+            appendLine("Executable: ${resolution.executable}")
+            appendLine("Detail: ${resolution.detail}")
+            appendLine("Heartbeat age: ${resolution.heartbeatAgeSeconds?.let { "${it}s" } ?: "<never>"}")
+            appendLine("Stale: ${resolution.stale}")
+            appendLine()
+            resolution.matched?.let {
+                appendLine("Matched bridge")
+                appendLine("==============")
+                appendLine("ID: ${it.id}")
+                appendLine("Name: ${it.name}")
+                appendLine("Host: ${it.hostname}")
+                appendLine("Workspace: ${it.workspaceRoot}")
+                appendLine("Last heartbeat: ${it.lastHeartbeat ?: "-"}")
+            }
+            resolution.executionBlockReason()?.let {
+                appendLine()
+                appendLine("Execution block")
+                appendLine("===============")
+                appendLine(it)
+            }
+        }.trim()
+
+    private fun renderBridgeCandidates(workspaceRoot: String, bridges: List<LocalBridgeResponse>): String {
+        if (bridges.isEmpty()) {
+            return "No bridges are registered."
+        }
+        return buildString {
+            bridges.sortedWith(compareBy<LocalBridgeResponse>({ it.workspaceRoot != workspaceRoot }, { it.name })).forEach { bridge ->
+                val marker = if (bridge.workspaceRoot == workspaceRoot) "*" else "-"
+                appendLine("$marker ${bridge.name} [${bridge.status}]")
+                appendLine("  workspace=${bridge.workspaceRoot}")
+                appendLine("  host=${bridge.hostname}")
+                appendLine("  heartbeat=${bridge.lastHeartbeat ?: "<never>"}")
+                appendLine()
+            }
+        }.trim()
+    }
+
+    private fun renderInitiativeInfo(
+        detail: InitiativeDetailResponseRecord,
+        artifacts: List<InitiativeArtifactRecord>,
+    ): String = buildString {
+        appendLine("Title: ${detail.initiative.title}")
+        appendLine("Status: ${detail.initiative.status}")
+        appendLine("Current phase: ${detail.initiative.currentPhase}")
+        appendLine("Execution mode: ${detail.initiative.executionMode}")
+        appendLine("Workspace: ${detail.initiative.workspaceRoot}")
+        appendLine("Updated: ${detail.initiative.updatedAt}")
+        appendLine()
+        appendLine("Snapshot")
+        appendLine("========")
+        appendLine("Task count: ${detail.executionSummary.taskCount}")
+        appendLine("Pending manual: ${detail.executionSummary.pendingManual}")
+        appendLine("Artifacts: ${artifacts.size}")
+        appendLine("Aggregated status: ${detail.executionSummary.aggregatedStatus}")
+        appendLine("Last review: ${detail.reviews.maxByOrNull { it.createdAt }?.let { "${it.phase} / ${it.decision}" } ?: "-"}")
+        appendLine()
+        appendLine("Goal")
+        appendLine("====")
+        appendLine(detail.initiative.goal)
+    }.trim()
+
+    private fun buildCapabilitiesText(
+        mode: String?,
+        candidates: List<com.stratecode.lab.jetbrains.client.CapabilityCandidate>,
+        projectCapabilities: List<com.stratecode.lab.jetbrains.client.CapabilityCandidate>,
+    ): String = buildString {
+        appendLine("Discovery candidates")
+        appendLine("===================")
+        if (candidates.isEmpty()) {
+            appendLine("No capability candidates returned.")
+        } else {
+            candidates.forEach {
+                appendLine("• ${it.name}  [${it.kind}]  score=${"%.1f".format(it.score)}")
+                appendLine("  tags: ${it.capabilityTags.joinToString(", ")}")
+            }
+        }
+        appendLine()
+        appendLine("Project effective policy")
+        appendLine("========================")
+        appendLine("mode: ${mode ?: "n/a"}")
+        if (projectCapabilities.isEmpty()) {
+            appendLine("No project-scoped reviewer capabilities returned.")
+        } else {
+            projectCapabilities.forEach {
+                appendLine("• ${it.name}  [${it.kind}]  score=${"%.1f".format(it.score)}")
+                appendLine("  tags: ${it.capabilityTags.joinToString(", ")}")
+            }
+        }
+    }.trim()
+
+    private fun buildBadgesText(hasDiff: Boolean, hasEvidence: Boolean, hasApproval: Boolean, hasArtifacts: Boolean): String =
+        buildBadgeLine(
+            badgeText("diff", if (hasDiff) "ready" else "none"),
+            badgeText("evidence", if (hasEvidence) "ready" else "none"),
+            badgeText("approval", if (hasApproval) "required" else "clear"),
+            badgeText("artifacts", if (hasArtifacts) "present" else "none"),
+        )
+
+    private fun buildBadgeLine(vararg badges: String): String =
+        badges.joinToString("  ")
+
+    private fun badgeText(label: String, value: String): String = "[$label: $value]"
+
+    private fun badge(title: String, value: String, tone: StatusTone): JLabel =
         JLabel("$title  $value", SwingConstants.CENTER).apply {
             isOpaque = true
-            background = color
             foreground = Color.WHITE
             border = JBUI.Borders.empty(6, 10)
             font = font.deriveFont(Font.BOLD, 12f)
+            setBadgeTone(this, tone)
         }
 
-    private fun setBadgeColor(label: JLabel, color: Color) {
-        label.background = color
+    private fun setBadgeTone(label: JLabel, tone: StatusTone) {
+        label.background = when (tone) {
+            StatusTone.HEALTHY -> Color(0x1F7A4C)
+            StatusTone.WARNING -> Color(0x8B5E3C)
+            StatusTone.DANGER -> Color(0x8B2E2E)
+            StatusTone.NEUTRAL -> Color(0x5B6B7A)
+        }
     }
 
     private fun section(title: String, component: JComponent): JPanel =
@@ -1369,14 +1564,6 @@ class AgentsToolWindowPanel(
             border = JBUI.Borders.empty(8)
         }
 
-    private fun htmlLabel(text: String): JLabel =
-        JLabel("<html>$text</html>").apply {
-            verticalAlignment = SwingConstants.TOP
-        }
-
-    private fun escape(value: String): String =
-        value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
     private fun notify(title: String, message: String, type: NotificationType) {
         NotificationGroupManager.getInstance()
             .getNotificationGroup("StrateCode Agents")
@@ -1387,6 +1574,19 @@ class AgentsToolWindowPanel(
     private fun settings(): PluginSettingsService =
         ApplicationManager.getApplication().getService(PluginSettingsService::class.java)
 
+    private data class StatusBundle(
+        val backendReady: Boolean,
+        val bridges: List<LocalBridgeResponse>,
+        val bridgeResolution: BridgeResolution,
+        val capabilitiesText: String,
+    )
+
+    private data class InitiativeDetailBundle(
+        val detail: InitiativeDetailResponseRecord,
+        val tasks: List<InitiativeTaskLinkRecord>,
+        val artifacts: List<InitiativeArtifactRecord>,
+    )
+
     private data class TaskExecutionBundle(
         val task: TaskDetailRecord,
         val sources: List<InitiativeArtifactRecord>,
@@ -1395,7 +1595,7 @@ class AgentsToolWindowPanel(
     )
 }
 
-private class InitiativeCellRenderer : DefaultListCellRenderer() {
+private class InitiativeWorkbenchItemRenderer : DefaultListCellRenderer() {
     override fun getListCellRendererComponent(
         list: JList<*>,
         value: Any?,
@@ -1403,12 +1603,12 @@ private class InitiativeCellRenderer : DefaultListCellRenderer() {
         isSelected: Boolean,
         cellHasFocus: Boolean,
     ) = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus).also {
-        if (value is InitiativeSummary && it is JLabel) {
-            it.border = JBUI.Borders.empty(8)
+        if (value is InitiativeWorkbenchItem && it is JLabel) {
+            it.border = JBUI.Borders.empty(6)
             it.text = """
                 <html>
-                <b>${escape(value.title)}</b><br/>
-                <span style='color:#6B7280'>${escape(value.status)} / ${escape(value.currentPhase)}<br/>${escape(value.workspaceRoot)}</span>
+                <b>${escape(value.title)}</b>
+                <span style='color:#6B7280'> · ${escape(value.status)} / ${escape(value.currentPhase)} / ${value.taskCount} tasks</span>
                 </html>
             """.trimIndent()
         }
@@ -1418,7 +1618,7 @@ private class InitiativeCellRenderer : DefaultListCellRenderer() {
         value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 }
 
-private class InitiativeTaskCellRenderer : DefaultListCellRenderer() {
+private class TaskWorkbenchItemCellRenderer : DefaultListCellRenderer() {
     override fun getListCellRendererComponent(
         list: JList<*>,
         value: Any?,
@@ -1426,12 +1626,17 @@ private class InitiativeTaskCellRenderer : DefaultListCellRenderer() {
         isSelected: Boolean,
         cellHasFocus: Boolean,
     ) = super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus).also {
-        if (value is InitiativeTaskLinkRecord && it is JLabel) {
+        if (value is TaskWorkbenchItem && it is JLabel) {
             it.border = JBUI.Borders.empty(8)
+            val badges = buildString {
+                if (value.diffAvailable) append(" diff")
+                if (value.evidenceAvailable) append(" evidence")
+                if (value.approvalRequired) append(" approval")
+            }.trim()
             it.text = """
                 <html>
-                <b>${escape(value.task.description)}</b><br/>
-                <span style='color:#6B7280'>${escape(value.task.state)} / ${escape(value.executionMode)} / ${escape(value.task.executionTarget)}</span>
+                <b>#${value.launchOrder} ${escape(value.title)}</b><br/>
+                <span style='color:#6B7280'>${escape(value.agent)} / ${escape(value.state)} / ${escape(value.executionMode)}${if (badges.isNotBlank()) " / ${escape(badges)}" else ""}</span>
                 </html>
             """.trimIndent()
         }
@@ -1487,9 +1692,6 @@ private class EvidenceLocationCellRenderer : DefaultListCellRenderer() {
         value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 }
 
-private fun <T> DefaultListModel<T>.getElementAtOrNull(index: Int): T? =
-    if (index in 0 until size()) getElementAt(index) else null
-
 private class InitiativeArtifactCellRenderer : DefaultListCellRenderer() {
     override fun getListCellRendererComponent(
         list: JList<*>,
@@ -1512,3 +1714,6 @@ private class InitiativeArtifactCellRenderer : DefaultListCellRenderer() {
     private fun escape(value: String): String =
         value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 }
+
+private fun <T> DefaultListModel<T>.getElementAtOrNull(index: Int): T? =
+    if (index in 0 until size()) getElementAt(index) else null

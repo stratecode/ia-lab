@@ -7,9 +7,18 @@ Current scope:
 - project context detection
 - `.stratecode/project.json` local metadata for bridge and initiative context
 - secure orchestrator settings
+- task-first `Work` view with:
+  - operational header for project, backend, bridge, and approval count
+  - active initiative selector
+  - filtered backlog for the current workspace
+  - contextual task detail for summary, diff, evidence, and task artifacts
+- support drawers for:
+  - approvals
+  - bridge
+  - capabilities
+  - initiative info
 - orchestrator health and capability status
-- bridge matching and registration
-- bridge tab with heartbeat staleness and execution gating
+- bridge matching, registration, and heartbeat-based execution gating
 - bridge smoke validation from the IDE
 - project-scoped capability visibility
 - recent initiative listing and detail fetch, scoped to the current `workspace_root`
@@ -30,9 +39,10 @@ Current scope:
   - extract navigable findings from `code_analysis_report`
   - jump directly to `file:line`
   - show raw evidence payloads when coordinates are missing
-- pending approvals tab:
+- approvals drawer:
   - list pending approvals
   - approve or reject them
+  - resolve blocking approvals inline from selected task context
 - typed initiative summary, review timeline, task backlog, and artifact rendering
 - packaged plugin zip generation via Gradle
 

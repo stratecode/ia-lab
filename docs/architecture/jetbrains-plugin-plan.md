@@ -13,16 +13,14 @@ Implemented now:
 - secure settings for orchestrator `base_url`, `api_key`, `bridge_name`, and policy mode
 - project context resolution for `workspace_root`, branch, and normalized `repository_url`
 - local project metadata persisted in `.stratecode/project.json`
-- `Agents` tool window with:
-  - backend readiness
-  - bridge resolution
-  - bridge tab with staleness and executable/non-executable state
-  - bridge smoke validation
-  - capability visibility
-  - project-scoped capability visibility
-  - initiative creation
-  - recent initiative listing scoped to the current workspace
-  - typed initiative detail, review timeline, and task backlog rendering
+- `Agents` tool window redesigned as a task-first workbench with:
+  - operational header for project, backend, bridge, and approvals
+  - active initiative selector
+  - backlog-first left rail with task filters
+  - contextual task detail focused on summary, diff, evidence, and task artifacts
+  - secondary drawers for approvals, bridge, capabilities, and initiative info
+  - bridge smoke validation and execution gating
+  - initiative creation, typed initiative detail, and task backlog rendering
   - phase actions:
     - advance requirements/design drafts
     - approve/reject requirements/design/plan
@@ -30,15 +28,18 @@ Implemented now:
   - task execution controls:
     - set execution mode per task
     - launch selected tasks
-  - pending approvals visibility and resolution
+    - preview diff
+    - apply patch
+    - open changed file
+    - open navigable evidence
+  - pending approvals visibility and inline resolution from task context
 - editor popup action: `Create Initiative from Selection`
 - Gradle wrapper, tests, and distributable plugin zip build
 
 Not implemented yet:
 
-- diff preview and governed patch application
-- navigation from reviewer evidence to file/line
 - bridge task/daemon introspection beyond heartbeat-level health
+- polished visual design and deeper UX refinement
 
 ## Product intent
 
@@ -49,7 +50,7 @@ V1 is intentionally narrow:
 - IntelliJ Platform plugin
 - validated first on IntelliJ IDEA
 - local project bound to one bridge-backed workspace
-- initiative-first workflow
+- task-first governed workflow
 - governed editor primitives
 - no fake autonomy, no RPA, no shell cosplay through popup menus
 
@@ -124,7 +125,7 @@ It uses editor primitives only:
 - open file by path
 - jump to file position
 - show diff
-- apply patch with confirmation
+- apply patch with validation and explicit user feedback
 
 The plugin does not invent a second task model or a private capability system.
 
@@ -234,6 +235,10 @@ Required:
 - artifact and diff inspection
 - patch application
 
+Status:
+
+- implemented through the task-first workbench redesign
+
 ### Phase 6
 
 Goal: hardening.
@@ -251,13 +256,14 @@ Required:
 Primary surface:
 
 - one tool window: `Agents`
+- default view: `Work`
 
-V1 tabs:
+Secondary support surfaces:
 
-- `Status`
-- `Initiatives`
 - `Approvals`
 - `Bridge`
+- `Capabilities`
+- `Initiative Info`
 - `Artifacts` (embedded in initiative detail)
 
 Phase 4+ additions:
