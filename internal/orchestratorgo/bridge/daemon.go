@@ -25,9 +25,13 @@ type DaemonOptions struct {
 	HeartbeatInterval time.Duration
 }
 
+type ClaimExecutor interface {
+	Execute(ctx context.Context, claim domain.LocalBridgeTaskClaimResponse) (domain.LocalBridgeResultRequest, error)
+}
+
 type Daemon struct {
 	client         *Client
-	executor       *WorkspaceExecutor
+	executor       ClaimExecutor
 	bridgeID       string
 	workspaceRoot  string
 	name           string
@@ -73,13 +77,7 @@ func NewDaemon(opts DaemonOptions) (*Daemon, error) {
 }
 
 func (d *Daemon) Run(ctx context.Context) error {
-	if _, err := d.client.Register(ctx, domain.LocalBridgeRegisterRequest{
-		BridgeID:      d.bridgeID,
-		Name:          d.name,
-		Hostname:      d.hostname,
-		WorkspaceRoot: d.workspaceRoot,
-		Capabilities:  bridgeCapabilities(),
-	}); err != nil {
+	if err := d.register(ctx); err != nil {
 		return err
 	}
 	lastHeartbeat := time.Time{}
@@ -88,7 +86,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 		if time.Since(lastHeartbeat) >= d.heartbeatEvery {
-			if _, err := d.client.Heartbeat(ctx, d.bridgeID, "active", d.currentTaskID, intPtr(int(d.heartbeatEvery.Seconds())*3), d.currentStage, d.currentTool, d.currentSummary); err != nil {
+			if err := d.sendHeartbeat(ctx); err != nil {
 				return err
 			}
 			lastHeartbeat = time.Now()
@@ -105,55 +103,84 @@ func (d *Daemon) Run(ctx context.Context) error {
 				continue
 			}
 		}
-		d.currentTaskID = &claim.TaskID
-		d.currentStage = stringPtr("executing")
-		d.currentTool = stringPtr(currentClaimTool(*claim))
-		d.currentSummary = stringPtr(currentClaimSummary(*claim))
-		type execOutcome struct {
-			result  domain.LocalBridgeResultRequest
-			execErr error
+		result, err := d.executeClaim(ctx, *claim)
+		if err != nil {
+			return err
 		}
-		outcomeCh := make(chan execOutcome, 1)
-		go func() {
-			result, execErr := d.executor.Execute(ctx, *claim)
-			outcomeCh <- execOutcome{result: result, execErr: execErr}
-		}()
-		var result domain.LocalBridgeResultRequest
-		var execErr error
-		executing := true
-		for executing {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case outcome := <-outcomeCh:
-				result = outcome.result
-				execErr = outcome.execErr
-				executing = false
-			case <-time.After(d.heartbeatEvery):
-				if _, err := d.client.Heartbeat(ctx, d.bridgeID, "active", d.currentTaskID, intPtr(int(d.heartbeatEvery.Seconds())*3), d.currentStage, d.currentTool, d.currentSummary); err != nil {
-					return err
-				}
-				lastHeartbeat = time.Now()
-			}
-		}
-		if execErr != nil {
-			msg := execErr.Error()
-			result = domain.LocalBridgeResultRequest{
-				Status:       "error",
-				Summary:      stringPtr("Local execution rejected"),
-				Stderr:       &msg,
-				ErrorMessage: &msg,
-			}
-		}
-		if err := d.client.SubmitResult(ctx, d.bridgeID, claim.TaskID, result); err != nil {
-			return fmt.Errorf("submit result for task %s: %w", claim.TaskID, err)
-		}
+		log.Info().Str("bridge_id", d.bridgeID).Str("task_id", claim.TaskID).Str("status", result.Status).Msg("local bridge processed task")
+	}
+}
+
+func (d *Daemon) register(ctx context.Context) error {
+	if _, err := d.client.Register(ctx, domain.LocalBridgeRegisterRequest{
+		BridgeID:      d.bridgeID,
+		Name:          d.name,
+		Hostname:      d.hostname,
+		WorkspaceRoot: d.workspaceRoot,
+		Capabilities:  bridgeCapabilities(),
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (d *Daemon) sendHeartbeat(ctx context.Context) error {
+	_, err := d.client.Heartbeat(ctx, d.bridgeID, "active", d.currentTaskID, intPtr(int(d.heartbeatEvery.Seconds())*3), d.currentStage, d.currentTool, d.currentSummary)
+	return err
+}
+
+func (d *Daemon) executeClaim(ctx context.Context, claim domain.LocalBridgeTaskClaimResponse) (domain.LocalBridgeResultRequest, error) {
+	d.currentTaskID = &claim.TaskID
+	d.currentStage = stringPtr("executing")
+	d.currentTool = stringPtr(currentClaimTool(claim))
+	d.currentSummary = stringPtr(currentClaimSummary(claim))
+	defer func() {
 		d.currentTaskID = nil
 		d.currentStage = nil
 		d.currentTool = nil
 		d.currentSummary = nil
-		log.Info().Str("bridge_id", d.bridgeID).Str("task_id", claim.TaskID).Str("status", result.Status).Msg("local bridge processed task")
+	}()
+
+	type execOutcome struct {
+		result  domain.LocalBridgeResultRequest
+		execErr error
 	}
+	outcomeCh := make(chan execOutcome, 1)
+	go func() {
+		result, execErr := d.executor.Execute(ctx, claim)
+		outcomeCh <- execOutcome{result: result, execErr: execErr}
+	}()
+
+	var result domain.LocalBridgeResultRequest
+	var execErr error
+	executing := true
+	for executing {
+		select {
+		case <-ctx.Done():
+			return domain.LocalBridgeResultRequest{}, ctx.Err()
+		case outcome := <-outcomeCh:
+			result = outcome.result
+			execErr = outcome.execErr
+			executing = false
+		case <-time.After(d.heartbeatEvery):
+			if err := d.sendHeartbeat(ctx); err != nil {
+				return domain.LocalBridgeResultRequest{}, err
+			}
+		}
+	}
+	if execErr != nil {
+		msg := execErr.Error()
+		result = domain.LocalBridgeResultRequest{
+			Status:       "error",
+			Summary:      stringPtr("Local execution rejected"),
+			Stderr:       &msg,
+			ErrorMessage: &msg,
+		}
+	}
+	if err := d.client.SubmitResult(ctx, d.bridgeID, claim.TaskID, result); err != nil {
+		return result, fmt.Errorf("submit result for task %s: %w", claim.TaskID, err)
+	}
+	return result, nil
 }
 
 func currentClaimTool(claim domain.LocalBridgeTaskClaimResponse) string {

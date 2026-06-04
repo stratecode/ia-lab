@@ -202,6 +202,14 @@ func (c *Client) CreateInitiative(ctx context.Context, body domain.InitiativeCre
 	return &out, nil
 }
 
+func (c *Client) CreateObjective(ctx context.Context, body domain.ObjectiveRequest) (*domain.ObjectiveResponse, error) {
+	var out domain.ObjectiveResponse
+	if err := c.requestJSON(ctx, http.MethodPost, "/objectives/", body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (c *Client) GetInitiative(ctx context.Context, initiativeID string) (*domain.InitiativeDetailResponse, error) {
 	var out domain.InitiativeDetailResponse
 	if err := c.requestJSON(ctx, http.MethodGet, "/initiatives/"+strings.TrimSpace(initiativeID), nil, &out); err != nil {

@@ -22,6 +22,11 @@ type CLIOptions struct {
 	Hostname          string
 	PollInterval      time.Duration
 	HeartbeatInterval time.Duration
+	ObjectiveTitle    string
+	Objective         string
+	CreatedBy         string
+	ApprovalMode      string
+	WaitTimeout       time.Duration
 }
 
 func RunRegister(ctx context.Context, opts CLIOptions) error {

@@ -59,6 +59,8 @@ func main() {
 		runErr = bridge.RunTasksWatch(ctx, opts)
 	case "approvals list":
 		runErr = bridge.RunApprovalsList(ctx, opts)
+	case "objectives run":
+		runErr = bridge.RunObjective(ctx, opts)
 	case "tui":
 		runErr = bridge.RunTUI(ctx, opts)
 	default:
@@ -84,7 +86,7 @@ func parseCLI(args []string) (bridge.CLIOptions, string, error) {
 	}
 	var fs *flag.FlagSet
 	switch command {
-	case "bridge register", "bridge heartbeat", "bridge status", "bridge smoke", "bridge start", "tasks list", "tasks watch", "approvals list", "tui":
+	case "bridge register", "bridge heartbeat", "bridge status", "bridge smoke", "bridge start", "tasks list", "tasks watch", "approvals list", "objectives run", "tui":
 		fs = flag.NewFlagSet(command, flag.ContinueOnError)
 	default:
 		return opts, "", fmt.Errorf("unsupported command: %s", command)
@@ -98,6 +100,11 @@ func parseCLI(args []string) (bridge.CLIOptions, string, error) {
 	fs.StringVar(&opts.Hostname, "hostname", opts.Hostname, "Host name override")
 	fs.DurationVar(&opts.PollInterval, "poll-interval", opts.PollInterval, "Poll interval")
 	fs.DurationVar(&opts.HeartbeatInterval, "heartbeat-interval", opts.HeartbeatInterval, "Heartbeat interval")
+	fs.StringVar(&opts.ObjectiveTitle, "title", opts.ObjectiveTitle, "Objective title")
+	fs.StringVar(&opts.Objective, "objective", opts.Objective, "Objective to execute")
+	fs.StringVar(&opts.CreatedBy, "created-by", opts.CreatedBy, "Objective operator identity")
+	fs.StringVar(&opts.ApprovalMode, "approval-mode", opts.ApprovalMode, "Approval mode: manual or local_only")
+	fs.DurationVar(&opts.WaitTimeout, "wait-timeout", opts.WaitTimeout, "Maximum time to wait for initiative completion")
 	parseArgs := []string{}
 	if len(args) > 2 {
 		parseArgs = args[2:]
@@ -124,6 +131,11 @@ func defaultCLIOptions() bridge.CLIOptions {
 		Hostname:          getenv("LAB_AGENT_HOSTNAME", ""),
 		PollInterval:      parseDurationEnv("LAB_AGENT_POLL_INTERVAL", 2*time.Second),
 		HeartbeatInterval: parseDurationEnv("LAB_AGENT_HEARTBEAT_INTERVAL", 15*time.Second),
+		ObjectiveTitle:    getenv("LAB_AGENT_OBJECTIVE_TITLE", ""),
+		Objective:         getenv("LAB_AGENT_OBJECTIVE", ""),
+		CreatedBy:         getenv("LAB_AGENT_CREATED_BY", "lab-agent"),
+		ApprovalMode:      getenv("LAB_AGENT_APPROVAL_MODE", "local_only"),
+		WaitTimeout:       parseDurationEnv("LAB_AGENT_WAIT_TIMEOUT", 30*time.Minute),
 	}
 }
 
@@ -158,6 +170,7 @@ func usage() {
   lab-agent [--env-file .env.bridge] tasks list
   lab-agent [--env-file .env.bridge] tasks watch
   lab-agent [--env-file .env.bridge] approvals list
+  lab-agent [--env-file .env.bridge] objectives run --objective "..." [--title ... --approval-mode local_only]
   lab-agent [--env-file .env.bridge] tui`)
 }
 

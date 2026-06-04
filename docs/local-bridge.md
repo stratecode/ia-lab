@@ -391,6 +391,16 @@ List approvals:
 ./dist/lab-agent-linux-amd64 --env-file .env.bridge approvals list
 ```
 
+Run one objective through the local bridge without opening the TUI:
+
+```bash
+./dist/lab-agent-linux-amd64 --env-file .env.bridge objectives run \
+  --title "Repair the repo objective loop" \
+  --objective "Apply the requested repo change, validate it, and close the initiative only when review approves."
+```
+
+Default behavior is intentionally bounded: it auto-approves only `local_bridge_tool` approvals that belong to waiting-approval tasks inside the current objective initiative. Override with `--approval-mode manual` if you want operator gating.
+
 ## Initiative API
 
 The TUI is the operator surface. The API is the integration surface.

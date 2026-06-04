@@ -468,6 +468,19 @@ LAB_AGENT_WORKSPACE_ROOT="/abs/path/to/current/workspace" \
 ./dist/lab-agent-linux-amd64 --env-file .env.bridge approvals list
 ```
 
+### Run one objective autonomously from the CLI
+
+```bash
+LAB_AGENT_BASE_URL="$ORCH_BASE" \
+LAB_AGENT_API_KEY="$ORCH_KEY" \
+LAB_AGENT_WORKSPACE_ROOT="/abs/path/to/current/workspace" \
+./dist/lab-agent-linux-amd64 --env-file .env.bridge objectives run \
+  --title "Fix the failing validation loop" \
+  --objective "Repair the failing validation loop and leave the repo in a reviewed passing state."
+```
+
+This command registers the local bridge, creates the objective, processes local claims, auto-approves objective-scoped `local_bridge_tool` approvals by default, and waits until the initiative reaches a terminal state.
+
 ### Open the local bridge cockpit
 
 ```bash
