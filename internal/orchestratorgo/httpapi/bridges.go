@@ -141,15 +141,42 @@ func (s *Server) submitBridgeTaskResult(w http.ResponseWriter, r *http.Request) 
 		} else if completed != nil {
 			s.indexTask(r.Context(), completed.ID)
 		}
+		if task.InitiativeID != nil {
+			if err := s.queueReadyObjectiveTasks(r.Context(), *task.InitiativeID); err != nil {
+				writeDetail(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
 		s.reconcileRootTask(r.Context(), taskID)
 	default:
-		_ = s.Postgres.FinalizeLocalBridgeTaskLease(r.Context(), taskID, bridgeID, "failed", stringPtr("failed"), nil, body.Summary)
 		errorMessage := firstNonEmptyString(derefStringPtr(body.ErrorMessage), derefStringPtr(body.Stderr), derefStringPtr(body.Stdout), "Local bridge execution failed")
-		if failed, err := s.Postgres.FailTask(r.Context(), taskID, "bridge:"+bridgeID, errorMessage, errorMessage, results); err != nil {
-			writeDetail(w, http.StatusInternalServerError, err.Error())
-			return
-		} else if failed != nil {
-			s.indexTask(r.Context(), failed.ID)
+		if shouldStartObjectiveRepairCycle(task, body) {
+			_ = s.Postgres.FinalizeLocalBridgeTaskLease(r.Context(), taskID, bridgeID, "completed", stringPtr("completed"), nil, body.Summary)
+			reason := firstNonEmptyString(derefStringPtr(body.Summary), "Objective iteration completed and requested another repair cycle")
+			if completed, err := s.Postgres.CompleteTask(r.Context(), taskID, "bridge:"+bridgeID, reason, results); err != nil {
+				writeDetail(w, http.StatusInternalServerError, err.Error())
+				return
+			} else if completed != nil {
+				s.indexTask(r.Context(), completed.ID)
+			}
+			if err := s.startObjectiveRepairCycle(r.Context(), task, body); err != nil {
+				writeDetail(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if task.InitiativeID != nil {
+				if _, err := s.Postgres.ReconcileInitiativeExecution(r.Context(), *task.InitiativeID); err != nil {
+					writeDetail(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+			}
+		} else {
+			_ = s.Postgres.FinalizeLocalBridgeTaskLease(r.Context(), taskID, bridgeID, "failed", stringPtr("failed"), nil, body.Summary)
+			if failed, err := s.Postgres.FailTask(r.Context(), taskID, "bridge:"+bridgeID, errorMessage, errorMessage, results); err != nil {
+				writeDetail(w, http.StatusInternalServerError, err.Error())
+				return
+			} else if failed != nil {
+				s.indexTask(r.Context(), failed.ID)
+			}
 		}
 		s.reconcileRootTask(r.Context(), taskID)
 	}
@@ -175,6 +202,8 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 		"diff":                         derefStringPtr(result.Diff),
 		"changed_files":                result.ChangedFiles,
 		"test_results":                 result.TestResults,
+		"review_decision":              derefStringPtr(result.ReviewDecision),
+		"review_comments":              result.ReviewComments,
 		"semantic_context_sources":     result.SemanticContextSources,
 		"semantic_context_chunk_count": result.SemanticContextChunkCount,
 		"semantic_context_hits":        result.SemanticContextHits,
@@ -201,6 +230,7 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 	}
 
 	artifactsToPersist := append([]map[string]any{}, result.Artifacts...)
+	artifactsToPersist = append(artifactsToPersist, buildObjectiveIterationArtifacts(task, result)...)
 	artifactsToPersist = append(artifactsToPersist, buildRepoWorkflowMemoryArtifacts(task, result)...)
 	artifactIDs := make([]string, 0, 4+len(artifactsToPersist))
 	appendTextArtifact := func(kind, title, content string) error {
@@ -243,6 +273,25 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 		}
 	}
 	for _, artifact := range artifactsToPersist {
+		artifactMetadata := cloneMap(artifact)
+		if artifactMetadata == nil {
+			artifactMetadata = map[string]any{}
+		}
+		if task != nil {
+			if task.InitiativeID != nil && strings.TrimSpace(*task.InitiativeID) != "" {
+				artifactMetadata["initiative_id"] = strings.TrimSpace(*task.InitiativeID)
+			}
+			artifactMetadata["task_id"] = task.ID
+			if workItemID := strings.TrimSpace(asString(task.Metadata["work_item_id"])); workItemID != "" {
+				artifactMetadata["work_item_id"] = workItemID
+			}
+			if workItemKind := strings.TrimSpace(asString(task.Metadata["work_item_kind"])); workItemKind != "" {
+				artifactMetadata["work_item_kind"] = workItemKind
+			}
+			if iteration := objectiveAsInt(task.Metadata["objective_iteration"], 0); iteration > 0 {
+				artifactMetadata["iteration"] = iteration
+			}
+		}
 		artifactID, err := s.Postgres.CreateArtifact(ctx, store.CreateArtifactParams{
 			TaskID:       taskIDPtr,
 			InvocationID: &invocationID,
@@ -251,7 +300,7 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 			URI:          stringPtr(strings.TrimSpace(asString(artifact["path"]))),
 			MediaType:    stringPtr(strings.TrimSpace(asString(artifact["media_type"]))),
 			ContentText:  stringPtr(truncateForAPI(strings.TrimSpace(asString(artifact["content_text"])), 4000)),
-			Metadata:     artifact,
+			Metadata:     artifactMetadata,
 		})
 		if err != nil {
 			return nil, "", nil, err
@@ -274,6 +323,8 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 		"diff":                         derefStringPtr(result.Diff),
 		"changed_files":                result.ChangedFiles,
 		"test_results":                 result.TestResults,
+		"review_decision":              derefStringPtr(result.ReviewDecision),
+		"review_comments":              result.ReviewComments,
 		"artifacts":                    artifactsToPersist,
 		"error_message":                derefStringPtr(result.ErrorMessage),
 		"tool_invocation_id":           invocationID,
@@ -538,6 +589,103 @@ func buildRepoWorkflowMemoryArtifacts(task *domain.TaskResponse, result domain.L
 				"memory_kind":               "benchmark_run",
 			},
 		)
+	}
+	return artifacts
+}
+
+func buildObjectiveIterationArtifacts(task *domain.TaskResponse, result domain.LocalBridgeResultRequest) []map[string]any {
+	if task == nil || task.InitiativeID == nil || !objectiveAsBool(task.Metadata["objective_entrypoint"]) {
+		return nil
+	}
+	status := strings.ToLower(strings.TrimSpace(result.Status))
+	if status == "" || status == "waiting_approval" {
+		return nil
+	}
+	metadata := task.Metadata
+	iteration := objectiveIteration(metadata)
+	maxIterations := objectiveMaxIterations(metadata)
+	workItemKind := strings.TrimSpace(asString(metadata["work_item_kind"]))
+	contract, _ := decodeObjectiveExecutionContract(metadata["execution_contract"])
+	objectiveTitle := firstNonEmptyString(strings.TrimSpace(contract.Title), strings.TrimSpace(asString(metadata["objective_title"])))
+	normalizedObjective := firstNonEmptyString(strings.TrimSpace(contract.NormalizedObjective), strings.TrimSpace(asString(metadata["initiative_goal"])))
+	workspaceRoot := firstNonEmptyString(strings.TrimSpace(contract.WorkspaceRoot), strings.TrimSpace(asString(metadata["workspace_root"])))
+	summary := strings.TrimSpace(derefStringPtr(result.Summary))
+	if summary == "" {
+		summary = strings.TrimSpace(task.Description)
+	}
+	errorMessage := strings.TrimSpace(derefStringPtr(result.ErrorMessage))
+	reviewDecision := strings.TrimSpace(derefStringPtr(result.ReviewDecision))
+	needsRepair := shouldStartObjectiveRepairCycle(task, result)
+	repairFeedback := firstNonEmptyString(
+		strings.TrimSpace(asString(metadata["objective_repair_feedback"])),
+		objectiveRepairFeedback(result),
+	)
+	payload := map[string]any{
+		"memory_kind":            "objective_iteration",
+		"initiative_id":          stringValue(task.InitiativeID),
+		"task_id":                task.ID,
+		"objective_title":        objectiveTitle,
+		"normalized_objective":   normalizedObjective,
+		"workspace_root":         workspaceRoot,
+		"iteration":              iteration,
+		"max_iterations":         maxIterations,
+		"work_item_kind":         workItemKind,
+		"result_status":          status,
+		"review_decision":        reviewDecision,
+		"summary":                summary,
+		"error_message":          errorMessage,
+		"changed_files":          result.ChangedFiles,
+		"diff_present":           strings.TrimSpace(derefStringPtr(result.Diff)) != "",
+		"test_results":           nonNilMapHTTP(result.TestResults),
+		"review_comments":        result.ReviewComments,
+		"validation_commands":    anyStringSliceHTTPDefault(metadata["validation_commands"], []string{}),
+		"definition_of_done":     strings.TrimSpace(asString(metadata["definition_of_done"])),
+		"needs_repair_cycle":     needsRepair,
+		"repair_feedback":        repairFeedback,
+		"objective_iteration_id": fmt.Sprintf("%s:%d:%s", stringValue(task.InitiativeID), iteration, workItemKind),
+	}
+	raw, _ := json.MarshalIndent(payload, "", "  ")
+	artifacts := []map[string]any{
+		{
+			"type":                 "objective_iteration_summary",
+			"title":                fmt.Sprintf("Objective iteration %d %s", iteration, workItemKind),
+			"media_type":           "application/json",
+			"content_text":         string(raw),
+			"initiative_id":        payload["initiative_id"],
+			"objective_title":      objectiveTitle,
+			"normalized_objective": normalizedObjective,
+			"iteration":            iteration,
+			"max_iterations":       maxIterations,
+			"work_item_kind":       workItemKind,
+			"result_status":        status,
+			"review_decision":      reviewDecision,
+			"needs_repair_cycle":   needsRepair,
+			"memory_kind":          "objective_iteration",
+		},
+	}
+	if needsRepair {
+		signal := map[string]any{
+			"initiative_id":        payload["initiative_id"],
+			"task_id":              task.ID,
+			"iteration":            iteration,
+			"max_iterations":       maxIterations,
+			"work_item_kind":       workItemKind,
+			"repair_feedback":      repairFeedback,
+			"review_decision":      reviewDecision,
+			"next_expected_action": "replan",
+		}
+		signalRaw, _ := json.MarshalIndent(signal, "", "  ")
+		artifacts = append(artifacts, map[string]any{
+			"type":               "objective_repair_signal",
+			"title":              fmt.Sprintf("Objective repair signal %d", iteration),
+			"media_type":         "application/json",
+			"content_text":       string(signalRaw),
+			"initiative_id":      payload["initiative_id"],
+			"iteration":          iteration,
+			"work_item_kind":     workItemKind,
+			"needs_repair_cycle": true,
+			"memory_kind":        "objective_repair_signal",
+		})
 	}
 	return artifacts
 }

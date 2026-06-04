@@ -66,6 +66,7 @@ Tool registry and MCP integrations.
 - [System Usage Guide](system-usage.md)
 - [TUI Operator Guide](tui.md)
 - [Orchestrator Go Runtime](orchestrator-go-runtime.md)
+- [Autonomous Objective Runtime Plan](architecture/autonomous-objective-runtime-plan.md)
 - [Local Bridge and CLI](local-bridge.md)
 - [Orchestrator Redeploy Runbook](orchestrator-redeploy.md)
 - [Server Baseline](server-baseline.md)

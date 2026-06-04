@@ -66,6 +66,8 @@ type LocalBridgeResultRequest struct {
 	ActionType                *string          `json:"action_type"`
 	TargetResource            *string          `json:"target_resource"`
 	TimeoutSeconds            *int             `json:"timeout_seconds"`
+	ReviewDecision            *string          `json:"review_decision,omitempty"`
+	ReviewComments            []map[string]any `json:"review_comments,omitempty"`
 	SemanticContextSources    []string         `json:"semantic_context_sources"`
 	SemanticContextChunkCount int              `json:"semantic_context_chunk_count"`
 	SemanticContextHits       []map[string]any `json:"semantic_context_hits"`

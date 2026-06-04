@@ -426,3 +426,23 @@ func TestMemoryMatchTypeTechnologyTransferRequiresCoherentSignal(t *testing.T) {
 		t.Fatalf("expected coherent technology hit to be technology_similar, got %q", got)
 	}
 }
+
+func TestBuildForTaskUsesWorkspaceRootMetadataWhenWorkspacePathIsNil(t *testing.T) {
+	workspaceRoot := "/tmp/objective-workspace"
+	task := &domain.TaskResponse{
+		ID:          "task-1",
+		Description: "Review the objective execution results",
+		Metadata: map[string]any{
+			"workspace_root":  workspaceRoot,
+			"initiative_goal": "Fix the repository and validate the changes.",
+		},
+	}
+	svc := &Service{}
+	pkg, err := svc.BuildForTask(nil, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkg.WorkspaceRoot == nil || *pkg.WorkspaceRoot != workspaceRoot {
+		t.Fatalf("expected workspace_root metadata to be preserved, got %#v", pkg.WorkspaceRoot)
+	}
+}

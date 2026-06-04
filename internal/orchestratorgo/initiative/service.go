@@ -143,10 +143,8 @@ func shouldUseDeterministicRepoPlan(initiative *domain.InitiativeResponse) bool 
 	if root == "" {
 		return false
 	}
-	if _, ok := loadBenchmarkRepoWorkflowProfile(root); ok {
-		return true
-	}
-	return existingGitRepo(root)
+	_, ok := loadBenchmarkRepoWorkflowProfile(root)
+	return ok
 }
 
 func (s *Service) callStructured(ctx context.Context, prompt string) (map[string]any, error) {

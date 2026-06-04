@@ -1088,6 +1088,9 @@ func sanitizeProjectName(value string) string {
 
 func repoWorkflowRoot(metadata map[string]any, projectRequest map[string]any) string {
 	workspaceRoot := strings.TrimSpace(firstNonEmptyMetadata(metadata, "workspace_root"))
+	if !explicitRepoWorkflowRequested(metadata, projectRequest, workspaceRoot) {
+		return ""
+	}
 	if workspaceRoot != "" && workspaceHasGitRepo(workspaceRoot) {
 		return workspaceRoot
 	}
@@ -1105,6 +1108,21 @@ func repoWorkflowRoot(metadata map[string]any, projectRequest map[string]any) st
 		return projectRoot
 	}
 	return ""
+}
+
+func explicitRepoWorkflowRequested(metadata map[string]any, projectRequest map[string]any, workspaceRoot string) bool {
+	if strings.TrimSpace(firstNonEmptyMetadata(metadata, "benchmark_case_id", "benchmark_case_type", "repo_workflow")) != "" {
+		return true
+	}
+	if projectRequest != nil && strings.TrimSpace(firstNonEmptyMetadata(projectRequest, "benchmark_case_id", "benchmark_case_type")) != "" {
+		return true
+	}
+	if workspaceRoot != "" {
+		if _, ok := loadRunnerBenchmarkRepoWorkflowProfile(workspaceRoot); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func workspaceHasGitRepo(root string) bool {

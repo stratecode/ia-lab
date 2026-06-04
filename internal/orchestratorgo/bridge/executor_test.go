@@ -386,6 +386,205 @@ func TestWorkspaceExecutorCodeAnalysis(t *testing.T) {
 	}
 }
 
+func TestWorkspaceExecutorAllowsAiderTaskCommand(t *testing.T) {
+	root := initGitWorkspace(t)
+	binDir := t.TempDir()
+	script := filepath.Join(binDir, "aider-task")
+	body := "#!/bin/sh\nprintf 'aider-ok\\n'\nprintf '%s\\n' \"$@\" > \"$PWD/.lab-aider-args\"\nprintf 'marker\\n' > \"$PWD/.lab-aider-marker\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"objective_iteration":       2,
+			"objective_max_iterations":  3,
+			"objective_repair_feedback": "Fix the failing validation before approval.",
+			"review_comments": []map[string]any{
+				{"severity": "high", "message": "Keep the patch narrow."},
+			},
+			"validation_commands": []string{"go", "test", "./..."},
+			"suspected_paths":     []string{"internal/orchestratorgo/httpapi/objectives.go"},
+			"context_package": map[string]any{
+				"prompt_section": "Previous successful objective iterations fixed similar validation drift.",
+				"source_refs":    []any{"artifact:objective_iteration_summary:1"},
+			},
+			"tool_request": map[string]any{
+				"tool": "run_command",
+				"argv": []any{"aider-task", "--description", "Implement the objective cleanly."},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" {
+		t.Fatalf("unexpected aider-task result: %#v", result)
+	}
+	if result.Stdout == nil || !strings.Contains(*result.Stdout, "aider-ok") {
+		t.Fatalf("expected aider-task stdout, got %#v", result.Stdout)
+	}
+	if len(result.ChangedFiles) == 0 {
+		t.Fatalf("expected git artifacts after aider-task, got %#v", result)
+	}
+	argsRaw, err := os.ReadFile(filepath.Join(root, ".lab-aider-args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	argsText := string(argsRaw)
+	if !strings.Contains(argsText, "--metadata") {
+		t.Fatalf("expected aider-task metadata injection, got %s", argsText)
+	}
+	if !strings.Contains(argsText, "--scope-paths") {
+		t.Fatalf("expected aider-task scope-paths injection, got %s", argsText)
+	}
+	if !strings.Contains(argsText, "--test-command") {
+		t.Fatalf("expected aider-task test-command injection, got %s", argsText)
+	}
+	if !strings.Contains(argsText, "Fix the failing validation before approval.") {
+		t.Fatalf("expected enriched description with repair feedback, got %s", argsText)
+	}
+}
+
+func TestWorkspaceExecutorReviewWorkspaceDecidesApproved(t *testing.T) {
+	root := initGitWorkspace(t)
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# repo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitInDir(t, root, "add", "README.md")
+	runGitInDir(t, root, "-c", "user.name=Codex", "-c", "user.email=codex@example.com", "commit", "-m", "init")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# repo\nupdated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"tool_request": map[string]any{
+				"tool":         "review_workspace",
+				"project_root": ".",
+				"test_command": []any{"python3", "-c", "print('ok')"},
+				"execution_contract": map[string]any{
+					"normalized_objective": "Update README and keep tests green.",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" {
+		t.Fatalf("expected approved review, got %#v", result)
+	}
+	if result.ReviewDecision == nil || *result.ReviewDecision != "approved" {
+		t.Fatalf("expected approved review decision, got %#v", result.ReviewDecision)
+	}
+	if result.Diff == nil || !strings.Contains(*result.Diff, "updated") {
+		t.Fatalf("expected diff in review result, got %#v", result.Diff)
+	}
+}
+
+func TestWorkspaceExecutorReviewWorkspaceRequestsChangesWhenNoDiff(t *testing.T) {
+	root := initGitWorkspace(t)
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# repo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitInDir(t, root, "add", "README.md")
+	runGitInDir(t, root, "-c", "user.name=Codex", "-c", "user.email=codex@example.com", "commit", "-m", "init")
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"tool_request": map[string]any{
+				"tool":         "review_workspace",
+				"project_root": ".",
+				"test_command": []any{"python3", "-c", "print('ok')"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "error" {
+		t.Fatalf("expected changes_requested style error, got %#v", result)
+	}
+	if result.ReviewDecision == nil || *result.ReviewDecision != "changes_requested" {
+		t.Fatalf("expected changes_requested review decision, got %#v", result.ReviewDecision)
+	}
+}
+
+func TestWorkspaceExecutorResearchProjectBuildsRepairPlan(t *testing.T) {
+	root := initGitWorkspace(t)
+	projectDir := filepath.Join(root, "projects", "repair-demo")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "README.md"), []byte("# repair-demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "go.mod"), []byte("module repair-demo\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"tool_request": map[string]any{
+				"tool": "research_project",
+				"project_request": map[string]any{
+					"project_name":     "repair-demo",
+					"project_root":     "projects/repair-demo",
+					"project_type":     "existing_repo",
+					"runtime_or_stack": "go",
+					"goal":             "Fix the autonomous objective repair loop.",
+					"test_focus":       "objective repair iteration 2",
+				},
+				"prior_findings": []any{
+					map[string]any{"severity": "high", "message": "Validation still fails in the objective loop."},
+				},
+				"prior_test_results": map[string]any{
+					"exit_code": 1,
+				},
+				"prior_changed_files": []any{"internal/orchestratorgo/httpapi/objectives.go"},
+				"repair_feedback":     "Narrow the patch and keep validation green.",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" {
+		t.Fatalf("unexpected research repair result: %#v", result)
+	}
+	if result.Stdout == nil || !strings.Contains(*result.Stdout, "\"repair_mode\": true") {
+		t.Fatalf("expected repair_mode in research output, got %#v", result.Stdout)
+	}
+	if result.Stdout == nil || !strings.Contains(*result.Stdout, "\"next_edit_brief\"") {
+		t.Fatalf("expected next_edit_brief in research output, got %#v", result.Stdout)
+	}
+	foundRepairPlan := false
+	for _, artifact := range result.Artifacts {
+		if artifact["type"] == "repair_plan" {
+			foundRepairPlan = true
+			break
+		}
+	}
+	if !foundRepairPlan {
+		t.Fatalf("expected repair_plan artifact, got %#v", result.Artifacts)
+	}
+}
+
 func initGitWorkspace(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -395,4 +594,13 @@ func initGitWorkspace(t *testing.T) string {
 		t.Fatalf("git init failed: %v\n%s", err, string(output))
 	}
 	return root
+}
+
+func runGitInDir(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(output))
+	}
 }

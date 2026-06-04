@@ -371,7 +371,13 @@ func deriveInitiativeExecutionStatus(current domain.InitiativeStatus, items []do
 			continue
 		}
 		switch item.Task.State {
-		case domain.TaskStateFailed, domain.TaskStateCancelled:
+		case domain.TaskStateFailed:
+			hasFailed = true
+			allTerminal = false
+		case domain.TaskStateCancelled:
+			if taskMetadataBool(item.Task.Metadata, "superseded_by_repair_cycle") {
+				continue
+			}
 			hasFailed = true
 			allTerminal = false
 		case domain.TaskStateCompleted:
@@ -393,6 +399,24 @@ func deriveInitiativeExecutionStatus(current domain.InitiativeStatus, items []do
 		return domain.InitiativeStatusCompleted
 	default:
 		return current
+	}
+}
+
+func taskMetadataBool(metadata map[string]any, key string) bool {
+	if metadata == nil {
+		return false
+	}
+	value, ok := metadata[key]
+	if !ok {
+		return false
+	}
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
 	}
 }
 

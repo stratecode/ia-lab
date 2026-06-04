@@ -158,7 +158,7 @@ func TestPlannerBoilerplateFlowGeneratesMultiAgentSubtasks(t *testing.T) {
 	}
 }
 
-func TestPlannerRepoWorkflowGeneratesDeterministicRepoSubtasks(t *testing.T) {
+func TestPlannerRepoWorkflowDoesNotAutoTriggerForOrdinaryGitRepo(t *testing.T) {
 	plannerAgent := domain.AgentTypePlanner
 	root := t.TempDir()
 	workspaceRoot := filepath.Join(root, "python-slugify")
@@ -182,23 +182,8 @@ func TestPlannerRepoWorkflowGeneratesDeterministicRepoSubtasks(t *testing.T) {
 	if result.Status != "success" {
 		t.Fatalf("unexpected planner status: %#v", result)
 	}
-	if got := asString(result.Results["project_flow"]); got != "repo_workflow_v1" {
-		t.Fatalf("expected repo_workflow_v1, got %q", got)
-	}
-	subtasks, ok := result.Results["subtasks"].([]map[string]any)
-	if !ok || len(subtasks) != 3 {
-		t.Fatalf("expected 3 subtasks, got %#v", result.Results["subtasks"])
-	}
-	if subtasks[1]["assigned_agent"] != "coder" || !asBool(subtasks[1]["requires_approval"]) {
-		t.Fatalf("expected approval-gated coder task, got %#v", subtasks[1])
-	}
-	coderMetadata := subtasks[1]["metadata"].(map[string]any)
-	toolRequest := coderMetadata["tool_request"].(map[string]any)
-	if asString(toolRequest["tool"]) != "apply_patch" {
-		t.Fatalf("expected apply_patch tool request, got %#v", toolRequest["tool"])
-	}
-	if asString(toolRequest["patch"]) == "" {
-		t.Fatal("expected deterministic patch payload")
+	if got := asString(result.Results["project_flow"]); got == "repo_workflow_v1" {
+		t.Fatalf("expected ordinary git repo to avoid deterministic repo workflow, got %q", got)
 	}
 }
 

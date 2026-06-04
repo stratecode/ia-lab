@@ -113,6 +113,9 @@ func (s *Server) Router(auth *Authenticator) http.Handler {
 		r.Post("/{initiativeID}/tasks/launch", s.launchInitiativeTasks)
 		r.Post("/{initiativeID}/tasks/{taskID}/mode", s.updateInitiativeTaskMode)
 	})
+	r.Route("/objectives", func(r chi.Router) {
+		r.Post("/", s.createObjective)
+	})
 	r.Post("/tools/web/search", s.webSearch)
 	r.Post("/tools/web/fetch", s.webFetch)
 	r.Post("/tools/filesystem", s.filesystemTool)

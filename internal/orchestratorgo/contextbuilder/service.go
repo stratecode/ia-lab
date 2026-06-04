@@ -66,6 +66,11 @@ func (s *Service) Build(ctx context.Context, req domain.ContextBuildRequest) (*d
 			}
 			if enriched.WorkspaceRoot == nil {
 				enriched.WorkspaceRoot = task.WorkspacePath
+				if enriched.WorkspaceRoot == nil {
+					if workspaceRoot := strings.TrimSpace(firstNonEmptyMetadata(task.Metadata, "workspace_root")); workspaceRoot != "" {
+						enriched.WorkspaceRoot = &workspaceRoot
+					}
+				}
 			}
 		}
 	}
@@ -175,7 +180,7 @@ func (s *Service) BuildForTask(ctx context.Context, task *domain.TaskResponse) (
 		AgentType:       agentType,
 		TaskID:          &task.ID,
 		InitiativeID:    task.InitiativeID,
-		WorkspaceRoot:   task.WorkspacePath,
+		WorkspaceRoot:   taskWorkspaceRoot(task),
 		TaskDescription: task.Description,
 		Metadata:        task.Metadata,
 		MemoryMode:      firstNonEmptyMetadata(task.Metadata, "context_memory_mode", "benchmark_memory_mode", "memory_mode"),
@@ -185,6 +190,19 @@ func (s *Service) BuildForTask(ctx context.Context, task *domain.TaskResponse) (
 		IncludeFailed:   includeFailed,
 		IncludeRejected: includeRejected,
 	})
+}
+
+func taskWorkspaceRoot(task *domain.TaskResponse) *string {
+	if task == nil {
+		return nil
+	}
+	if task.WorkspacePath != nil && strings.TrimSpace(*task.WorkspacePath) != "" {
+		return task.WorkspacePath
+	}
+	if workspaceRoot := strings.TrimSpace(firstNonEmptyMetadata(task.Metadata, "workspace_root")); workspaceRoot != "" {
+		return &workspaceRoot
+	}
+	return nil
 }
 
 func (s *Service) searchContext(ctx context.Context, req domain.SemanticSearchRequest, buildReq domain.ContextBuildRequest) (*domain.SemanticSearchResponse, error) {

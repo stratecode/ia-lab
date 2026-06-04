@@ -186,6 +186,7 @@ func bridgeCapabilities() map[string]any {
 			"research_project",
 			"scaffold_project",
 			"review_project",
+			"review_workspace",
 			"apply_patch",
 			"run_command",
 			"git_status",

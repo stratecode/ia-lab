@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -169,21 +170,15 @@ func TestGenerateExecutionPlanUsesRepoWorkflowForExistingGitRepo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := asString(artifacts.JSON["project_flow"]); got != "repo_workflow_v1" {
-		t.Fatalf("expected repo_workflow_v1, got %q", got)
+	if got := asString(artifacts.JSON["project_flow"]); got == "repo_workflow_v1" {
+		t.Fatalf("expected generic execution plan for ordinary git repo, got %q", got)
 	}
 	epics := artifacts.JSON["epics"].([]map[string]any)
 	coderTask := epics[1]["tasks"].([]map[string]any)[0]
-	if !asBool(coderTask["approval_required"]) {
-		t.Fatal("expected coder task to require approval")
-	}
 	metadata := coderTask["metadata"].(map[string]any)
 	toolRequest := metadata["tool_request"].(map[string]any)
-	if asString(toolRequest["tool"]) != "apply_patch" {
-		t.Fatalf("expected apply_patch tool, got %#v", toolRequest["tool"])
-	}
-	if asString(toolRequest["patch"]) == "" {
-		t.Fatal("expected deterministic patch payload")
+	if asString(toolRequest["tool"]) != "scaffold_project" {
+		t.Fatalf("expected scaffold_project in generic plan, got %#v", toolRequest["tool"])
 	}
 }
 
@@ -244,6 +239,72 @@ func TestGenerateExecutionPlanUsesBenchmarkCaseFileWhenPresent(t *testing.T) {
 	projectRequest := metadata["project_request"].(map[string]any)
 	if got := asString(projectRequest["repository_url"]); got != "https://github.com/pallets/click" {
 		t.Fatalf("expected repository_url from benchmark case, got %q", got)
+	}
+}
+
+func TestGenerateObjectiveExecutionContractForRepoObjective(t *testing.T) {
+	svc := New(config.Config{}, nil)
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	contract, err := svc.GenerateObjectiveExecutionContract(context.Background(), ObjectiveInput{
+		Title:         "Fix CLI regression",
+		Objective:     "Patch the repository so the CLI forwards regex_pattern correctly and prove it with tests.",
+		WorkspaceRoot: root,
+		CreatedBy:     "test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(contract.NormalizedObjective) == "" {
+		t.Fatal("expected normalized objective")
+	}
+	if contract.ExecutionBackend != "aider-task" {
+		t.Fatalf("expected aider-task backend, got %q", contract.ExecutionBackend)
+	}
+	if contract.WorkspaceRoot != root {
+		t.Fatalf("expected workspace root %q, got %q", root, contract.WorkspaceRoot)
+	}
+	if len(contract.WorkItems) < 4 {
+		t.Fatalf("expected at least 4 work items, got %#v", contract.WorkItems)
+	}
+	gotKinds := []string{}
+	for _, item := range contract.WorkItems {
+		gotKinds = append(gotKinds, string(item.Kind))
+	}
+	wantKinds := []string{"research", "edit", "validate", "review"}
+	for _, want := range wantKinds {
+		found := false
+		for _, got := range gotKinds {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected work item kind %q, got %#v", want, gotKinds)
+		}
+	}
+	var editItem *domain.WorkItem
+	for idx := range contract.WorkItems {
+		item := &contract.WorkItems[idx]
+		if item.Kind == domain.WorkItemKindEdit {
+			editItem = item
+			break
+		}
+	}
+	if editItem == nil {
+		t.Fatal("expected edit work item")
+	}
+	if editItem.Backend != "aider-task" {
+		t.Fatalf("expected aider-task edit backend, got %q", editItem.Backend)
+	}
+	if !editItem.ApprovalRequired {
+		t.Fatal("expected edit work item to require approval")
+	}
+	if len(editItem.ValidationCommands) == 0 {
+		t.Fatal("expected edit work item validation commands")
 	}
 }
 

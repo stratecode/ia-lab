@@ -28,6 +28,7 @@ var allowedCommands = []string{
 	"composer",
 	"php",
 	"git",
+	"aider-task",
 }
 
 type LocalExecutionError struct {
@@ -79,6 +80,7 @@ func (e *WorkspaceExecutor) Execute(ctx context.Context, claim domain.LocalBridg
 	if tool == "" {
 		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: "tool_request.tool is required"}
 	}
+	toolRequest["_task_metadata"] = metadata
 	if err := ensureToolCapabilityAllowed(metadata, tool); err != nil {
 		return domain.LocalBridgeResultRequest{}, err
 	}
@@ -113,6 +115,8 @@ func (e *WorkspaceExecutor) Execute(ctx context.Context, claim domain.LocalBridg
 		result, err = e.scaffoldProject(toolRequest)
 	case "review_project":
 		result, err = e.reviewProject(ctx, toolRequest)
+	case "review_workspace":
+		result, err = e.reviewWorkspace(ctx, toolRequest)
 	case "apply_patch":
 		result, err = e.applyPatch(ctx, toolRequest)
 	case "run_command":
@@ -127,6 +131,15 @@ func (e *WorkspaceExecutor) Execute(ctx context.Context, claim domain.LocalBridg
 			argv = []string{"pytest", "-q"}
 		}
 		result, err = e.runAllowedCommand(ctx, argv, "Ran tests")
+		if err == nil {
+			result.TestResults = map[string]any{
+				"argv":      argv,
+				"exit_code": derefIntPtr(result.ExitCode),
+				"status":    strings.ToLower(strings.TrimSpace(result.Status)),
+				"stdout":    derefStringPtr(result.Stdout),
+				"stderr":    derefStringPtr(result.Stderr),
+			}
+		}
 	case "code_analysis":
 		result, err = e.codeAnalysis(toolRequest)
 	default:
@@ -236,47 +249,89 @@ func (e *WorkspaceExecutor) researchProject(request map[string]any) (domain.Loca
 		"Expose one obvious entrypoint and one obvious validation path.",
 		"Prefer a test command with no external network dependency.",
 	}
+	priorFindings := anyMapSliceDefault(request["prior_findings"], []map[string]any{})
+	priorTestResults := nonNilMap(request["prior_test_results"])
+	priorChangedFiles := anyStringSliceDefault(request["prior_changed_files"], []string{})
+	repairFeedback := firstNonEmptyString(strings.TrimSpace(asString(request["repair_feedback"])), strings.TrimSpace(asString(projectRequest["repair_feedback"])))
+	repairMode := len(priorFindings) > 0 || len(priorTestResults) > 0 || len(priorChangedFiles) > 0 || repairFeedback != ""
 	if evidence["manifest_file"] != nil {
 		recommendations = append(recommendations, "Use the repository manifest as the primary contract before inventing extra assumptions.")
 	}
 	if evidence["readme_excerpt"] != nil {
 		recommendations = append(recommendations, "Prefer README-aligned constraints over generic repo folklore.")
 	}
+	if repairMode {
+		recommendations = append(recommendations,
+			"Treat the previous validation and review findings as the primary contract for the next edit.",
+			"Fix the highest-severity failure first, then rerun the declared validation command before changing scope again.",
+			"Keep the next patch narrow and focused on the files implicated by the failing iteration.",
+		)
+		if exitCode, ok := asIntOK(priorTestResults["exit_code"]); ok && exitCode != 0 {
+			recommendations = append(recommendations, "The previous validation command returned a non-zero exit code. Reproduce that failure before broadening the change.")
+		}
+	}
+	recommendedScopePaths := make([]string, 0, len(priorChangedFiles))
+	recommendedScopePaths = append(recommendedScopePaths, priorChangedFiles...)
+	if len(recommendedScopePaths) == 0 {
+		recommendedScopePaths = append(recommendedScopePaths, anyStringSliceDefault(projectRequest["expected_files"], []string{})...)
+	}
+	nextEditBrief := buildRepairEditBrief(goal, repairFeedback, priorFindings, priorTestResults, recommendedScopePaths)
 	payload := fmt.Sprintf(`{
   "project_type": %q,
   "runtime_or_stack": %q,
   "goal": %q,
   "test_focus": %q,
+  "repair_mode": %t,
   "recommendations": %s,
+  "recommended_scope_paths": %s,
+  "next_edit_brief": %q,
   "checklist": [
     "README present",
     "At least one test file present",
     "Declared test command is runnable"
   ],
   "test_command": %q,
+  "failure_signals": %s,
+  "prior_findings": %s,
   "local_evidence": %s
-}`, projectType, stack, goal, testFocus, mustJSON(recommendations), strings.Join(testCommand, " "), mustJSON(evidence))
+}`, projectType, stack, goal, testFocus, repairMode, mustJSON(recommendations), mustJSON(recommendedScopePaths), nextEditBrief, strings.Join(testCommand, " "), mustJSON(map[string]any{
+		"repair_feedback":     repairFeedback,
+		"prior_test_results":  priorTestResults,
+		"prior_changed_files": priorChangedFiles,
+	}), mustJSON(priorFindings), mustJSON(evidence))
 	summary := fmt.Sprintf("Researched scaffold constraints for %s/%s", projectType, stack)
+	if repairMode {
+		summary = fmt.Sprintf("Built repair plan for %s/%s", projectType, stack)
+	}
+	artifacts := []map[string]any{
+		{
+			"type":         "research_context",
+			"title":        "Project research context",
+			"media_type":   "application/json",
+			"content_text": payload,
+		},
+		{
+			"type":         "research_evidence",
+			"title":        "Local repository evidence",
+			"media_type":   "application/json",
+			"content_text": mustJSON(evidence),
+		},
+	}
+	if repairMode {
+		artifacts = append(artifacts, map[string]any{
+			"type":         "repair_plan",
+			"title":        "Objective repair plan",
+			"media_type":   "application/json",
+			"content_text": payload,
+		})
+	}
 	return domain.LocalBridgeResultRequest{
 		Status:           "success",
 		Summary:          &summary,
 		Stdout:           &payload,
 		CapabilityUsage:  capabilityUsage,
 		CapabilityHelped: uniqueCapabilities(capabilityUsage, true),
-		Artifacts: []map[string]any{
-			{
-				"type":         "research_context",
-				"title":        "Project research context",
-				"media_type":   "application/json",
-				"content_text": payload,
-			},
-			{
-				"type":         "research_evidence",
-				"title":        "Local repository evidence",
-				"media_type":   "application/json",
-				"content_text": mustJSON(evidence),
-			},
-		},
+		Artifacts:        artifacts,
 	}, nil
 }
 
@@ -411,6 +466,105 @@ func (e *WorkspaceExecutor) reviewProject(ctx context.Context, request map[strin
 	}, nil
 }
 
+func (e *WorkspaceExecutor) reviewWorkspace(ctx context.Context, request map[string]any) (domain.LocalBridgeResultRequest, error) {
+	projectRootValue := firstNonEmptyString(strings.TrimSpace(asString(request["project_root"])), ".")
+	projectRoot, rel, err := e.resolveWithDefault(projectRootValue, ".")
+	if err != nil {
+		return domain.LocalBridgeResultRequest{}, err
+	}
+	info, err := os.Stat(projectRoot)
+	if err != nil || !info.IsDir() {
+		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: "project_root does not exist"}
+	}
+
+	testCommand := anyStringSliceDefault(request["test_command"], []string{"python3", "-c", "print('ok')"})
+	stdout := ""
+	stderr := ""
+	exitCode := 0
+	if len(testCommand) > 0 {
+		cmd := exec.CommandContext(ctx, testCommand[0], testCommand[1:]...)
+		cmd.Dir = projectRoot
+		var outBuf, errBuf bytes.Buffer
+		cmd.Stdout = &outBuf
+		cmd.Stderr = &errBuf
+		runErr := cmd.Run()
+		stdout = outBuf.String()
+		stderr = errBuf.String()
+		if cmd.ProcessState != nil {
+			exitCode = cmd.ProcessState.ExitCode()
+		}
+		if runErr != nil {
+			decision := "changes_requested"
+			message := firstNonEmptyString(strings.TrimSpace(stderr), strings.TrimSpace(stdout), runErr.Error())
+			summary := fmt.Sprintf("Review requested changes for %s", rel)
+			return domain.LocalBridgeResultRequest{
+				Status:         "error",
+				Summary:        &summary,
+				Stdout:         stringPtr(stdout),
+				Stderr:         stringPtr(stderr),
+				ExitCode:       intPtr(exitCode),
+				ErrorMessage:   &message,
+				ReviewDecision: &decision,
+				ReviewComments: []map[string]any{{"severity": "high", "message": message}},
+			}, nil
+		}
+	}
+
+	diff, changedFiles := e.workspaceGitState()
+	if strings.TrimSpace(diff) == "" || len(changedFiles) == 0 {
+		decision := "changes_requested"
+		message := "review requires an actual repository diff before approval"
+		summary := fmt.Sprintf("Review requested changes for %s", rel)
+		return domain.LocalBridgeResultRequest{
+			Status:         "error",
+			Summary:        &summary,
+			Stdout:         stringPtr(stdout),
+			Stderr:         stringPtr(stderr),
+			ExitCode:       intPtr(exitCode),
+			ErrorMessage:   &message,
+			ReviewDecision: &decision,
+			ReviewComments: []map[string]any{{"severity": "medium", "message": message}},
+			Diff:           &diff,
+			ChangedFiles:   changedFiles,
+			TestResults: map[string]any{
+				"argv":      testCommand,
+				"exit_code": exitCode,
+			},
+		}, nil
+	}
+
+	decision := "approved"
+	summary := fmt.Sprintf("Review approved for %s", rel)
+	report := mustJSON(map[string]any{
+		"decision":           decision,
+		"changed_files":      changedFiles,
+		"validation_command": testCommand,
+		"objective":          request["execution_contract"],
+	})
+	return domain.LocalBridgeResultRequest{
+		Status:         "success",
+		Summary:        &summary,
+		Stdout:         stringPtr(stdout),
+		Stderr:         stringPtr(stderr),
+		ExitCode:       intPtr(exitCode),
+		Diff:           &diff,
+		ChangedFiles:   changedFiles,
+		ReviewDecision: &decision,
+		Artifacts: []map[string]any{
+			{
+				"type":         "review_packet",
+				"title":        "Objective review packet",
+				"media_type":   "application/json",
+				"content_text": report,
+			},
+		},
+		TestResults: map[string]any{
+			"argv":      testCommand,
+			"exit_code": exitCode,
+		},
+	}, nil
+}
+
 func (e *WorkspaceExecutor) codeAnalysis(request map[string]any) (domain.LocalBridgeResultRequest, error) {
 	rootValue := firstNonEmptyString(strings.TrimSpace(asString(request["project_root"])), strings.TrimSpace(asString(request["path"])), ".")
 	projectRoot, rel, err := e.resolve(rootValue)
@@ -533,7 +687,39 @@ func (e *WorkspaceExecutor) runCommand(ctx context.Context, request map[string]a
 	if !ok || len(argv) == 0 {
 		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: "run_command requires argv list"}
 	}
+	argv = e.prepareCommandArgs(argv, request)
 	return e.runAllowedCommand(ctx, argv, "Ran command: "+strings.Join(argv, " "))
+}
+
+func (e *WorkspaceExecutor) prepareCommandArgs(argv []string, request map[string]any) []string {
+	if len(argv) == 0 {
+		return argv
+	}
+	if argv[0] != "aider-task" {
+		return argv
+	}
+	metadata, _ := request["_task_metadata"].(map[string]any)
+	if len(metadata) == 0 {
+		return argv
+	}
+	enriched := append([]string{}, argv...)
+	if idx := flagValueIndex(enriched, "--description"); idx >= 0 && idx+1 < len(enriched) {
+		enriched[idx+1] = enrichAiderDescription(enriched[idx+1], metadata)
+	}
+	if flagValueIndex(enriched, "--test-command") < 0 {
+		if commands := anyStringSliceDefault(metadata["validation_commands"], []string{}); len(commands) > 0 {
+			enriched = append(enriched, "--test-command", strings.Join(commands, " "))
+		}
+	}
+	if flagValueIndex(enriched, "--scope-paths") < 0 {
+		if scopePaths := anyStringSliceDefault(metadata["suspected_paths"], []string{}); len(scopePaths) > 0 {
+			enriched = append(enriched, "--scope-paths", strings.Join(scopePaths, ","))
+		}
+	}
+	if flagValueIndex(enriched, "--metadata") < 0 {
+		enriched = append(enriched, "--metadata", mustJSON(buildAiderTaskMetadata(metadata)))
+	}
+	return enriched
 }
 
 func (e *WorkspaceExecutor) runAllowedCommand(ctx context.Context, argv []string, summary string) (domain.LocalBridgeResultRequest, error) {
@@ -581,6 +767,13 @@ func (e *WorkspaceExecutor) withGitArtifacts(result domain.LocalBridgeResultRequ
 	if !ok || gitRoot != e.workspaceRoot {
 		return result, nil
 	}
+	diff, changedFiles := e.workspaceGitState()
+	result.ChangedFiles = changedFiles
+	result.Diff = &diff
+	return result, nil
+}
+
+func (e *WorkspaceExecutor) workspaceGitState() (string, []string) {
 	statusCmd := exec.Command("git", "status", "--short", "--untracked-files=all")
 	statusCmd.Dir = e.workspaceRoot
 	statusOut, _ := statusCmd.Output()
@@ -601,9 +794,7 @@ func (e *WorkspaceExecutor) withGitArtifacts(result domain.LocalBridgeResultRequ
 		}
 	}
 	diff := string(diffOut)
-	result.ChangedFiles = changedFiles
-	result.Diff = &diff
-	return result, nil
+	return diff, changedFiles
 }
 
 func (e *WorkspaceExecutor) gitTopLevel() (string, bool) {
@@ -723,12 +914,166 @@ func intPtr(value int) *int {
 	return &value
 }
 
+func derefStringPtr(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func derefIntPtr(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
 func mustJSON(value any) string {
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return "{}"
 	}
 	return string(raw)
+}
+
+func buildRepairEditBrief(goal, repairFeedback string, priorFindings []map[string]any, priorTestResults map[string]any, scopePaths []string) string {
+	lines := []string{strings.TrimSpace(goal)}
+	if strings.TrimSpace(repairFeedback) != "" {
+		lines = append(lines, "Repair feedback:", strings.TrimSpace(repairFeedback))
+	}
+	if len(priorFindings) > 0 {
+		lines = append(lines, "Prior findings:")
+		for _, finding := range priorFindings {
+			severity := strings.TrimSpace(asString(finding["severity"]))
+			message := strings.TrimSpace(asString(finding["message"]))
+			if message == "" {
+				continue
+			}
+			if severity != "" {
+				lines = append(lines, fmt.Sprintf("- [%s] %s", severity, message))
+			} else {
+				lines = append(lines, "- "+message)
+			}
+		}
+	}
+	if exitCode, ok := asIntOK(priorTestResults["exit_code"]); ok {
+		lines = append(lines, fmt.Sprintf("Previous validation exit code: %d", exitCode))
+	}
+	if len(scopePaths) > 0 {
+		lines = append(lines, "Likely scope: "+strings.Join(scopePaths, ", "))
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func buildAiderTaskMetadata(metadata map[string]any) map[string]any {
+	out := map[string]any{
+		"objective_title":          strings.TrimSpace(asString(metadata["objective_title"])),
+		"initiative_goal":          strings.TrimSpace(asString(metadata["initiative_goal"])),
+		"work_item_kind":           strings.TrimSpace(asString(metadata["work_item_kind"])),
+		"objective_iteration":      asInt(metadata["objective_iteration"], 1),
+		"objective_max_iterations": asInt(metadata["objective_max_iterations"], 3),
+		"repair_feedback":          strings.TrimSpace(asString(metadata["objective_repair_feedback"])),
+		"review_decision":          strings.TrimSpace(asString(metadata["review_decision"])),
+		"review_comments":          anyMapSliceDefault(metadata["review_comments"], []map[string]any{}),
+		"validation_commands":      anyStringSliceDefault(metadata["validation_commands"], []string{}),
+		"suspected_paths":          anyStringSliceDefault(metadata["suspected_paths"], []string{}),
+	}
+	if contextPackage, ok := metadata["context_package"].(map[string]any); ok && len(contextPackage) > 0 {
+		out["context_prompt_section"] = strings.TrimSpace(asString(contextPackage["prompt_section"]))
+		out["context_source_refs"] = contextPackageSourceRefs(contextPackage["source_refs"])
+	}
+	return out
+}
+
+func enrichAiderDescription(description string, metadata map[string]any) string {
+	lines := []string{strings.TrimSpace(description)}
+	if feedback := strings.TrimSpace(asString(metadata["objective_repair_feedback"])); feedback != "" {
+		lines = append(lines, "", "Repair feedback:", feedback)
+	}
+	if reviewComments := anyMapSliceDefault(metadata["review_comments"], []map[string]any{}); len(reviewComments) > 0 {
+		lines = append(lines, "", "Review findings:")
+		for _, item := range reviewComments {
+			message := strings.TrimSpace(asString(item["message"]))
+			if message == "" {
+				continue
+			}
+			severity := strings.TrimSpace(asString(item["severity"]))
+			if severity != "" {
+				lines = append(lines, fmt.Sprintf("- [%s] %s", severity, message))
+			} else {
+				lines = append(lines, "- "+message)
+			}
+		}
+	}
+	if contextPackage, ok := metadata["context_package"].(map[string]any); ok {
+		if promptSection := strings.TrimSpace(asString(contextPackage["prompt_section"])); promptSection != "" {
+			lines = append(lines, "", "Retrieved context:", truncateForPrompt(promptSection, 1600))
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func truncateForPrompt(value string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return string(runes[:maxRunes]) + "..."
+}
+
+func flagValueIndex(argv []string, flag string) int {
+	for idx := 0; idx < len(argv); idx++ {
+		if argv[idx] == flag {
+			return idx
+		}
+	}
+	return -1
+}
+
+func anyMapSliceDefault(value any, fallback []map[string]any) []map[string]any {
+	switch v := value.(type) {
+	case []map[string]any:
+		if len(v) == 0 {
+			return fallback
+		}
+		return v
+	case []any:
+		out := make([]map[string]any, 0, len(v))
+		for _, item := range v {
+			entry, _ := item.(map[string]any)
+			if len(entry) == 0 {
+				continue
+			}
+			out = append(out, entry)
+		}
+		if len(out) == 0 {
+			return fallback
+		}
+		return out
+	default:
+		return fallback
+	}
+}
+
+func nonNilMap(value any) map[string]any {
+	if raw, ok := value.(map[string]any); ok && raw != nil {
+		return raw
+	}
+	return map[string]any{}
+}
+
+func asIntOK(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
 }
 
 func ensureToolCapabilityAllowed(metadata map[string]any, tool string) error {
