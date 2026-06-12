@@ -63,13 +63,8 @@
     - name: Stop retired cognitive gateway processes
       ansible.builtin.shell: |
         set -euo pipefail
-        retired_gateway_pids="$(
-          ps -eo pid=,args= | awk -v self="$$" '
-            index($0, "/srv/ai-lab/cognitive-gateway/runtime/cognitive-gateway") && $1 != self { print $1 }
-          ' | xargs
-        )"
-        if [ -n "$retired_gateway_pids" ]; then
-          kill $retired_gateway_pids
+        if pgrep -x cognitive-gateway >/dev/null; then
+          pkill -x cognitive-gateway || true
         fi
       args:
         executable: /bin/bash
