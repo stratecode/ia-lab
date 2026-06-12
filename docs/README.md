@@ -13,6 +13,7 @@ Platform architecture, design decisions, and operational constraints.
 - [Resource Scheduling](architecture/resource-scheduling.md)
 - [Workspace Isolation](architecture/workspace-isolation.md)
 - [Governance Framework](architecture/governance.md)
+- [Objective-First Agent System Plan](architecture/objective-first-agent-system-plan.md)
 
 ### Architecture Decision Records
 

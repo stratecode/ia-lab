@@ -235,58 +235,6 @@ func TestReviewerValidatesGeneratedProject(t *testing.T) {
 	}
 }
 
-func TestReviewerIncludesSemanticFailureMemory(t *testing.T) {
-	metadata := map[string]any{
-		"context_package": &domain.ContextPackage{
-			SourceRefs: []string{"task:failed#0"},
-			OperationalIR: &domain.OperationalIR{
-				ValidationRules: []string{"Avoid missing lab.json"},
-				Invalid: []domain.OperationalItem{{
-					SourceRef:     "task:failed#0",
-					Outcome:       "failed",
-					FailureReason: "lab.json missing",
-				}},
-			},
-		},
-	}
-	sources, rules, checks := reviewerSemanticMemory(metadata)
-	if len(sources) != 1 || sources[0] != "task:failed#0" {
-		t.Fatalf("unexpected sources: %#v", sources)
-	}
-	if len(rules) != 1 || rules[0] != "Avoid missing lab.json" {
-		t.Fatalf("unexpected rules: %#v", rules)
-	}
-	if len(checks) != 1 || !strings.Contains(checks[0], "lab.json missing") {
-		t.Fatalf("unexpected checks: %#v", checks)
-	}
-}
-
-func TestPlannerIncludesSemanticFailureMemory(t *testing.T) {
-	metadata := map[string]any{
-		"context_package": &domain.ContextPackage{
-			SourceRefs: []string{"task:planner-failed#0"},
-			OperationalIR: &domain.OperationalIR{
-				ValidationRules: []string{"Keep approvals only on destructive steps"},
-				Invalid: []domain.OperationalItem{{
-					SourceRef:     "task:planner-failed#0",
-					Outcome:       "failed",
-					FailureReason: "planner scheduled coder before researcher",
-				}},
-			},
-		},
-	}
-	sources, rules, checks := plannerSemanticMemory(metadata)
-	if len(sources) != 1 || sources[0] != "task:planner-failed#0" {
-		t.Fatalf("unexpected sources: %#v", sources)
-	}
-	if len(rules) != 1 || rules[0] != "Keep approvals only on destructive steps" {
-		t.Fatalf("unexpected rules: %#v", rules)
-	}
-	if len(checks) != 1 || !strings.Contains(checks[0], "planner scheduled coder before researcher") {
-		t.Fatalf("unexpected checks: %#v", checks)
-	}
-}
-
 func TestBuildRepoWorkflowPlanUsesBenchmarkCaseFile(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
@@ -296,23 +244,21 @@ func TestBuildRepoWorkflowPlanUsesBenchmarkCaseFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	casePayload := map[string]any{
-		"id":                        "bench-case-runner",
-		"case_type":                 "deterministic_bugfix",
-		"repo_profile":              "go_cli_tui",
-		"repo_url":                  "https://github.com/charmbracelet/glow",
-		"default_branch":            "master",
-		"project_type":              "existing_repo",
-		"runtime_or_stack":          "go",
-		"project_root":              ".",
-		"test_focus":                "markdown rendering regression",
-		"test_command":              []string{"go", "test", "./..."},
-		"expected_files":            []string{"main.go", "glow_test.go"},
-		"coder_tool":                "write_file",
-		"patch_target":              ".lab/repo-workflow-marker.txt",
-		"write_content":             "benchmark marker\n",
-		"coder_summary":             "Apply benchmark-defined deterministic repo change.",
-		"benchmark_memory_mode":     "on",
-		"benchmark_memory_strategy": "repo_specific_first",
+		"id":               "bench-case-runner",
+		"case_type":        "deterministic_bugfix",
+		"repo_profile":     "go_cli_tui",
+		"repo_url":         "https://github.com/charmbracelet/glow",
+		"default_branch":   "master",
+		"project_type":     "existing_repo",
+		"runtime_or_stack": "go",
+		"project_root":     ".",
+		"test_focus":       "markdown rendering regression",
+		"test_command":     []string{"go", "test", "./..."},
+		"expected_files":   []string{"main.go", "glow_test.go"},
+		"coder_tool":       "write_file",
+		"patch_target":     ".lab/repo-workflow-marker.txt",
+		"write_content":    "benchmark marker\n",
+		"coder_summary":    "Apply benchmark-defined deterministic repo change.",
 	}
 	raw, _ := json.Marshal(casePayload)
 	if err := os.WriteFile(filepath.Join(root, ".lab", "benchmark-case.json"), raw, 0o644); err != nil {

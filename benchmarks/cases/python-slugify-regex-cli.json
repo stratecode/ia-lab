@@ -14,7 +14,6 @@
   "patch_target": "slugify/__main__.py",
   "coder_summary": "Patch python-slugify so the CLI forwards regex_pattern into slugify() and cover it with a deterministic regression test.",
   "patch": "diff --git a/slugify/__main__.py b/slugify/__main__.py\n--- a/slugify/__main__.py\n+++ b/slugify/__main__.py\n@@ -76,6 +76,7 @@ def slugify_params(args: argparse.Namespace) -> dict[str, Any]:\n         save_order=args.save_order,\n         separator=args.separator,\n         stopwords=args.stopwords,\n+        regex_pattern=args.regex_pattern,\n         lowercase=args.lowercase,\n         replacements=args.replacements,\n         allow_unicode=args.allow_unicode\ndiff --git a/test.py b/test.py\n--- a/test.py\n+++ b/test.py\n@@ -612,6 +612,11 @@ class TestCommandParams(unittest.TestCase):\n         expected = self.make_params(stopwords=['abba', 'beatles'], max_length=98, separator='+')\n         self.assertParamsMatch(expected, params)\n \n+    def test_regex_pattern_param(self):\n+        params = self.get_params_from_cli('--regex-pattern', '[^a-z]+')\n+        expected = self.make_params(regex_pattern='[^a-z]+')\n+        self.assertParamsMatch(expected, params)\n+\n     def test_replacements_right(self):\n         params = self.get_params_from_cli('--replacements', 'A->B', 'C->D')\n         expected = self.make_params(replacements=[['A', 'B'], ['C', 'D']])\n",
-  "benchmark_memory_strategy": "repo_specific_first",
   "benchmark_league": "repo_recall",
   "sequence_id": "repo_recall_python_slugify",
   "sequence_position": 1

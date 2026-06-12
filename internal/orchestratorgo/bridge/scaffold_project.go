@@ -14,28 +14,25 @@ import (
 var projectNameSanitizer = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
 func (e *WorkspaceExecutor) scaffoldProject(request map[string]any) (domain.LocalBridgeResultRequest, error) {
-	parentPath, parentRel, err := e.resolveWithDefault(request["parent_directory"], ".")
-	if err != nil {
-		return domain.LocalBridgeResultRequest{}, err
-	}
 	projectName := sanitizeProjectName(asString(request["project_name"]))
-	if projectName == "" {
-		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: "project_name is required"}
-	}
 	projectType := firstNonEmptyString(strings.TrimSpace(asString(request["project_type"])), "cli_simple")
 	stack := firstNonEmptyString(strings.TrimSpace(asString(request["runtime_or_stack"])), "python")
 	goal := firstNonEmptyString(strings.TrimSpace(asString(request["goal"])), "Exercise the local bridge and task system")
 	testFocus := firstNonEmptyString(strings.TrimSpace(asString(request["test_focus"])), "basic execution")
 	initializeGit := asBool(request["initialize_git"])
+	commitInitialScaffold := asBool(request["commit_initial_scaffold"])
 	testCommand := anyStringSliceDefault(request["test_command"], defaultBridgeTestCommand(projectType, stack))
 	expectedFiles := anyStringSliceDefault(request["expected_files"], expectedProjectFiles(projectType))
-
-	projectRoot := filepath.Join(parentPath, projectName)
-	if _, err := os.Stat(projectRoot); err == nil {
-		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: fmt.Sprintf("project already exists: %s", projectName)}
-	}
-	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+	projectRootValue := strings.TrimSpace(asString(request["project_root"]))
+	projectRoot, projectRootRel, projectLabel, err := e.resolveScaffoldRoot(request["parent_directory"], projectRootValue, projectName)
+	if err != nil {
 		return domain.LocalBridgeResultRequest{}, err
+	}
+	if projectName == "" {
+		projectName = projectLabel
+	}
+	if projectName == "" {
+		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: "project_name is required"}
 	}
 
 	files := scaffoldFiles(projectType, stack, projectName, goal, testFocus)
@@ -48,7 +45,7 @@ func (e *WorkspaceExecutor) scaffoldProject(request map[string]any) (domain.Loca
 		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
 			return domain.LocalBridgeResultRequest{}, err
 		}
-		changed = append(changed, filepath.ToSlash(filepath.Join(parentRel, projectName, relPath)))
+		changed = append(changed, joinScaffoldRelativePath(projectRootRel, relPath))
 	}
 
 	if initializeGit {
@@ -57,9 +54,18 @@ func (e *WorkspaceExecutor) scaffoldProject(request map[string]any) (domain.Loca
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: fmt.Sprintf("git init failed: %s", strings.TrimSpace(string(output)))}
 		}
+		if commitInitialScaffold {
+			if output, err := exec.Command("git", "-C", projectRoot, "add", ".").CombinedOutput(); err != nil {
+				return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: fmt.Sprintf("git add failed: %s", strings.TrimSpace(string(output)))}
+			}
+			commit := exec.Command("git", "-C", projectRoot, "-c", "user.name=Codex", "-c", "user.email=codex@example.com", "commit", "-m", "Initial scaffold")
+			if output, err := commit.CombinedOutput(); err != nil {
+				return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: fmt.Sprintf("git commit failed: %s", strings.TrimSpace(string(output)))}
+			}
+		}
 	}
 
-	summary := fmt.Sprintf("Scaffolded %s project %s", projectType, filepath.ToSlash(filepath.Join(parentRel, projectName)))
+	summary := fmt.Sprintf("Scaffolded %s project %s", projectType, projectLabel)
 	stdout := strings.Join(changed, "\n")
 	result, err := e.withGitArtifacts(domain.LocalBridgeResultRequest{
 		Status:       "success",
@@ -70,7 +76,7 @@ func (e *WorkspaceExecutor) scaffoldProject(request map[string]any) (domain.Loca
 			{
 				"type":         "project_manifest",
 				"title":        "Scaffolded project manifest",
-				"path":         filepath.ToSlash(filepath.Join(parentRel, projectName, "README.md")),
+				"path":         joinScaffoldRelativePath(projectRootRel, "README.md"),
 				"media_type":   "text/markdown",
 				"content_text": truncateString(files["README.md"], 2000),
 				"project_type": projectType,
@@ -80,7 +86,7 @@ func (e *WorkspaceExecutor) scaffoldProject(request map[string]any) (domain.Loca
 			{
 				"type":           "project_contract",
 				"title":          "Expected scaffold contract",
-				"path":           filepath.ToSlash(filepath.Join(parentRel, projectName, "lab.json")),
+				"path":           joinScaffoldRelativePath(projectRootRel, "lab.json"),
 				"media_type":     "application/json",
 				"content_text":   truncateString(files["lab.json"], 2000),
 				"expected_files": expectedFiles,
@@ -91,6 +97,67 @@ func (e *WorkspaceExecutor) scaffoldProject(request map[string]any) (domain.Loca
 		return domain.LocalBridgeResultRequest{}, err
 	}
 	return result, nil
+}
+
+func (e *WorkspaceExecutor) resolveScaffoldRoot(parentDirectory any, projectRootValue, projectName string) (string, string, string, error) {
+	projectRootValue = strings.TrimSpace(projectRootValue)
+	if projectRootValue != "" {
+		root, rel, err := e.resolveWithDefault(projectRootValue, ".")
+		if err != nil {
+			return "", "", "", err
+		}
+		if err := ensureScaffoldTargetAvailable(root, projectRootValue); err != nil {
+			return "", "", "", err
+		}
+		label := rel
+		if label == "." {
+			label = filepath.Base(e.workspaceRoot)
+		}
+		return root, rel, filepath.ToSlash(label), nil
+	}
+	parentPath, parentRel, err := e.resolveWithDefault(parentDirectory, ".")
+	if err != nil {
+		return "", "", "", err
+	}
+	if projectName == "" {
+		return "", "", "", LocalExecutionError{Message: "project_name is required"}
+	}
+	projectRoot := filepath.Join(parentPath, projectName)
+	if err := ensureScaffoldTargetAvailable(projectRoot, projectName); err != nil {
+		return "", "", "", err
+	}
+	projectRootRel := filepath.ToSlash(filepath.Join(parentRel, projectName))
+	return projectRoot, projectRootRel, projectRootRel, nil
+}
+
+func ensureScaffoldTargetAvailable(projectRoot string, label string) error {
+	info, err := os.Stat(projectRoot)
+	switch {
+	case err == nil && !info.IsDir():
+		return LocalExecutionError{Message: fmt.Sprintf("project_root is not a directory: %s", label)}
+	case err == nil:
+		entries, readErr := os.ReadDir(projectRoot)
+		if readErr != nil {
+			return readErr
+		}
+		if len(entries) > 0 {
+			return LocalExecutionError{Message: fmt.Sprintf("project already exists: %s", label)}
+		}
+		return nil
+	case !os.IsNotExist(err):
+		return err
+	default:
+		return os.MkdirAll(projectRoot, 0o755)
+	}
+}
+
+func joinScaffoldRelativePath(projectRootRel, fileRel string) string {
+	projectRootRel = strings.TrimSpace(projectRootRel)
+	fileRel = filepath.ToSlash(strings.TrimSpace(fileRel))
+	if projectRootRel == "" || projectRootRel == "." {
+		return fileRel
+	}
+	return filepath.ToSlash(filepath.Join(projectRootRel, fileRel))
 }
 
 func scaffoldFiles(projectType, stack, projectName, goal, testFocus string) map[string]string {

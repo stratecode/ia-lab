@@ -48,6 +48,7 @@ The Go runtime covers the compatibility base and the first write-oriented lifecy
 - `GET /datasets/evaluation-items`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
+- `POST /v1/responses`
 - background worker registration, heartbeat emission, queue claim, and `queued -> assigned -> in_progress` transitions
 - embedded minimal runner for `planner` and `coder`
 - embedded Telegram polling bot when `LAB_TELEGRAM_BOT_TOKEN` and `LAB_TELEGRAM_ALLOWED_USERS` are configured

@@ -71,11 +71,11 @@ func NewWorkspaceExecutor(workspaceRoot string) (*WorkspaceExecutor, error) {
 
 func (e *WorkspaceExecutor) Execute(ctx context.Context, claim domain.LocalBridgeTaskClaimResponse) (domain.LocalBridgeResultRequest, error) {
 	metadata := claim.Metadata
-	contextSources, contextHits, contextChunkCount := semanticContextRefs(metadata)
 	toolRequest, ok := metadata["tool_request"].(map[string]any)
 	if !ok || toolRequest == nil {
 		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: "local task requires metadata.tool_request"}
 	}
+	toolRequest = mergeToolRequestWithMetadata(toolRequest, metadata)
 	tool := strings.TrimSpace(asString(toolRequest["tool"]))
 	if tool == "" {
 		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: "tool_request.tool is required"}
@@ -91,13 +91,13 @@ func (e *WorkspaceExecutor) Execute(ctx context.Context, claim domain.LocalBridg
 		targetResource := firstNonEmptyString(strings.TrimSpace(asString(toolRequest["path"])), tool)
 		timeout := asInt(toolRequest["timeout_seconds"], 300)
 		summary := fmt.Sprintf("Approval required before executing tool %s", tool)
-		return withSemanticRefs(domain.LocalBridgeResultRequest{
+		return domain.LocalBridgeResultRequest{
 			Status:         "waiting_approval",
 			Summary:        &summary,
 			ActionType:     &actionType,
 			TargetResource: &targetResource,
 			TimeoutSeconds: &timeout,
-		}, contextSources, contextHits, contextChunkCount), nil
+		}, nil
 	}
 
 	var result domain.LocalBridgeResultRequest
@@ -139,6 +139,9 @@ func (e *WorkspaceExecutor) Execute(ctx context.Context, claim domain.LocalBridg
 				"stdout":    derefStringPtr(result.Stdout),
 				"stderr":    derefStringPtr(result.Stderr),
 			}
+			if strings.ToLower(strings.TrimSpace(result.Status)) != "success" {
+				result.Findings = buildValidationFailureFindings(argv, derefIntPtr(result.ExitCode), firstNonEmptyString(strings.TrimSpace(derefStringPtr(result.ErrorMessage)), strings.TrimSpace(derefStringPtr(result.Stderr)), strings.TrimSpace(derefStringPtr(result.Stdout))))
+			}
 		}
 	case "code_analysis":
 		result, err = e.codeAnalysis(toolRequest)
@@ -148,7 +151,7 @@ func (e *WorkspaceExecutor) Execute(ctx context.Context, claim domain.LocalBridg
 	if err != nil {
 		return result, err
 	}
-	return withSemanticRefs(result, contextSources, contextHits, contextChunkCount), nil
+	return result, nil
 }
 
 func (e *WorkspaceExecutor) readFile(request map[string]any) (domain.LocalBridgeResultRequest, error) {
@@ -252,6 +255,8 @@ func (e *WorkspaceExecutor) researchProject(request map[string]any) (domain.Loca
 	priorFindings := anyMapSliceDefault(request["prior_findings"], []map[string]any{})
 	priorTestResults := nonNilMap(request["prior_test_results"])
 	priorChangedFiles := anyStringSliceDefault(request["prior_changed_files"], []string{})
+	priorPatchIntentPaths := anyHypothesisPaths(request["patch_intent"])
+	retrievalPrecedents := retrievalPrecedentsFromContextPackage(request["context_package"])
 	repairFeedback := firstNonEmptyString(strings.TrimSpace(asString(request["repair_feedback"])), strings.TrimSpace(asString(projectRequest["repair_feedback"])))
 	repairMode := len(priorFindings) > 0 || len(priorTestResults) > 0 || len(priorChangedFiles) > 0 || repairFeedback != ""
 	if evidence["manifest_file"] != nil {
@@ -259,6 +264,9 @@ func (e *WorkspaceExecutor) researchProject(request map[string]any) (domain.Loca
 	}
 	if evidence["readme_excerpt"] != nil {
 		recommendations = append(recommendations, "Prefer README-aligned constraints over generic repo folklore.")
+	}
+	if len(retrievalPrecedents) > 0 {
+		recommendations = append(recommendations, "Reuse the retrieved precedents as bounded evidence, not as a substitute for the current diff and validation signals.")
 	}
 	if repairMode {
 		recommendations = append(recommendations,
@@ -270,12 +278,21 @@ func (e *WorkspaceExecutor) researchProject(request map[string]any) (domain.Loca
 			recommendations = append(recommendations, "The previous validation command returned a non-zero exit code. Reproduce that failure before broadening the change.")
 		}
 	}
-	recommendedScopePaths := make([]string, 0, len(priorChangedFiles))
-	recommendedScopePaths = append(recommendedScopePaths, priorChangedFiles...)
-	if len(recommendedScopePaths) == 0 {
-		recommendedScopePaths = append(recommendedScopePaths, anyStringSliceDefault(projectRequest["expected_files"], []string{})...)
-	}
-	nextEditBrief := buildRepairEditBrief(goal, repairFeedback, priorFindings, priorTestResults, recommendedScopePaths)
+	selectedPlannerPaths := anyHypothesisPaths(request["initial_scope_hypotheses"])
+	rejectedPlannerPaths := anyHypothesisPaths(request["rejected_scope_hypotheses"])
+	scopeCorrection := interpretPlannerRepairFindings(priorFindings, selectedPlannerPaths, rejectedPlannerPaths, priorChangedFiles)
+	recommendedScopePaths := recommendResearchScopePaths(
+		goal,
+		scopeCorrection,
+		priorChangedFiles,
+		priorPatchIntentPaths,
+		anyStringSliceDefault(projectRequest["expected_files"], []string{}),
+		anyStringSliceDefault(evidence["tree_files"], []string{}),
+		strings.TrimSpace(asString(evidence["readme_excerpt"])),
+	)
+	failureHypotheses := buildRepairFailureHypotheses(priorFindings, priorTestResults, recommendedScopePaths, scopeCorrection)
+	patchIntent := buildRepairPatchIntent(failureHypotheses, recommendedScopePaths, scopeCorrection)
+	nextEditBrief := buildRepairEditBrief(goal, repairFeedback, priorFindings, priorTestResults, recommendedScopePaths, failureHypotheses, patchIntent, scopeCorrection, retrievalPrecedents)
 	payload := fmt.Sprintf(`{
   "project_type": %q,
   "runtime_or_stack": %q,
@@ -284,6 +301,13 @@ func (e *WorkspaceExecutor) researchProject(request map[string]any) (domain.Loca
   "repair_mode": %t,
   "recommendations": %s,
   "recommended_scope_paths": %s,
+  "planner_scope_resolution": %q,
+  "planner_rejected_scope_resolution": %q,
+  "scope_correction_reason": %q,
+  "excluded_scope_paths": %s,
+  "retrieval_precedents": %s,
+  "failure_hypotheses": %s,
+  "patch_intent": %s,
   "next_edit_brief": %q,
   "checklist": [
     "README present",
@@ -294,7 +318,7 @@ func (e *WorkspaceExecutor) researchProject(request map[string]any) (domain.Loca
   "failure_signals": %s,
   "prior_findings": %s,
   "local_evidence": %s
-}`, projectType, stack, goal, testFocus, repairMode, mustJSON(recommendations), mustJSON(recommendedScopePaths), nextEditBrief, strings.Join(testCommand, " "), mustJSON(map[string]any{
+}`, projectType, stack, goal, testFocus, repairMode, mustJSON(recommendations), mustJSON(recommendedScopePaths), scopeCorrection.PlannerScopeResolution, scopeCorrection.RejectedPlannerScopeResolution, scopeCorrection.ScopeCorrectionReason, mustJSON(scopeCorrection.ExcludedScopePaths), mustJSON(retrievalPrecedents), mustJSON(failureHypotheses), mustJSON(patchIntent), nextEditBrief, strings.Join(testCommand, " "), mustJSON(map[string]any{
 		"repair_feedback":     repairFeedback,
 		"prior_test_results":  priorTestResults,
 		"prior_changed_files": priorChangedFiles,
@@ -481,6 +505,8 @@ func (e *WorkspaceExecutor) reviewWorkspace(ctx context.Context, request map[str
 	stdout := ""
 	stderr := ""
 	exitCode := 0
+	diff := ""
+	changedFiles := []string(nil)
 	if len(testCommand) > 0 {
 		cmd := exec.CommandContext(ctx, testCommand[0], testCommand[1:]...)
 		cmd.Dir = projectRoot
@@ -497,6 +523,14 @@ func (e *WorkspaceExecutor) reviewWorkspace(ctx context.Context, request map[str
 			decision := "changes_requested"
 			message := firstNonEmptyString(strings.TrimSpace(stderr), strings.TrimSpace(stdout), runErr.Error())
 			summary := fmt.Sprintf("Review requested changes for %s", rel)
+			diff, changedFiles = e.workspaceGitState()
+			plannerAlignment := reviewScopeAlignment(anyHypothesisPaths(request["initial_scope_hypotheses"]), changedFiles)
+			rejectedPlannerAlignment := reviewRejectedScopeAlignment(anyHypothesisPaths(request["rejected_scope_hypotheses"]), changedFiles)
+			researchAlignment := reviewScopeAlignment(reviewResearchPaths(request), changedFiles)
+			findings := append(buildValidationFailureFindings(testCommand, exitCode, message), buildReviewAlignmentFindings(plannerAlignment, rejectedPlannerAlignment, researchAlignment, anyHypothesisPaths(request["initial_scope_hypotheses"]), anyHypothesisPaths(request["rejected_scope_hypotheses"]), reviewResearchPaths(request), changedFiles)...)
+			retrievalAlignment, retrievalRefs := reviewRetrievalAlignment(anyMapSliceDefault(request["objective_retrieval_precedents"], []map[string]any{}), changedFiles)
+			findings = append(findings, buildReviewRetrievalFindings(retrievalAlignment, retrievalRefs, changedFiles)...)
+			report := buildReviewPacketReport(decision, changedFiles, testCommand, request["execution_contract"], plannerAlignment, rejectedPlannerAlignment, researchAlignment, retrievalAlignment, retrievalRefs, findings)
 			return domain.LocalBridgeResultRequest{
 				Status:         "error",
 				Summary:        &summary,
@@ -506,15 +540,37 @@ func (e *WorkspaceExecutor) reviewWorkspace(ctx context.Context, request map[str
 				ErrorMessage:   &message,
 				ReviewDecision: &decision,
 				ReviewComments: []map[string]any{{"severity": "high", "message": message}},
+				Findings:       findings,
+				Diff:           &diff,
+				ChangedFiles:   changedFiles,
+				Artifacts: []map[string]any{
+					{
+						"type":         "review_packet",
+						"title":        "Objective review packet",
+						"media_type":   "application/json",
+						"content_text": report,
+					},
+				},
 			}, nil
 		}
 	}
 
-	diff, changedFiles := e.workspaceGitState()
+	diff, changedFiles = e.workspaceGitState()
 	if strings.TrimSpace(diff) == "" || len(changedFiles) == 0 {
 		decision := "changes_requested"
 		message := "review requires an actual repository diff before approval"
 		summary := fmt.Sprintf("Review requested changes for %s", rel)
+		findings := []map[string]any{{
+			"kind":               "missing_diff",
+			"severity":           "medium",
+			"message":            message,
+			"source":             "review",
+			"project_root":       rel,
+			"recommended_action": "Produce a real repository diff before asking for approval.",
+		}}
+		retrievalAlignment, retrievalRefs := reviewRetrievalAlignment(anyMapSliceDefault(request["objective_retrieval_precedents"], []map[string]any{}), changedFiles)
+		findings = append(findings, buildReviewRetrievalFindings(retrievalAlignment, retrievalRefs, changedFiles)...)
+		report := buildReviewPacketReport(decision, changedFiles, testCommand, request["execution_contract"], "unknown", "unknown", "unknown", retrievalAlignment, retrievalRefs, findings)
 		return domain.LocalBridgeResultRequest{
 			Status:         "error",
 			Summary:        &summary,
@@ -524,8 +580,17 @@ func (e *WorkspaceExecutor) reviewWorkspace(ctx context.Context, request map[str
 			ErrorMessage:   &message,
 			ReviewDecision: &decision,
 			ReviewComments: []map[string]any{{"severity": "medium", "message": message}},
+			Findings:       findings,
 			Diff:           &diff,
 			ChangedFiles:   changedFiles,
+			Artifacts: []map[string]any{
+				{
+					"type":         "review_packet",
+					"title":        "Objective review packet",
+					"media_type":   "application/json",
+					"content_text": report,
+				},
+			},
 			TestResults: map[string]any{
 				"argv":      testCommand,
 				"exit_code": exitCode,
@@ -535,12 +600,13 @@ func (e *WorkspaceExecutor) reviewWorkspace(ctx context.Context, request map[str
 
 	decision := "approved"
 	summary := fmt.Sprintf("Review approved for %s", rel)
-	report := mustJSON(map[string]any{
-		"decision":           decision,
-		"changed_files":      changedFiles,
-		"validation_command": testCommand,
-		"objective":          request["execution_contract"],
-	})
+	plannerAlignment := reviewScopeAlignment(anyHypothesisPaths(request["initial_scope_hypotheses"]), changedFiles)
+	rejectedPlannerAlignment := reviewRejectedScopeAlignment(anyHypothesisPaths(request["rejected_scope_hypotheses"]), changedFiles)
+	researchAlignment := reviewScopeAlignment(reviewResearchPaths(request), changedFiles)
+	findings := buildReviewAlignmentFindings(plannerAlignment, rejectedPlannerAlignment, researchAlignment, anyHypothesisPaths(request["initial_scope_hypotheses"]), anyHypothesisPaths(request["rejected_scope_hypotheses"]), reviewResearchPaths(request), changedFiles)
+	retrievalAlignment, retrievalRefs := reviewRetrievalAlignment(anyMapSliceDefault(request["objective_retrieval_precedents"], []map[string]any{}), changedFiles)
+	findings = append(findings, buildReviewRetrievalFindings(retrievalAlignment, retrievalRefs, changedFiles)...)
+	report := buildReviewPacketReport(decision, changedFiles, testCommand, request["execution_contract"], plannerAlignment, rejectedPlannerAlignment, researchAlignment, retrievalAlignment, retrievalRefs, findings)
 	return domain.LocalBridgeResultRequest{
 		Status:         "success",
 		Summary:        &summary,
@@ -550,6 +616,7 @@ func (e *WorkspaceExecutor) reviewWorkspace(ctx context.Context, request map[str
 		Diff:           &diff,
 		ChangedFiles:   changedFiles,
 		ReviewDecision: &decision,
+		Findings:       findings,
 		Artifacts: []map[string]any{
 			{
 				"type":         "review_packet",
@@ -563,6 +630,224 @@ func (e *WorkspaceExecutor) reviewWorkspace(ctx context.Context, request map[str
 			"exit_code": exitCode,
 		},
 	}, nil
+}
+
+func anyHypothesisPaths(value any) []string {
+	items := anyMapSliceDefault(value, []map[string]any{})
+	if len(items) == 0 {
+		switch typed := value.(type) {
+		case []domain.ScopeHypothesis:
+			out := make([]string, 0, len(typed))
+			for _, item := range typed {
+				if path := strings.TrimSpace(item.Path); path != "" {
+					out = append(out, path)
+				}
+			}
+			return uniqueNonEmptyStrings(out)
+		case []any:
+			items = anyMapSliceDefault(typed, []map[string]any{})
+		}
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if path := strings.TrimSpace(asString(item["path"])); path != "" {
+			out = append(out, path)
+		}
+	}
+	return uniqueNonEmptyStrings(out)
+}
+
+func reviewResearchPaths(request map[string]any) []string {
+	out := anyStringSliceDefault(request["suspected_paths"], []string{})
+	for _, item := range anyMapSliceDefault(request["objective_patch_intent"], []map[string]any{}) {
+		if path := strings.TrimSpace(asString(item["path"])); path != "" {
+			out = append(out, path)
+		}
+	}
+	return uniqueNonEmptyStrings(out)
+}
+
+func buildReviewPacketReport(decision string, changedFiles, testCommand []string, executionContract any, plannerAlignment, rejectedPlannerAlignment, researchAlignment, retrievalAlignment string, retrievalRefs []string, findings []map[string]any) string {
+	return mustJSON(map[string]any{
+		"decision":                         decision,
+		"changed_files":                    changedFiles,
+		"validation_command":               testCommand,
+		"objective":                        executionContract,
+		"planner_scope_alignment":          plannerAlignment,
+		"planner_rejected_scope_alignment": rejectedPlannerAlignment,
+		"research_scope_alignment":         researchAlignment,
+		"retrieval_scope_alignment":        retrievalAlignment,
+		"retrieval_precedent_refs":         retrievalRefs,
+		"findings":                         findings,
+	})
+}
+
+func buildReviewAlignmentFindings(plannerAlignment, rejectedPlannerAlignment, researchAlignment string, plannerPaths, rejectedPlannerPaths, researchPaths, changedFiles []string) []map[string]any {
+	findings := make([]map[string]any, 0, 4)
+	if plannerAlignment == "confirmed" {
+		findings = append(findings, map[string]any{
+			"kind":               "planner_scope_confirmed",
+			"severity":           "info",
+			"message":            "The observed diff confirms the planner's selected first-pass scope hypothesis.",
+			"source":             "review",
+			"expected_paths":     plannerPaths,
+			"changed_files":      changedFiles,
+			"recommended_action": "Use this confirmed planner precedent when narrowing similar future objectives.",
+		})
+	}
+	if plannerAlignment == "contradicted" {
+		findings = append(findings, map[string]any{
+			"kind":               "planner_scope_contradicted",
+			"severity":           "medium",
+			"message":            "The observed diff contradicts the planner's initial scope hypothesis.",
+			"source":             "review",
+			"expected_paths":     plannerPaths,
+			"changed_files":      changedFiles,
+			"recommended_action": "Update the next plan using the files actually changed or revisit the planner's first-pass scope guess.",
+		})
+	}
+	if rejectedPlannerAlignment == "contradicted" {
+		findings = append(findings, map[string]any{
+			"kind":               "planner_rejected_scope_contradicted",
+			"severity":           "high",
+			"message":            "The observed diff landed in a path the planner explicitly rejected in the first-pass shortlist.",
+			"source":             "review",
+			"expected_paths":     rejectedPlannerPaths,
+			"changed_files":      changedFiles,
+			"recommended_action": "Revisit the planner's rejection rationale and promote the actually changed file into the next plan.",
+		})
+	}
+	if rejectedPlannerAlignment == "confirmed" {
+		findings = append(findings, map[string]any{
+			"kind":               "planner_rejected_scope_confirmed",
+			"severity":           "info",
+			"message":            "The observed diff avoided the planner's rejected competitors.",
+			"source":             "review",
+			"expected_paths":     rejectedPlannerPaths,
+			"changed_files":      changedFiles,
+			"recommended_action": "Treat the rejected competitor list as a valid exclusion precedent for similar objectives.",
+		})
+	}
+	if researchAlignment == "contradicted" {
+		findings = append(findings, map[string]any{
+			"kind":               "research_scope_contradicted",
+			"severity":           "high",
+			"message":            "The observed diff contradicts the research-guided patch intent.",
+			"source":             "review",
+			"expected_paths":     researchPaths,
+			"changed_files":      changedFiles,
+			"recommended_action": "Narrow the next repair cycle to the files that actually need changes and revise the research scope before editing again.",
+		})
+	}
+	return findings
+}
+
+func buildReviewRetrievalFindings(retrievalAlignment string, retrievalRefs, changedFiles []string) []map[string]any {
+	switch retrievalAlignment {
+	case "confirmed":
+		return []map[string]any{{
+			"kind":               "retrieval_scope_confirmed",
+			"severity":           "info",
+			"message":            "The observed diff aligns with a retrieved precedent.",
+			"source":             "review",
+			"precedent_refs":     retrievalRefs,
+			"changed_files":      changedFiles,
+			"recommended_action": "Reuse this precedent class for similar objectives.",
+		}}
+	case "contradicted":
+		return []map[string]any{{
+			"kind":               "retrieval_scope_contradicted",
+			"severity":           "medium",
+			"message":            "The observed diff does not align with the retrieved precedents that were carried into the edit.",
+			"source":             "review",
+			"precedent_refs":     retrievalRefs,
+			"changed_files":      changedFiles,
+			"recommended_action": "Demote the contradicted precedent and rely on the actual diff for the next repair cycle.",
+		}}
+	default:
+		return nil
+	}
+}
+
+func reviewScopeAlignment(expectedPaths, changedFiles []string) string {
+	if len(expectedPaths) == 0 || len(changedFiles) == 0 {
+		return "unknown"
+	}
+	for _, changed := range changedFiles {
+		for _, expected := range expectedPaths {
+			if strings.TrimSpace(changed) == strings.TrimSpace(expected) {
+				return "confirmed"
+			}
+		}
+	}
+	return "contradicted"
+}
+
+func reviewRejectedScopeAlignment(rejectedPaths, changedFiles []string) string {
+	if len(rejectedPaths) == 0 || len(changedFiles) == 0 {
+		return "unknown"
+	}
+	for _, changed := range changedFiles {
+		for _, rejected := range rejectedPaths {
+			if strings.TrimSpace(changed) == strings.TrimSpace(rejected) {
+				return "contradicted"
+			}
+		}
+	}
+	return "confirmed"
+}
+
+func reviewRetrievalAlignment(precedents []map[string]any, changedFiles []string) (string, []string) {
+	if len(precedents) == 0 || len(changedFiles) == 0 {
+		return "unknown", nil
+	}
+	refs := make([]string, 0, len(precedents))
+	confirmed := false
+	for _, item := range precedents {
+		sourceRef := strings.TrimSpace(asString(item["source_ref"]))
+		summary := strings.ToLower(strings.TrimSpace(asString(item["summary"])))
+		if sourceRef != "" {
+			refs = append(refs, sourceRef)
+		}
+		for _, changed := range changedFiles {
+			changed = strings.ToLower(strings.TrimSpace(changed))
+			if changed == "" {
+				continue
+			}
+			base := strings.ToLower(filepath.Base(changed))
+			if strings.Contains(summary, changed) || strings.Contains(summary, base) {
+				confirmed = true
+				break
+			}
+		}
+		if confirmed {
+			break
+		}
+	}
+	refs = uniqueNonEmptyStrings(refs)
+	if len(refs) == 0 {
+		return "unknown", nil
+	}
+	if confirmed {
+		return "confirmed", refs
+	}
+	return "contradicted", refs
+}
+
+func buildValidationFailureFindings(argv []string, exitCode int, message string) []map[string]any {
+	message = strings.TrimSpace(message)
+	if len(argv) == 0 && message == "" {
+		return nil
+	}
+	return []map[string]any{{
+		"kind":               "validation_failure",
+		"severity":           "high",
+		"message":            firstNonEmptyString(message, "Validation command failed."),
+		"source":             "validate",
+		"validation_command": argv,
+		"exit_code":          exitCode,
+		"recommended_action": "Reproduce the failing validation command and fix the error before approval.",
+	}}
 }
 
 func (e *WorkspaceExecutor) codeAnalysis(request map[string]any) (domain.LocalBridgeResultRequest, error) {
@@ -632,7 +917,60 @@ func (e *WorkspaceExecutor) collectProjectReadContext(projectRootValue string) (
 			break
 		}
 	}
+	if treeFiles := listProjectFiles(projectRoot); len(treeFiles) > 0 {
+		evidence["tree_files"] = treeFiles
+		usage = append(usage, map[string]any{
+			"capability": "filesystem.read",
+			"helped":     true,
+			"source":     filepath.ToSlash(projectRootValue),
+			"kind":       "local_repo_tree",
+		})
+	}
 	return evidence, usage
+}
+
+func listProjectFiles(projectRoot string) []string {
+	entries := make([]string, 0, 24)
+	_ = filepath.WalkDir(projectRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if path == projectRoot {
+			return nil
+		}
+		rel, err := filepath.Rel(projectRoot, path)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if d.IsDir() {
+			switch rel {
+			case ".git", ".lab", "node_modules", "dist", "build":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !isInterestingProjectFile(rel) {
+			return nil
+		}
+		entries = append(entries, rel)
+		if len(entries) >= 24 {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	slices.Sort(entries)
+	return entries
+}
+
+func isInterestingProjectFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".go", ".py", ".ts", ".tsx", ".js", ".jsx", ".java", ".kt", ".rs", ".rb", ".php", ".md", ".txt", ".json", ".toml", ".yaml", ".yml":
+		return true
+	default:
+		return strings.EqualFold(filepath.Base(path), "Dockerfile")
+	}
 }
 
 func uniqueCapabilities(items []map[string]any, helpedOnly bool) []string {
@@ -688,7 +1026,18 @@ func (e *WorkspaceExecutor) runCommand(ctx context.Context, request map[string]a
 		return domain.LocalBridgeResultRequest{}, LocalExecutionError{Message: "run_command requires argv list"}
 	}
 	argv = e.prepareCommandArgs(argv, request)
-	return e.runAllowedCommand(ctx, argv, "Ran command: "+strings.Join(argv, " "))
+	result, err := e.runAllowedCommand(ctx, argv, "Ran command: "+strings.Join(argv, " "))
+	if err != nil {
+		return result, err
+	}
+	if len(argv) > 0 && argv[0] == "aider-task" {
+		if enriched, enrichErr := e.withGitArtifacts(result); enrichErr == nil {
+			result = enriched
+		}
+		metadata, _ := request["_task_metadata"].(map[string]any)
+		result = e.withCoderPacket(result, argv, metadata)
+	}
+	return result, nil
 }
 
 func (e *WorkspaceExecutor) prepareCommandArgs(argv []string, request map[string]any) []string {
@@ -773,6 +1122,52 @@ func (e *WorkspaceExecutor) withGitArtifacts(result domain.LocalBridgeResultRequ
 	return result, nil
 }
 
+func (e *WorkspaceExecutor) withCoderPacket(result domain.LocalBridgeResultRequest, argv []string, metadata map[string]any) domain.LocalBridgeResultRequest {
+	if len(argv) == 0 || argv[0] != "aider-task" {
+		return result
+	}
+	gitStatus, diffStat := e.workspaceGitSummaries()
+	hasObservableChanges := strings.TrimSpace(derefStringPtr(result.Diff)) != "" || len(result.ChangedFiles) > 0 || strings.TrimSpace(gitStatus) != "" || strings.TrimSpace(diffStat) != ""
+	packet := map[string]any{
+		"tool":                "aider-task",
+		"status":              strings.ToLower(strings.TrimSpace(result.Status)),
+		"summary":             strings.TrimSpace(derefStringPtr(result.Summary)),
+		"exit_code":           derefIntPtr(result.ExitCode),
+		"changed_files":       append([]string{}, result.ChangedFiles...),
+		"changed_file_count":  len(result.ChangedFiles),
+		"diff_present":        hasObservableChanges,
+		"git_status_short":    gitStatus,
+		"git_diff_stat":       diffStat,
+		"validation_commands": anyStringSliceDefault(metadata["validation_commands"], []string{}),
+		"suspected_paths":     anyStringSliceDefault(metadata["suspected_paths"], []string{}),
+		"objective_iteration": asInt(metadata["objective_iteration"], 1),
+		"scope_correction": map[string]any{
+			"planner_scope_resolution":          strings.TrimSpace(asString(metadata["planner_scope_resolution"])),
+			"planner_rejected_scope_resolution": strings.TrimSpace(asString(metadata["planner_rejected_scope_resolution"])),
+			"excluded_scope_paths":              anyStringSliceDefault(metadata["excluded_scope_paths"], []string{}),
+			"reason":                            strings.TrimSpace(asString(metadata["scope_correction_reason"])),
+		},
+		"self_check": map[string]any{
+			"git_status_short_present": strings.TrimSpace(gitStatus) != "",
+			"git_diff_stat_present":    strings.TrimSpace(diffStat) != "",
+			"diff_present":             hasObservableChanges,
+		},
+	}
+	if stderr := strings.TrimSpace(derefStringPtr(result.Stderr)); stderr != "" {
+		packet["stderr_excerpt"] = truncateForPrompt(stderr, 800)
+	}
+	if stdout := strings.TrimSpace(derefStringPtr(result.Stdout)); stdout != "" {
+		packet["stdout_excerpt"] = truncateForPrompt(stdout, 800)
+	}
+	result.Artifacts = append(result.Artifacts, map[string]any{
+		"type":         "coder_packet",
+		"title":        "Coder execution packet",
+		"media_type":   "application/json",
+		"content_text": mustJSON(packet),
+	})
+	return result
+}
+
 func (e *WorkspaceExecutor) workspaceGitState() (string, []string) {
 	statusCmd := exec.Command("git", "status", "--short", "--untracked-files=all")
 	statusCmd.Dir = e.workspaceRoot
@@ -795,6 +1190,16 @@ func (e *WorkspaceExecutor) workspaceGitState() (string, []string) {
 	}
 	diff := string(diffOut)
 	return diff, changedFiles
+}
+
+func (e *WorkspaceExecutor) workspaceGitSummaries() (string, string) {
+	statusCmd := exec.Command("git", "status", "--short", "--untracked-files=all")
+	statusCmd.Dir = e.workspaceRoot
+	statusOut, _ := statusCmd.Output()
+	diffStatCmd := exec.Command("git", "diff", "--stat", "--no-ext-diff")
+	diffStatCmd.Dir = e.workspaceRoot
+	diffStatOut, _ := diffStatCmd.Output()
+	return string(statusOut), string(diffStatOut)
 }
 
 func (e *WorkspaceExecutor) gitTopLevel() (string, bool) {
@@ -936,10 +1341,45 @@ func mustJSON(value any) string {
 	return string(raw)
 }
 
-func buildRepairEditBrief(goal, repairFeedback string, priorFindings []map[string]any, priorTestResults map[string]any, scopePaths []string) string {
+func buildRepairEditBrief(goal, repairFeedback string, priorFindings []map[string]any, priorTestResults map[string]any, scopePaths []string, failureHypotheses, patchIntent []map[string]any, scopeCorrection plannerRepairScopeCorrection, retrievalPrecedents []map[string]any) string {
 	lines := []string{strings.TrimSpace(goal)}
 	if strings.TrimSpace(repairFeedback) != "" {
 		lines = append(lines, "Repair feedback:", strings.TrimSpace(repairFeedback))
+	}
+	if scopeCorrection.ScopeCorrectionReason != "" {
+		lines = append(lines, "Scope correction:", scopeCorrection.ScopeCorrectionReason)
+	}
+	if len(scopeCorrection.ConfirmedPlannerPaths) > 0 {
+		lines = append(lines, "Planner confirmed paths: "+strings.Join(scopeCorrection.ConfirmedPlannerPaths, ", "))
+	}
+	if len(scopeCorrection.ContradictedPlannerPaths) > 0 {
+		lines = append(lines, "Planner selected paths contradicted by review: "+strings.Join(scopeCorrection.ContradictedPlannerPaths, ", "))
+	} else if scopeCorrection.PlannerScopeResolution == "contradicted" {
+		lines = append(lines, "Planner selected paths contradicted by review: previous shortlist lost priority for the next attempt")
+	}
+	if len(scopeCorrection.PromotedRejectedPaths) > 0 {
+		lines = append(lines, "Planner rejected but observed in diff: "+strings.Join(scopeCorrection.PromotedRejectedPaths, ", "))
+	}
+	if len(scopeCorrection.ConfirmedRejectedPaths) > 0 {
+		lines = append(lines, "Planner rejected paths still excluded: "+strings.Join(scopeCorrection.ConfirmedRejectedPaths, ", "))
+	} else if scopeCorrection.RejectedPlannerScopeResolution == "confirmed" && len(scopeCorrection.ExcludedScopePaths) > 0 {
+		lines = append(lines, "Planner rejected paths still excluded: "+strings.Join(scopeCorrection.ExcludedScopePaths, ", "))
+	}
+	if len(scopeCorrection.ExcludedScopePaths) > 0 {
+		lines = append(lines, "Excluded paths for next attempt: "+strings.Join(scopeCorrection.ExcludedScopePaths, ", "))
+	}
+	if len(retrievalPrecedents) > 0 {
+		lines = append(lines, "Retrieved precedents:")
+		for _, item := range retrievalPrecedents {
+			sourceRef := strings.TrimSpace(asString(item["source_ref"]))
+			summary := strings.TrimSpace(asString(item["summary"]))
+			switch {
+			case sourceRef != "" && summary != "":
+				lines = append(lines, fmt.Sprintf("- %s -> %s", sourceRef, summary))
+			case summary != "":
+				lines = append(lines, "- "+summary)
+			}
+		}
 	}
 	if len(priorFindings) > 0 {
 		lines = append(lines, "Prior findings:")
@@ -962,21 +1402,646 @@ func buildRepairEditBrief(goal, repairFeedback string, priorFindings []map[strin
 	if len(scopePaths) > 0 {
 		lines = append(lines, "Likely scope: "+strings.Join(scopePaths, ", "))
 	}
+	if len(failureHypotheses) > 0 {
+		lines = append(lines, "Failure hypotheses:")
+		for _, item := range failureHypotheses {
+			path := strings.TrimSpace(asString(item["path"]))
+			failureMode := strings.TrimSpace(asString(item["failure_mode"]))
+			evidence := strings.TrimSpace(asString(item["evidence"]))
+			priority := strings.TrimSpace(asString(item["priority"]))
+			label := firstNonEmptyString(priority, failureMode, "info")
+			switch {
+			case path != "" && evidence != "":
+				lines = append(lines, fmt.Sprintf("- [%s] %s -> %s", label, path, evidence))
+			case evidence != "":
+				lines = append(lines, fmt.Sprintf("- [%s] %s", label, evidence))
+			}
+		}
+	}
+	if len(patchIntent) > 0 {
+		lines = append(lines, "Patch intent:")
+		for _, item := range patchIntent {
+			path := strings.TrimSpace(asString(item["path"]))
+			action := strings.TrimSpace(asString(item["action"]))
+			rationale := strings.TrimSpace(asString(item["rationale"]))
+			switch {
+			case path != "" && action != "" && rationale != "":
+				lines = append(lines, fmt.Sprintf("- %s: %s (%s)", path, action, rationale))
+			case path != "" && action != "":
+				lines = append(lines, fmt.Sprintf("- %s: %s", path, action))
+			case action != "":
+				lines = append(lines, "- "+action)
+			}
+		}
+	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+type plannerRepairScopeCorrection struct {
+	PlannerScopeResolution         string
+	RejectedPlannerScopeResolution string
+	ConfirmedPlannerPaths          []string
+	ContradictedPlannerPaths       []string
+	PromotedRejectedPaths          []string
+	ConfirmedRejectedPaths         []string
+	ExcludedScopePaths             []string
+	ScopeCorrectionReason          string
+}
+
+func recommendRepairScopePaths(priorChangedFiles, expectedFiles []string) []string {
+	scopePaths := make([]string, 0, len(priorChangedFiles)+len(expectedFiles))
+	scopePaths = append(scopePaths, priorChangedFiles...)
+	if len(scopePaths) == 0 {
+		scopePaths = append(scopePaths, expectedFiles...)
+	}
+	return uniqueNonEmptyStrings(scopePaths)
+}
+
+func recommendResearchScopePaths(goal string, scopeCorrection plannerRepairScopeCorrection, priorChangedFiles, priorPatchIntentPaths, expectedFiles, treeFiles []string, readmeExcerpt string) []string {
+	readmeInferred := inferScopePathsFromReadme(goal, readmeExcerpt, treeFiles)
+	inferred := inferScopePathsFromGoal(goal, treeFiles)
+	scopePaths := make([]string, 0, len(scopeCorrection.ConfirmedPlannerPaths)+len(scopeCorrection.PromotedRejectedPaths)+len(priorChangedFiles)+len(priorPatchIntentPaths)+len(expectedFiles)+len(readmeInferred)+len(inferred))
+	scopePaths = append(scopePaths, scopeCorrection.PromotedRejectedPaths...)
+	scopePaths = append(scopePaths, scopeCorrection.ConfirmedPlannerPaths...)
+	scopePaths = append(scopePaths, priorChangedFiles...)
+	scopePaths = append(scopePaths, priorPatchIntentPaths...)
+	scopePaths = append(scopePaths, expectedFiles...)
+	scopePaths = append(scopePaths, readmeInferred...)
+	scopePaths = append(scopePaths, inferred...)
+	scopePaths = filterValidationArtifactPaths(uniqueNonEmptyStrings(scopePaths))
+	if len(scopeCorrection.ExcludedScopePaths) == 0 {
+		return scopePaths
+	}
+	excluded := map[string]struct{}{}
+	for _, path := range scopeCorrection.ExcludedScopePaths {
+		excluded[path] = struct{}{}
+	}
+	filtered := make([]string, 0, len(scopePaths))
+	for _, path := range scopePaths {
+		if _, skip := excluded[path]; skip {
+			continue
+		}
+		filtered = append(filtered, path)
+	}
+	if len(filtered) > 0 {
+		return filtered
+	}
+	return scopePaths
+}
+
+func filterValidationArtifactPaths(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	filtered := make([]string, 0, len(paths))
+	for _, path := range paths {
+		switch strings.ToUpper(strings.TrimSpace(path)) {
+		case "PASS", "FAIL":
+			continue
+		default:
+			filtered = append(filtered, path)
+		}
+	}
+	return filtered
+}
+
+func inferScopePathsFromGoal(goal string, treeFiles []string) []string {
+	goal = strings.ToLower(strings.TrimSpace(goal))
+	if goal == "" || len(treeFiles) == 0 {
+		return nil
+	}
+	type candidate struct {
+		path  string
+		score int
+	}
+	candidates := make([]candidate, 0, len(treeFiles))
+	for _, path := range uniqueNonEmptyStrings(treeFiles) {
+		lowerPath := strings.ToLower(strings.TrimSpace(path))
+		if lowerPath == "" {
+			continue
+		}
+		base := strings.ToLower(filepath.Base(lowerPath))
+		score := 0
+		switch {
+		case strings.Contains(goal, lowerPath):
+			score += 10
+		case strings.Contains(goal, base):
+			score += 8
+		}
+		nameWithoutExt := strings.TrimSuffix(base, filepath.Ext(base))
+		for _, token := range strings.FieldsFunc(nameWithoutExt, func(r rune) bool {
+			return r == '_' || r == '-' || r == '.' || r == '/' || r == '\\'
+		}) {
+			token = strings.TrimSpace(token)
+			if len(token) < 4 {
+				continue
+			}
+			if strings.Contains(goal, token) {
+				score++
+			}
+		}
+		if score > 0 {
+			candidates = append(candidates, candidate{path: path, score: score})
+		}
+	}
+	slices.SortStableFunc(candidates, func(a, b candidate) int {
+		if a.score != b.score {
+			return b.score - a.score
+		}
+		return strings.Compare(a.path, b.path)
+	})
+	out := make([]string, 0, len(candidates))
+	for _, item := range candidates {
+		out = append(out, item.path)
+		if len(out) >= 4 {
+			break
+		}
+	}
+	return out
+}
+
+func inferScopePathsFromReadme(goal, readmeExcerpt string, treeFiles []string) []string {
+	readmeExcerpt = strings.ToLower(strings.TrimSpace(readmeExcerpt))
+	if readmeExcerpt == "" || len(treeFiles) == 0 {
+		return nil
+	}
+	goalTokens := informativeGoalTokens(goal)
+	readmeLines := strings.Split(readmeExcerpt, "\n")
+	type candidate struct {
+		path  string
+		score int
+	}
+	candidates := make([]candidate, 0, len(treeFiles))
+	for _, path := range uniqueNonEmptyStrings(treeFiles) {
+		lowerPath := strings.ToLower(strings.TrimSpace(path))
+		if lowerPath == "" {
+			continue
+		}
+		base := strings.ToLower(filepath.Base(lowerPath))
+		score := 0
+		for _, line := range readmeLines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			matchesPath := strings.Contains(line, lowerPath)
+			matchesBase := strings.Contains(line, base)
+			if !matchesPath && !matchesBase {
+				continue
+			}
+			lineScore := 0
+			if matchesPath {
+				lineScore += 6
+			} else if matchesBase {
+				lineScore += 4
+			}
+			for _, token := range goalTokens {
+				if strings.Contains(line, token) {
+					lineScore++
+				}
+			}
+			lineScore += readmeCueWeight(line)
+			if lineScore > score {
+				score = lineScore
+			}
+		}
+		if score <= 0 {
+			continue
+		}
+		candidates = append(candidates, candidate{path: path, score: score})
+	}
+	slices.SortStableFunc(candidates, func(a, b candidate) int {
+		if a.score != b.score {
+			return b.score - a.score
+		}
+		return strings.Compare(a.path, b.path)
+	})
+	out := make([]string, 0, len(candidates))
+	for _, item := range candidates {
+		out = append(out, item.path)
+		if len(out) >= 4 {
+			break
+		}
+	}
+	return out
+}
+
+func readmeCueWeight(line string) int {
+	weight := 0
+	for _, positive := range []string{"current", "primary", "implemented", "lives in", "source of truth", "toggle", "objective"} {
+		if strings.Contains(line, positive) {
+			weight += 2
+		}
+	}
+	for _, negative := range []string{"legacy", "deprecated", "old", "unused", "do not", "should not", "obsolete"} {
+		if strings.Contains(line, negative) {
+			weight -= 3
+		}
+	}
+	return weight
+}
+
+func informativeGoalTokens(goal string) []string {
+	goal = strings.ToLower(strings.TrimSpace(goal))
+	if goal == "" {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, 8)
+	for _, token := range strings.FieldsFunc(goal, func(r rune) bool {
+		return r == ' ' || r == '\n' || r == '\t' || r == ',' || r == '.' || r == ':' || r == ';' || r == '-' || r == '_' || r == '/' || r == '\\' || r == '(' || r == ')'
+	}) {
+		token = strings.TrimSpace(token)
+		if len(token) < 4 {
+			continue
+		}
+		if _, ok := seen[token]; ok {
+			continue
+		}
+		seen[token] = struct{}{}
+		out = append(out, token)
+	}
+	return out
+}
+
+func buildRepairFailureHypotheses(priorFindings []map[string]any, priorTestResults map[string]any, scopePaths []string, scopeCorrection plannerRepairScopeCorrection) []map[string]any {
+	if len(scopePaths) == 0 && len(priorFindings) == 0 && len(priorTestResults) == 0 {
+		return nil
+	}
+	hypotheses := make([]map[string]any, 0, len(scopePaths)+1)
+	for _, path := range scopePaths {
+		finding := firstRelevantFindingForPath(priorFindings, path)
+		failureMode := "targeted_regression"
+		evidence := ""
+		priority := "medium"
+		if exitCode, ok := asIntOK(priorTestResults["exit_code"]); ok && exitCode != 0 {
+			failureMode = "validation_failure"
+			evidence = fmt.Sprintf("Declared validation command exited with code %d.", exitCode)
+			priority = "high"
+		}
+		if finding != nil {
+			if kind := strings.TrimSpace(asString(finding["kind"])); kind != "" {
+				failureMode = kind
+			}
+			if message := strings.TrimSpace(asString(finding["message"])); message != "" {
+				evidence = message
+			}
+			if severity := strings.TrimSpace(asString(finding["severity"])); severity != "" {
+				priority = severity
+			}
+		}
+		hypothesis := map[string]any{
+			"path":           path,
+			"failure_mode":   failureMode,
+			"priority":       priority,
+			"cause_category": repairCauseCategoryForPath(path, scopeCorrection),
+		}
+		if evidence != "" {
+			hypothesis["evidence"] = evidence
+		}
+		hypotheses = append(hypotheses, hypothesis)
+	}
+	if len(hypotheses) == 0 {
+		hypothesis := map[string]any{
+			"failure_mode":   "validation_failure",
+			"priority":       "high",
+			"cause_category": repairCauseCategoryForPath("", scopeCorrection),
+		}
+		if exitCode, ok := asIntOK(priorTestResults["exit_code"]); ok && exitCode != 0 {
+			hypothesis["evidence"] = fmt.Sprintf("Declared validation command exited with code %d.", exitCode)
+		}
+		hypotheses = append(hypotheses, hypothesis)
+	}
+	return hypotheses
+}
+
+func buildRepairPatchIntent(failureHypotheses []map[string]any, scopePaths []string, scopeCorrection plannerRepairScopeCorrection) []map[string]any {
+	if len(scopePaths) == 0 && len(failureHypotheses) == 0 {
+		return nil
+	}
+	fallbackAction := "inspect the failing logic, apply the narrowest fix that satisfies validation, and avoid unrelated edits"
+	intents := make([]map[string]any, 0, len(scopePaths)+1)
+	for _, path := range scopePaths {
+		intent := map[string]any{
+			"path":   path,
+			"action": fallbackAction,
+		}
+		hypothesis := firstRepairHypothesisForPath(failureHypotheses, path)
+		if hypothesis != nil {
+			failureMode := strings.TrimSpace(asString(hypothesis["failure_mode"]))
+			if failureMode != "" {
+				intent["failure_mode"] = failureMode
+			}
+			if priority := strings.TrimSpace(asString(hypothesis["priority"])); priority != "" {
+				intent["priority"] = priority
+			}
+			if evidence := strings.TrimSpace(asString(hypothesis["evidence"])); evidence != "" {
+				intent["rationale"] = evidence
+			}
+			causeCategory := strings.TrimSpace(asString(hypothesis["cause_category"]))
+			if causeCategory != "" {
+				intent["cause_category"] = causeCategory
+			}
+			switch failureMode {
+			case "validation_failure":
+				intent["action"] = "repair the validation failure in this file first, then rerun the declared validation command before widening scope"
+			case "missing_diff":
+				intent["action"] = "produce the missing code change in this file and verify the diff is real before review"
+			default:
+				intent["action"] = "repair the behavior implicated by the latest finding and keep the patch limited to this file"
+			}
+			switch causeCategory {
+			case "bad_planner_shortlist":
+				intent["action"] = "shift the patch toward the files observed in the failed iteration and avoid returning to the planner's contradicted shortlist"
+			case "bad_edit_against_good_shortlist":
+				intent["action"] = "stay on the planner-confirmed shortlist and correct the implementation without widening scope"
+			case "edit_landed_in_rejected_path":
+				intent["action"] = "repair the path that the previous edit actually touched, then decide whether that rejected path should remain in scope"
+			}
+		}
+		intents = append(intents, intent)
+	}
+	if len(intents) == 0 {
+		intents = append(intents, map[string]any{
+			"action": fallbackAction,
+		})
+	}
+	return intents
+}
+
+func interpretPlannerRepairFindings(priorFindings []map[string]any, selectedPlannerPaths, rejectedPlannerPaths, changedFiles []string) plannerRepairScopeCorrection {
+	selectedPlannerPaths = uniqueNonEmptyStrings(selectedPlannerPaths)
+	rejectedPlannerPaths = uniqueNonEmptyStrings(rejectedPlannerPaths)
+	changedFiles = uniqueNonEmptyStrings(changedFiles)
+	correction := plannerRepairScopeCorrection{
+		PlannerScopeResolution:         "unchanged",
+		RejectedPlannerScopeResolution: "unchanged",
+	}
+	kinds := findingKinds(priorFindings)
+	selectedInDiff := intersectStrings(changedFiles, selectedPlannerPaths)
+	rejectedInDiff := intersectStrings(changedFiles, rejectedPlannerPaths)
+	excluded := []string{}
+	reasons := []string{}
+	if kinds["planner_scope_confirmed"] {
+		correction.PlannerScopeResolution = "confirmed"
+		correction.ConfirmedPlannerPaths = selectedPlannerPaths
+		if len(selectedPlannerPaths) > 0 {
+			reasons = append(reasons, "keep the planner-confirmed shortlist as the primary target")
+		}
+	}
+	if kinds["planner_scope_contradicted"] {
+		correction.PlannerScopeResolution = "contradicted"
+		for _, path := range selectedPlannerPaths {
+			if !containsString(selectedInDiff, path) {
+				excluded = append(excluded, path)
+				correction.ContradictedPlannerPaths = append(correction.ContradictedPlannerPaths, path)
+			}
+		}
+		if len(excluded) > 0 {
+			reasons = append(reasons, "drop planner-selected paths that did not appear in the failed diff")
+		}
+	}
+	if kinds["planner_rejected_scope_confirmed"] {
+		correction.RejectedPlannerScopeResolution = "confirmed"
+		correction.ConfirmedRejectedPaths = append(correction.ConfirmedRejectedPaths, rejectedPlannerPaths...)
+		excluded = append(excluded, rejectedPlannerPaths...)
+		if len(rejectedPlannerPaths) > 0 {
+			reasons = append(reasons, "keep planner-rejected competitor paths excluded")
+		}
+	}
+	if kinds["planner_rejected_scope_contradicted"] {
+		correction.RejectedPlannerScopeResolution = "contradicted"
+		correction.PromotedRejectedPaths = rejectedInDiff
+		excluded = differenceStrings(excluded, rejectedInDiff)
+		if len(rejectedInDiff) > 0 {
+			reasons = append(reasons, "promote rejected paths that the failed edit actually touched")
+		}
+	}
+	correction.ContradictedPlannerPaths = uniqueNonEmptyStrings(correction.ContradictedPlannerPaths)
+	correction.ConfirmedRejectedPaths = uniqueNonEmptyStrings(correction.ConfirmedRejectedPaths)
+	correction.ExcludedScopePaths = uniqueNonEmptyStrings(excluded)
+	correction.ScopeCorrectionReason = strings.TrimSpace(strings.Join(uniqueNonEmptyStrings(reasons), "; "))
+	return correction
+}
+
+func repairCauseCategoryForPath(path string, scopeCorrection plannerRepairScopeCorrection) string {
+	switch {
+	case path != "" && containsString(scopeCorrection.PromotedRejectedPaths, path):
+		return "edit_landed_in_rejected_path"
+	case path != "" && containsString(scopeCorrection.ConfirmedPlannerPaths, path):
+		return "bad_edit_against_good_shortlist"
+	case scopeCorrection.PlannerScopeResolution == "contradicted":
+		return "bad_planner_shortlist"
+	case scopeCorrection.RejectedPlannerScopeResolution == "contradicted":
+		return "edit_landed_in_rejected_path"
+	case scopeCorrection.PlannerScopeResolution == "confirmed":
+		return "bad_edit_against_good_shortlist"
+	default:
+		return "bad_planner_shortlist"
+	}
+}
+
+func findingKinds(findings []map[string]any) map[string]bool {
+	out := map[string]bool{}
+	for _, finding := range findings {
+		kind := strings.TrimSpace(asString(finding["kind"]))
+		if kind == "" {
+			continue
+		}
+		out[kind] = true
+	}
+	return out
+}
+
+func firstRelevantFindingForPath(findings []map[string]any, path string) map[string]any {
+	normalizedPath := strings.TrimSpace(path)
+	for _, finding := range findings {
+		message := strings.TrimSpace(asString(finding["message"]))
+		if message == "" {
+			continue
+		}
+		findingPath := strings.TrimSpace(asString(finding["path"]))
+		switch {
+		case findingPath != "" && findingPath == normalizedPath:
+			return finding
+		case normalizedPath != "" && strings.Contains(message, normalizedPath):
+			return finding
+		}
+	}
+	if len(findings) > 0 {
+		return findings[0]
+	}
+	return nil
+}
+
+func firstRepairHypothesisForPath(hypotheses []map[string]any, path string) map[string]any {
+	normalizedPath := strings.TrimSpace(path)
+	for _, hypothesis := range hypotheses {
+		hypothesisPath := strings.TrimSpace(asString(hypothesis["path"]))
+		if hypothesisPath != "" && hypothesisPath == normalizedPath {
+			return hypothesis
+		}
+	}
+	if len(hypotheses) > 0 {
+		return hypotheses[0]
+	}
+	return nil
+}
+
+func intersectStrings(values, candidates []string) []string {
+	if len(values) == 0 || len(candidates) == 0 {
+		return nil
+	}
+	allowed := map[string]struct{}{}
+	for _, item := range uniqueNonEmptyStrings(candidates) {
+		allowed[item] = struct{}{}
+	}
+	out := make([]string, 0, len(values))
+	for _, item := range uniqueNonEmptyStrings(values) {
+		if _, ok := allowed[item]; ok {
+			out = append(out, item)
+		}
+	}
+	return uniqueNonEmptyStrings(out)
+}
+
+func differenceStrings(values, remove []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	if len(remove) == 0 {
+		return uniqueNonEmptyStrings(values)
+	}
+	skip := map[string]struct{}{}
+	for _, item := range uniqueNonEmptyStrings(remove) {
+		skip[item] = struct{}{}
+	}
+	out := make([]string, 0, len(values))
+	for _, item := range uniqueNonEmptyStrings(values) {
+		if _, ok := skip[item]; ok {
+			continue
+		}
+		out = append(out, item)
+	}
+	return uniqueNonEmptyStrings(out)
+}
+
+func containsString(values []string, target string) bool {
+	target = strings.TrimSpace(target)
+	for _, item := range values {
+		if target != "" && strings.TrimSpace(item) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func retrievalPrecedentsFromContextPackage(value any) []map[string]any {
+	contextPackage, _ := value.(map[string]any)
+	if len(contextPackage) == 0 {
+		return nil
+	}
+	rawChunks, _ := contextPackage["chunks"].([]any)
+	if len(rawChunks) == 0 {
+		return nil
+	}
+	precedents := make([]map[string]any, 0, min(3, len(rawChunks)))
+	for _, raw := range rawChunks {
+		chunk, _ := raw.(map[string]any)
+		if len(chunk) == 0 {
+			continue
+		}
+		precedent := map[string]any{
+			"source_ref":  strings.TrimSpace(asString(chunk["source_ref"])),
+			"source_type": strings.TrimSpace(asString(chunk["source_type"])),
+			"source_id":   strings.TrimSpace(asString(chunk["source_id"])),
+			"summary":     summarizeBridgeRetrievalChunk(strings.TrimSpace(asString(chunk["content_text"]))),
+		}
+		if score, ok := chunk["score"].(float64); ok {
+			precedent["score"] = score
+		}
+		if initiativeID := strings.TrimSpace(asString(chunk["initiative_id"])); initiativeID != "" {
+			precedent["initiative_id"] = initiativeID
+		}
+		if taskID := strings.TrimSpace(asString(chunk["task_id"])); taskID != "" {
+			precedent["task_id"] = taskID
+		}
+		if artifactID := strings.TrimSpace(asString(chunk["artifact_id"])); artifactID != "" {
+			precedent["artifact_id"] = artifactID
+		}
+		precedents = append(precedents, precedent)
+		if len(precedents) >= 3 {
+			break
+		}
+	}
+	if len(precedents) == 0 {
+		return nil
+	}
+	return precedents
+}
+
+func summarizeBridgeRetrievalChunk(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	runes := []rune(text)
+	if len(runes) <= 180 {
+		return text
+	}
+	return strings.TrimSpace(string(runes[:180])) + "..."
 }
 
 func buildAiderTaskMetadata(metadata map[string]any) map[string]any {
 	out := map[string]any{
-		"objective_title":          strings.TrimSpace(asString(metadata["objective_title"])),
-		"initiative_goal":          strings.TrimSpace(asString(metadata["initiative_goal"])),
-		"work_item_kind":           strings.TrimSpace(asString(metadata["work_item_kind"])),
-		"objective_iteration":      asInt(metadata["objective_iteration"], 1),
-		"objective_max_iterations": asInt(metadata["objective_max_iterations"], 3),
-		"repair_feedback":          strings.TrimSpace(asString(metadata["objective_repair_feedback"])),
-		"review_decision":          strings.TrimSpace(asString(metadata["review_decision"])),
-		"review_comments":          anyMapSliceDefault(metadata["review_comments"], []map[string]any{}),
-		"validation_commands":      anyStringSliceDefault(metadata["validation_commands"], []string{}),
-		"suspected_paths":          anyStringSliceDefault(metadata["suspected_paths"], []string{}),
+		"objective_title":                   strings.TrimSpace(asString(metadata["objective_title"])),
+		"initiative_goal":                   strings.TrimSpace(asString(metadata["initiative_goal"])),
+		"work_item_kind":                    strings.TrimSpace(asString(metadata["work_item_kind"])),
+		"objective_iteration":               asInt(metadata["objective_iteration"], 1),
+		"objective_max_iterations":          asInt(metadata["objective_max_iterations"], 3),
+		"objective_research_brief":          strings.TrimSpace(asString(metadata["objective_research_brief"])),
+		"repair_feedback":                   strings.TrimSpace(asString(metadata["objective_repair_feedback"])),
+		"review_decision":                   strings.TrimSpace(asString(metadata["review_decision"])),
+		"review_comments":                   anyMapSliceDefault(metadata["review_comments"], []map[string]any{}),
+		"objective_findings":                anyMapSliceDefault(metadata["objective_findings"], []map[string]any{}),
+		"objective_failure_hypotheses":      anyMapSliceDefault(metadata["objective_failure_hypotheses"], []map[string]any{}),
+		"objective_patch_intent":            anyMapSliceDefault(metadata["objective_patch_intent"], []map[string]any{}),
+		"objective_baseline_test_results":   nonNilMap(metadata["objective_baseline_test_results"]),
+		"objective_baseline_findings":       anyMapSliceDefault(metadata["objective_baseline_findings"], []map[string]any{}),
+		"objective_baseline_summary":        strings.TrimSpace(asString(metadata["objective_baseline_summary"])),
+		"objective_analysis_findings":       anyMapSliceDefault(metadata["objective_analysis_findings"], []map[string]any{}),
+		"objective_analysis_summary":        nonNilMap(metadata["objective_analysis_summary"]),
+		"excluded_scope_paths":              anyStringSliceDefault(metadata["excluded_scope_paths"], []string{}),
+		"scope_correction_reason":           strings.TrimSpace(asString(metadata["scope_correction_reason"])),
+		"planner_scope_resolution":          strings.TrimSpace(asString(metadata["planner_scope_resolution"])),
+		"planner_rejected_scope_resolution": strings.TrimSpace(asString(metadata["planner_rejected_scope_resolution"])),
+		"objective_retrieval_precedents":    anyMapSliceDefault(metadata["objective_retrieval_precedents"], []map[string]any{}),
+		"retrieval_packet_artifact_id":      strings.TrimSpace(asString(metadata["retrieval_packet_artifact_id"])),
+		"validation_commands":               anyStringSliceDefault(metadata["validation_commands"], []string{}),
+		"suspected_paths":                   anyStringSliceDefault(metadata["suspected_paths"], []string{}),
 	}
 	if contextPackage, ok := metadata["context_package"].(map[string]any); ok && len(contextPackage) > 0 {
 		out["context_prompt_section"] = strings.TrimSpace(asString(contextPackage["prompt_section"]))
@@ -987,6 +2052,9 @@ func buildAiderTaskMetadata(metadata map[string]any) map[string]any {
 
 func enrichAiderDescription(description string, metadata map[string]any) string {
 	lines := []string{strings.TrimSpace(description)}
+	if researchBrief := strings.TrimSpace(asString(metadata["objective_research_brief"])); researchBrief != "" {
+		lines = append(lines, "", "Research brief:", researchBrief)
+	}
 	if feedback := strings.TrimSpace(asString(metadata["objective_repair_feedback"])); feedback != "" {
 		lines = append(lines, "", "Repair feedback:", feedback)
 	}
@@ -1002,6 +2070,119 @@ func enrichAiderDescription(description string, metadata map[string]any) string 
 				lines = append(lines, fmt.Sprintf("- [%s] %s", severity, message))
 			} else {
 				lines = append(lines, "- "+message)
+			}
+		}
+	}
+	if findings := anyMapSliceDefault(metadata["objective_findings"], []map[string]any{}); len(findings) > 0 {
+		lines = append(lines, "", "Structured findings:")
+		for _, item := range findings {
+			message := strings.TrimSpace(asString(item["message"]))
+			if message == "" {
+				continue
+			}
+			severity := strings.TrimSpace(asString(item["severity"]))
+			kind := strings.TrimSpace(asString(item["kind"]))
+			label := firstNonEmptyString(severity, kind, "info")
+			lines = append(lines, fmt.Sprintf("- [%s] %s", label, message))
+		}
+	}
+	if hypotheses := anyMapSliceDefault(metadata["objective_failure_hypotheses"], []map[string]any{}); len(hypotheses) > 0 {
+		lines = append(lines, "", "Failure hypotheses:")
+		for _, item := range hypotheses {
+			path := strings.TrimSpace(asString(item["path"]))
+			failureMode := strings.TrimSpace(asString(item["failure_mode"]))
+			evidence := strings.TrimSpace(asString(item["evidence"]))
+			priority := strings.TrimSpace(asString(item["priority"]))
+			label := firstNonEmptyString(priority, failureMode, "info")
+			switch {
+			case path != "" && evidence != "":
+				lines = append(lines, fmt.Sprintf("- [%s] %s -> %s", label, path, evidence))
+			case evidence != "":
+				lines = append(lines, fmt.Sprintf("- [%s] %s", label, evidence))
+			}
+		}
+	}
+	if baselineSummary := strings.TrimSpace(asString(metadata["objective_baseline_summary"])); baselineSummary != "" {
+		lines = append(lines, "", "Baseline validation:", baselineSummary)
+	}
+	if baselineFindings := anyMapSliceDefault(metadata["objective_baseline_findings"], []map[string]any{}); len(baselineFindings) > 0 {
+		lines = append(lines, "Baseline validation findings:")
+		for _, item := range baselineFindings {
+			message := strings.TrimSpace(asString(item["message"]))
+			if message == "" {
+				continue
+			}
+			severity := strings.TrimSpace(asString(item["severity"]))
+			label := firstNonEmptyString(severity, "info")
+			lines = append(lines, fmt.Sprintf("- [%s] %s", label, message))
+		}
+	}
+	if patchIntent := anyMapSliceDefault(metadata["objective_patch_intent"], []map[string]any{}); len(patchIntent) > 0 {
+		lines = append(lines, "", "Patch intent:")
+		for _, item := range patchIntent {
+			path := strings.TrimSpace(asString(item["path"]))
+			action := strings.TrimSpace(asString(item["action"]))
+			rationale := strings.TrimSpace(asString(item["rationale"]))
+			switch {
+			case path != "" && action != "" && rationale != "":
+				lines = append(lines, fmt.Sprintf("- %s: %s (%s)", path, action, rationale))
+			case path != "" && action != "":
+				lines = append(lines, fmt.Sprintf("- %s: %s", path, action))
+			case action != "":
+				lines = append(lines, "- "+action)
+			}
+		}
+	}
+	if analysisFindings := anyMapSliceDefault(metadata["objective_analysis_findings"], []map[string]any{}); len(analysisFindings) > 0 {
+		lines = append(lines, "", "Static analysis findings:")
+		for _, item := range analysisFindings {
+			message := strings.TrimSpace(asString(item["message"]))
+			if message == "" {
+				continue
+			}
+			location, _ := item["location"].(map[string]any)
+			file := strings.TrimSpace(asString(location["file"]))
+			severity := strings.TrimSpace(asString(item["severity"]))
+			label := firstNonEmptyString(severity, "info")
+			if file != "" {
+				lines = append(lines, fmt.Sprintf("- [%s] %s (%s)", label, message, file))
+			} else {
+				lines = append(lines, fmt.Sprintf("- [%s] %s", label, message))
+			}
+		}
+	}
+	if reason := strings.TrimSpace(asString(metadata["scope_correction_reason"])); reason != "" {
+		lines = append(lines, "", "Scope correction:", reason)
+	}
+	if resolution := strings.TrimSpace(asString(metadata["planner_scope_resolution"])); resolution == "contradicted" {
+		lines = append(lines, "Planner selected paths contradicted by review: previous shortlist lost priority for this attempt")
+	} else if resolution == "confirmed" {
+		if suspected := anyStringSliceDefault(metadata["suspected_paths"], []string{}); len(suspected) > 0 {
+			lines = append(lines, "Planner confirmed paths: "+strings.Join(suspected, ", "))
+		}
+	}
+	if resolution := strings.TrimSpace(asString(metadata["planner_rejected_scope_resolution"])); resolution == "confirmed" {
+		if excluded := anyStringSliceDefault(metadata["excluded_scope_paths"], []string{}); len(excluded) > 0 {
+			lines = append(lines, "Planner rejected paths still excluded: "+strings.Join(excluded, ", "))
+		}
+	} else if resolution == "contradicted" {
+		if suspected := anyStringSliceDefault(metadata["suspected_paths"], []string{}); len(suspected) > 0 {
+			lines = append(lines, "Planner rejected but observed in diff: "+strings.Join(suspected, ", "))
+		}
+	}
+	if excluded := anyStringSliceDefault(metadata["excluded_scope_paths"], []string{}); len(excluded) > 0 {
+		lines = append(lines, "Excluded paths: "+strings.Join(excluded, ", "))
+	}
+	if precedents := anyMapSliceDefault(metadata["objective_retrieval_precedents"], []map[string]any{}); len(precedents) > 0 {
+		lines = append(lines, "", "Retrieved precedents:")
+		for _, item := range precedents {
+			sourceRef := strings.TrimSpace(asString(item["source_ref"]))
+			summary := strings.TrimSpace(asString(item["summary"]))
+			switch {
+			case sourceRef != "" && summary != "":
+				lines = append(lines, fmt.Sprintf("- %s -> %s", sourceRef, summary))
+			case summary != "":
+				lines = append(lines, "- "+summary)
 			}
 		}
 	}
@@ -1065,6 +2246,42 @@ func nonNilMap(value any) map[string]any {
 	return map[string]any{}
 }
 
+func mergeToolRequestWithMetadata(toolRequest, metadata map[string]any) map[string]any {
+	out := map[string]any{}
+	for key, value := range toolRequest {
+		out[key] = value
+	}
+	for _, key := range []string{
+		"initial_scope_hypotheses",
+		"rejected_scope_hypotheses",
+		"objective_patch_intent",
+		"objective_baseline_test_results",
+		"objective_baseline_findings",
+		"objective_baseline_summary",
+		"objective_failure_hypotheses",
+		"objective_analysis_findings",
+		"objective_analysis_summary",
+		"excluded_scope_paths",
+		"scope_correction_reason",
+		"planner_scope_resolution",
+		"planner_rejected_scope_resolution",
+		"context_package",
+		"retrieval_packet_artifact_id",
+		"objective_retrieval_precedents",
+		"suspected_paths",
+		"review_comments",
+		"review_decision",
+	} {
+		if _, exists := out[key]; exists {
+			continue
+		}
+		if value, ok := metadata[key]; ok {
+			out[key] = value
+		}
+	}
+	return out
+}
+
 func asIntOK(value any) (int, bool) {
 	switch v := value.(type) {
 	case int:
@@ -1114,56 +2331,6 @@ func allowedCapabilities(metadata map[string]any) map[string]bool {
 		}
 	}
 	return out
-}
-
-func withSemanticRefs(result domain.LocalBridgeResultRequest, sources []string, hits []map[string]any, chunkCount int) domain.LocalBridgeResultRequest {
-	if len(sources) > 0 {
-		result.SemanticContextSources = append([]string{}, sources...)
-	}
-	if len(hits) > 0 {
-		result.SemanticContextHits = copyMapSlice(hits)
-	}
-	if chunkCount > 0 {
-		result.SemanticContextChunkCount = chunkCount
-	}
-	return result
-}
-
-func semanticContextRefs(metadata map[string]any) ([]string, []map[string]any, int) {
-	contextPackage, _ := metadata["context_package"].(map[string]any)
-	if len(contextPackage) == 0 {
-		return nil, nil, 0
-	}
-	sources := contextPackageSourceRefs(contextPackage["source_refs"])
-	chunks, _ := contextPackage["chunks"].([]any)
-	hits := make([]map[string]any, 0, len(chunks))
-	for _, rawChunk := range chunks {
-		chunk, _ := rawChunk.(map[string]any)
-		if len(chunk) == 0 {
-			continue
-		}
-		hit := map[string]any{}
-		if sourceRef := strings.TrimSpace(asString(chunk["source_ref"])); sourceRef != "" {
-			hit["source_ref"] = sourceRef
-		}
-		chunkMetadata, _ := chunk["metadata"].(map[string]any)
-		if matchType := strings.TrimSpace(asString(chunkMetadata["memory_match_type"])); matchType != "" {
-			hit["match_type"] = matchType
-		}
-		if repoProfile := strings.TrimSpace(asString(chunkMetadata["repo_profile"])); repoProfile != "" {
-			hit["repo_profile"] = repoProfile
-		}
-		if repositoryURL := strings.TrimSpace(firstNonEmptyString(asString(chunkMetadata["repository_url"]), asString(chunkMetadata["repo_url"]))); repositoryURL != "" {
-			hit["repository_url"] = repositoryURL
-		}
-		if benchmarkCaseID := strings.TrimSpace(asString(chunkMetadata["benchmark_case_id"])); benchmarkCaseID != "" {
-			hit["benchmark_case_id"] = benchmarkCaseID
-		}
-		if len(hit) > 0 {
-			hits = append(hits, hit)
-		}
-	}
-	return sources, hits, len(chunks)
 }
 
 func contextPackageSourceRefs(value any) []string {

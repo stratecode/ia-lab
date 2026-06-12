@@ -104,6 +104,7 @@ func parseCLI(args []string) (bridge.CLIOptions, string, error) {
 	fs.StringVar(&opts.Objective, "objective", opts.Objective, "Objective to execute")
 	fs.StringVar(&opts.CreatedBy, "created-by", opts.CreatedBy, "Objective operator identity")
 	fs.StringVar(&opts.ApprovalMode, "approval-mode", opts.ApprovalMode, "Approval mode: manual or local_only")
+	fs.DurationVar(&opts.ObjectiveTimeBudget, "time-budget", opts.ObjectiveTimeBudget, "Objective wall-clock budget before blocking further autonomous work")
 	fs.DurationVar(&opts.WaitTimeout, "wait-timeout", opts.WaitTimeout, "Maximum time to wait for initiative completion")
 	parseArgs := []string{}
 	if len(args) > 2 {
@@ -123,19 +124,20 @@ func parseCLI(args []string) (bridge.CLIOptions, string, error) {
 
 func defaultCLIOptions() bridge.CLIOptions {
 	return bridge.CLIOptions{
-		BaseURL:           getenv("LAB_AGENT_BASE_URL", "http://127.0.0.1:8100"),
-		APIKey:            os.Getenv("LAB_AGENT_API_KEY"),
-		BridgeID:          getenv("LAB_AGENT_BRIDGE_ID", ""),
-		WorkspaceRoot:     getenv("LAB_AGENT_WORKSPACE_ROOT", "."),
-		Name:              getenv("LAB_AGENT_NAME", "lab-agentd"),
-		Hostname:          getenv("LAB_AGENT_HOSTNAME", ""),
-		PollInterval:      parseDurationEnv("LAB_AGENT_POLL_INTERVAL", 2*time.Second),
-		HeartbeatInterval: parseDurationEnv("LAB_AGENT_HEARTBEAT_INTERVAL", 15*time.Second),
-		ObjectiveTitle:    getenv("LAB_AGENT_OBJECTIVE_TITLE", ""),
-		Objective:         getenv("LAB_AGENT_OBJECTIVE", ""),
-		CreatedBy:         getenv("LAB_AGENT_CREATED_BY", "lab-agent"),
-		ApprovalMode:      getenv("LAB_AGENT_APPROVAL_MODE", "local_only"),
-		WaitTimeout:       parseDurationEnv("LAB_AGENT_WAIT_TIMEOUT", 30*time.Minute),
+		BaseURL:             getenv("LAB_AGENT_BASE_URL", "http://127.0.0.1:8100"),
+		APIKey:              os.Getenv("LAB_AGENT_API_KEY"),
+		BridgeID:            getenv("LAB_AGENT_BRIDGE_ID", ""),
+		WorkspaceRoot:       getenv("LAB_AGENT_WORKSPACE_ROOT", "."),
+		Name:                getenv("LAB_AGENT_NAME", "lab-agentd"),
+		Hostname:            getenv("LAB_AGENT_HOSTNAME", ""),
+		PollInterval:        parseDurationEnv("LAB_AGENT_POLL_INTERVAL", 2*time.Second),
+		HeartbeatInterval:   parseDurationEnv("LAB_AGENT_HEARTBEAT_INTERVAL", 15*time.Second),
+		ObjectiveTitle:      getenv("LAB_AGENT_OBJECTIVE_TITLE", ""),
+		Objective:           getenv("LAB_AGENT_OBJECTIVE", ""),
+		CreatedBy:           getenv("LAB_AGENT_CREATED_BY", "lab-agent"),
+		ApprovalMode:        getenv("LAB_AGENT_APPROVAL_MODE", "local_only"),
+		ObjectiveTimeBudget: parseDurationEnv("LAB_AGENT_OBJECTIVE_TIME_BUDGET", 0),
+		WaitTimeout:         parseDurationEnv("LAB_AGENT_WAIT_TIMEOUT", 30*time.Minute),
 	}
 }
 
@@ -170,7 +172,7 @@ func usage() {
   lab-agent [--env-file .env.bridge] tasks list
   lab-agent [--env-file .env.bridge] tasks watch
   lab-agent [--env-file .env.bridge] approvals list
-  lab-agent [--env-file .env.bridge] objectives run --objective "..." [--title ... --approval-mode local_only]
+  lab-agent [--env-file .env.bridge] objectives run --objective "..." [--title ... --approval-mode local_only --time-budget 10m]
   lab-agent [--env-file .env.bridge] tui`)
 }
 

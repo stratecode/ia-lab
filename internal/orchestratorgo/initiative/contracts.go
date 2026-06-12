@@ -172,7 +172,7 @@ func SummarizeStructuredDiff(previous, next map[string]any) string {
 		parts = append(parts, "removed: "+strings.Join(removed, ", "))
 	}
 	if len(parts) == 0 {
-		return "no semantic changes"
+		return "no substantive changes"
 	}
 	return strings.Join(parts, " | ")
 }

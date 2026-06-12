@@ -23,11 +23,9 @@ import (
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilitybroker"
 	"github.com/stratecode/lab/internal/orchestratorgo/codeanalysis"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
-	"github.com/stratecode/lab/internal/orchestratorgo/contextbuilder"
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 	"github.com/stratecode/lab/internal/orchestratorgo/initiative"
 	"github.com/stratecode/lab/internal/orchestratorgo/research"
-	"github.com/stratecode/lab/internal/orchestratorgo/semantic"
 	"github.com/stratecode/lab/internal/orchestratorgo/store"
 )
 
@@ -39,13 +37,11 @@ type Server struct {
 	Initiatives      *initiative.Service
 	Capabilities     *capabilities.Client
 	CapabilityBroker *capabilitybroker.Broker
-	Semantic         *semantic.Service
-	SemanticIndexer  *semantic.Indexer
-	ContextBuilder   *contextbuilder.Service
 	SafeMode         *SafeModeState
 	Now              func() time.Time
 	Version          string
 	OpenAIToolsID    string
+	LocalBridgeLeaseTTLSeconds int
 }
 
 func (s *Server) Router(auth *Authenticator) http.Handler {
@@ -91,14 +87,6 @@ func (s *Server) Router(auth *Authenticator) http.Handler {
 	r.Post("/capabilities/execute", s.executeCapability)
 	r.Get("/projects/capabilities", s.getProjectCapabilities)
 	r.Put("/projects/capabilities", s.putProjectCapabilities)
-	r.Route("/semantic", func(r chi.Router) {
-		r.Post("/index", s.indexSemanticSource)
-		r.Post("/search", s.searchSemanticChunks)
-		r.Get("/chunks/{chunkID}", s.getSemanticChunk)
-	})
-	r.Route("/context", func(r chi.Router) {
-		r.Post("/build", s.buildContextPackage)
-	})
 	r.Route("/initiatives", func(r chi.Router) {
 		r.Get("/", s.listInitiatives)
 		r.Post("/", s.createInitiative)

@@ -28,7 +28,6 @@
   "patch_target": ".lab/researcher-maturity-marker.txt",
   "write_content": "researcher maturity marker\n",
   "coder_summary": "Write a deterministic researcher maturity marker file before repository review.",
-  "benchmark_memory_strategy": "technology_first",
   "benchmark_league": "technology_transfer",
   "sequence_id": "agent_maturity_researcher_php",
   "sequence_position": 1,

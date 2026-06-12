@@ -64,10 +64,6 @@
       ansible.builtin.import_role:
         name: llama_cpp
 
-    - name: Install Cognitive Gateway
-      ansible.builtin.import_role:
-        name: cognitive_gateway
-
     - name: Install Aider coding agent
       ansible.builtin.import_role:
         name: aider

@@ -442,34 +442,32 @@ func fallbackExecutionPlan(initiative *domain.InitiativeResponse, design map[str
 }
 
 type repoWorkflowProfile struct {
-	projectFlow           string
-	projectType           string
-	stack                 string
-	language              string
-	framework             string
-	problemDomain         string
-	errorClass            string
-	fixPattern            string
-	validationPattern     string
-	repoName              string
-	projectRoot           string
-	repositoryURL         string
-	defaultBranch         string
-	testFocus             string
-	testCommand           []string
-	expected              []string
-	patch                 string
-	patchTarget           string
-	coderTool             string
-	writeContent          string
-	coderSummary          string
-	benchmarkCaseID       string
-	benchmarkCaseType     string
-	benchmarkLeague       string
-	sequenceID            string
-	sequencePosition      string
-	benchmarkMemoryMode   string
-	benchmarkMemoryPolicy string
+	projectFlow       string
+	projectType       string
+	stack             string
+	language          string
+	framework         string
+	problemDomain     string
+	errorClass        string
+	fixPattern        string
+	validationPattern string
+	repoName          string
+	projectRoot       string
+	repositoryURL     string
+	defaultBranch     string
+	testFocus         string
+	testCommand       []string
+	expected          []string
+	patch             string
+	patchTarget       string
+	coderTool         string
+	writeContent      string
+	coderSummary      string
+	benchmarkCaseID   string
+	benchmarkCaseType string
+	benchmarkLeague   string
+	sequenceID        string
+	sequencePosition  string
 }
 
 func fallbackRepoExecutionPlan(initiative *domain.InitiativeResponse, design map[string]any) map[string]any {
@@ -509,12 +507,6 @@ func fallbackRepoExecutionPlan(initiative *domain.InitiativeResponse, design map
 	}
 	if profile.sequencePosition != "" {
 		projectRequest["sequence_position"] = profile.sequencePosition
-	}
-	if profile.benchmarkMemoryMode != "" {
-		projectRequest["benchmark_memory_mode"] = profile.benchmarkMemoryMode
-	}
-	if profile.benchmarkMemoryPolicy != "" {
-		projectRequest["benchmark_memory_strategy"] = profile.benchmarkMemoryPolicy
 	}
 	researchMetadata := map[string]any{
 		"initiative_goal":           goal,
@@ -705,14 +697,6 @@ func applyBenchmarkMetadata(metadata map[string]any, profile repoWorkflowProfile
 	if profile.sequencePosition != "" {
 		metadata["sequence_position"] = profile.sequencePosition
 	}
-	if profile.benchmarkMemoryMode != "" {
-		metadata["benchmark_memory_mode"] = profile.benchmarkMemoryMode
-		metadata["context_memory_mode"] = profile.benchmarkMemoryMode
-	}
-	if profile.benchmarkMemoryPolicy != "" {
-		metadata["benchmark_memory_strategy"] = profile.benchmarkMemoryPolicy
-		metadata["context_memory_strategy"] = profile.benchmarkMemoryPolicy
-	}
 	if profile.language != "" {
 		metadata["language"] = profile.language
 	}
@@ -771,8 +755,6 @@ func decodeBenchmarkRepoWorkflowProfile(raw []byte, workspaceRoot string) (repoW
 		BenchmarkLeague   string   `json:"benchmark_league"`
 		SequenceID        string   `json:"sequence_id"`
 		SequencePosition  any      `json:"sequence_position"`
-		MemoryMode        string   `json:"benchmark_memory_mode"`
-		MemoryStrategy    string   `json:"benchmark_memory_strategy"`
 		Language          string   `json:"language"`
 		Framework         string   `json:"framework"`
 		ProblemDomain     string   `json:"problem_domain"`
@@ -784,34 +766,32 @@ func decodeBenchmarkRepoWorkflowProfile(raw []byte, workspaceRoot string) (repoW
 		return repoWorkflowProfile{}, false
 	}
 	profile := repoWorkflowProfile{
-		projectFlow:           firstNonEmptyString(strings.TrimSpace(payload.RepoProfile), "benchmark_repo_workflow"),
-		projectType:           firstNonEmptyString(strings.TrimSpace(payload.ProjectType), "existing_repo"),
-		stack:                 firstNonEmptyString(strings.TrimSpace(payload.Runtime), "python"),
-		language:              firstNonEmptyString(strings.TrimSpace(payload.Language), strings.TrimSpace(payload.Runtime)),
-		framework:             strings.TrimSpace(payload.Framework),
-		problemDomain:         strings.TrimSpace(payload.ProblemDomain),
-		errorClass:            strings.TrimSpace(payload.ErrorClass),
-		fixPattern:            strings.TrimSpace(payload.FixPattern),
-		validationPattern:     strings.TrimSpace(payload.ValidationPattern),
-		repoName:              filepath.Base(strings.TrimSpace(workspaceRoot)),
-		projectRoot:           firstNonEmptyString(strings.TrimSpace(payload.ProjectRoot), "."),
-		repositoryURL:         strings.TrimSpace(payload.RepoURL),
-		defaultBranch:         strings.TrimSpace(payload.DefaultBranch),
-		testFocus:             firstNonEmptyString(strings.TrimSpace(payload.TestFocus), "benchmark workflow"),
-		testCommand:           cloneStrings(payload.TestCommand),
-		expected:              cloneStrings(payload.ExpectedFiles),
-		patch:                 payload.Patch,
-		patchTarget:           strings.TrimSpace(payload.PatchTarget),
-		coderTool:             firstNonEmptyString(strings.TrimSpace(payload.CoderTool), "filesystem.write"),
-		writeContent:          payload.WriteContent,
-		coderSummary:          firstNonEmptyString(strings.TrimSpace(payload.CoderSummary), "Apply benchmark-defined repository change."),
-		benchmarkCaseID:       strings.TrimSpace(payload.ID),
-		benchmarkCaseType:     strings.TrimSpace(payload.CaseType),
-		benchmarkLeague:       strings.TrimSpace(payload.BenchmarkLeague),
-		sequenceID:            strings.TrimSpace(payload.SequenceID),
-		sequencePosition:      strings.TrimSpace(fmt.Sprintf("%v", payload.SequencePosition)),
-		benchmarkMemoryMode:   firstNonEmptyString(strings.TrimSpace(payload.MemoryMode), "on"),
-		benchmarkMemoryPolicy: firstNonEmptyString(strings.TrimSpace(payload.MemoryStrategy), "repo_specific_first"),
+		projectFlow:       firstNonEmptyString(strings.TrimSpace(payload.RepoProfile), "benchmark_repo_workflow"),
+		projectType:       firstNonEmptyString(strings.TrimSpace(payload.ProjectType), "existing_repo"),
+		stack:             firstNonEmptyString(strings.TrimSpace(payload.Runtime), "python"),
+		language:          firstNonEmptyString(strings.TrimSpace(payload.Language), strings.TrimSpace(payload.Runtime)),
+		framework:         strings.TrimSpace(payload.Framework),
+		problemDomain:     strings.TrimSpace(payload.ProblemDomain),
+		errorClass:        strings.TrimSpace(payload.ErrorClass),
+		fixPattern:        strings.TrimSpace(payload.FixPattern),
+		validationPattern: strings.TrimSpace(payload.ValidationPattern),
+		repoName:          filepath.Base(strings.TrimSpace(workspaceRoot)),
+		projectRoot:       firstNonEmptyString(strings.TrimSpace(payload.ProjectRoot), "."),
+		repositoryURL:     strings.TrimSpace(payload.RepoURL),
+		defaultBranch:     strings.TrimSpace(payload.DefaultBranch),
+		testFocus:         firstNonEmptyString(strings.TrimSpace(payload.TestFocus), "benchmark workflow"),
+		testCommand:       cloneStrings(payload.TestCommand),
+		expected:          cloneStrings(payload.ExpectedFiles),
+		patch:             payload.Patch,
+		patchTarget:       strings.TrimSpace(payload.PatchTarget),
+		coderTool:         firstNonEmptyString(strings.TrimSpace(payload.CoderTool), "filesystem.write"),
+		writeContent:      payload.WriteContent,
+		coderSummary:      firstNonEmptyString(strings.TrimSpace(payload.CoderSummary), "Apply benchmark-defined repository change."),
+		benchmarkCaseID:   strings.TrimSpace(payload.ID),
+		benchmarkCaseType: strings.TrimSpace(payload.CaseType),
+		benchmarkLeague:   strings.TrimSpace(payload.BenchmarkLeague),
+		sequenceID:        strings.TrimSpace(payload.SequenceID),
+		sequencePosition:  strings.TrimSpace(fmt.Sprintf("%v", payload.SequencePosition)),
 	}
 	if profile.repoName == "" || profile.repoName == "." || profile.repoName == string(filepath.Separator) {
 		profile.repoName = "repo"

@@ -16,7 +16,6 @@ Its current core is:
 - Go control plane as the system of record
 - local bridge and TUI/CLI as the primary workspace execution surface
 - narrow Python sidecars for document and image capabilities only
-- semantic memory and context packaging as supporting coordination infrastructure
 
 The intended direction is stronger multi-agent autonomy. That direction is real, but it is not yet a closed product capability. The system must not be described as a general autonomous agent platform today.
 
@@ -80,11 +79,10 @@ Objective: one coherent story, one vocabulary, one source of truth.
 Objective: prove the full governed workflow works end to end.
 
 - define a reproducible E2E scenario for the official golden path
-- make the official benchmark harness `scripts/benchmark-context-memory.sh` the canonical execution path for repo workflow validation
+- make the official objective/initiative harness the canonical execution path for repo workflow validation
 - run that harness through `initiative -> plan -> tasks -> selective launch -> review -> reconciliation`, not through side runners or manual shortcuts
-- verify initiative advancement, backlog generation, selective launch, local execution, review, memory retrieval, and final reconciliation
+- verify initiative advancement, backlog generation, selective launch, local execution, review, and final reconciliation
 - expose enough observability to understand failure point, duration, and operator interventions
-- produce benchmark artifacts and aggregate summaries that show whether `memory_on` equals or improves on `memory_off` for prepared repo cases
 - treat the official harness as the only canonical evidence path for benchmark claims; manual runners remain diagnostic only
 
 ### Iteration 3: Real Repository Utility
@@ -95,7 +93,6 @@ Objective: move from controlled workflow to useful engineering work on existing 
 - ensure tasks produce meaningful diffs and test results
 - improve reviewer usefulness on repo-shaped work
 - tighten bridge behavior, result reporting, and version compatibility
-- use semantic memory to improve context quality, traceability, and recovery
 - measure repo utility through three benchmark leagues:
   - `repo_recall` for local continuity on the same repository
   - `technology_transfer` for reuse across repositories that share stack and framework traits
@@ -106,9 +103,8 @@ Objective: move from controlled workflow to useful engineering work on existing 
   - end-to-end system usefulness
 - extend `agent_maturity` beyond repo-local recall so reviewer quality is measured on `pattern_transfer` sequences too, not only on same-repo memory
 - run official maturity campaigns with `runs_per_case=3` so progression claims are based on repeated evidence instead of a lucky first pass
-- use three baselines for curated maturity cases:
-  - `memory_off`
-  - `memory_on`
+- use two baselines for curated maturity cases:
+  - `standard`
   - `reference_external`
 - treat reusable technology/pattern memory as an evidence-backed hypothesis with early signal, not as a universal mature capability yet
 
@@ -116,8 +112,7 @@ Current evidence snapshot from the official benchmark harness on May 24, 2026:
 
 - `repo_recall`
   stable and repeatable
-  `memory_on` averaged `80` vs `55` baseline across `pydantic`, `typer`, and `fastify`
-  signal came from `repo_specific` memory as expected
+  curated repo-local runs remained stronger than the baseline suite across `pydantic`, `typer`, and `fastify`
 - `technology_transfer`
   useful but still noisier
   the PHP sequence `monolog -> math-php -> slim` averaged `81.1` vs `55`
@@ -144,7 +139,6 @@ Updated evidence snapshot from the official harness and maturity suite on May 26
 - `agent_maturity`
   validated across `planner`, `researcher`, `coder`, `reviewer`, and `coordination`
   official campaigns run with `runs_per_case=3`
-  `memory_on` remains stronger than `memory_off` across curated maturity cases
 - `pattern_transfer` inside maturity
   validated on the reviewer HTTP client sequence `axios -> httpx`
   signal came from `pattern_similar` memory with no `repo_specific` hits

@@ -46,7 +46,7 @@ Options:
   --help                   Show this help.
 
 Examples:
-  scripts/create-orchestrator-api-key.sh --name jetbrains-plugin
+  scripts/create-orchestrator-api-key.sh --name ide-operator
   scripts/create-orchestrator-api-key.sh --local-host --name local-operator
   scripts/create-orchestrator-api-key.sh --name benchmark-operator --json
 EOF

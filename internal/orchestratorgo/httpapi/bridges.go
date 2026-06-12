@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -61,7 +62,7 @@ func (s *Server) heartbeatBridge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.CurrentTaskID != nil && strings.TrimSpace(*body.CurrentTaskID) != "" {
-		ttl := 45
+		ttl := s.localBridgeLeaseTTLSeconds()
 		if body.LeaseTTLSeconds != nil && *body.LeaseTTLSeconds > 0 {
 			ttl = *body.LeaseTTLSeconds
 		}
@@ -83,7 +84,7 @@ func (s *Server) listBridges(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) claimNextBridgeTask(w http.ResponseWriter, r *http.Request) {
-	claim, err := s.Postgres.ClaimNextLocalBridgeTask(r.Context(), chi.URLParam(r, "bridgeID"))
+	claim, err := s.Postgres.ClaimNextLocalBridgeTaskWithTTL(r.Context(), chi.URLParam(r, "bridgeID"), s.localBridgeLeaseTTLSeconds())
 	if err != nil {
 		writeDetail(w, http.StatusInternalServerError, err.Error())
 		return
@@ -141,6 +142,14 @@ func (s *Server) submitBridgeTaskResult(w http.ResponseWriter, r *http.Request) 
 		} else if completed != nil {
 			s.indexTask(r.Context(), completed.ID)
 		}
+		if stopReason, blockerReason, shouldStop := shouldStopObjectiveAfterSuccess(task, body); shouldStop {
+			if err := s.stopObjectiveAfterTaskCompletion(r.Context(), task, stopReason, blockerReason); err != nil {
+				writeDetail(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			s.reconcileRootTask(r.Context(), taskID)
+			break
+		}
 		if task.InitiativeID != nil {
 			if err := s.queueReadyObjectiveTasks(r.Context(), *task.InitiativeID); err != nil {
 				writeDetail(w, http.StatusInternalServerError, err.Error())
@@ -150,6 +159,24 @@ func (s *Server) submitBridgeTaskResult(w http.ResponseWriter, r *http.Request) 
 		s.reconcileRootTask(r.Context(), taskID)
 	default:
 		errorMessage := firstNonEmptyString(derefStringPtr(body.ErrorMessage), derefStringPtr(body.Stderr), derefStringPtr(body.Stdout), "Local bridge execution failed")
+		if objectiveAsBool(task.Metadata["objective_baseline_validation"]) {
+			_ = s.Postgres.FinalizeLocalBridgeTaskLease(r.Context(), taskID, bridgeID, "completed", stringPtr("completed"), nil, body.Summary)
+			reason := firstNonEmptyString(derefStringPtr(body.Summary), "Objective baseline validation recorded failing evidence before the first edit")
+			if completed, err := s.Postgres.CompleteTask(r.Context(), taskID, "bridge:"+bridgeID, reason, results); err != nil {
+				writeDetail(w, http.StatusInternalServerError, err.Error())
+				return
+			} else if completed != nil {
+				s.indexTask(r.Context(), completed.ID)
+			}
+			if task.InitiativeID != nil {
+				if err := s.queueReadyObjectiveTasks(r.Context(), *task.InitiativeID); err != nil {
+					writeDetail(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+			}
+			s.reconcileRootTask(r.Context(), taskID)
+			break
+		}
 		if shouldStartObjectiveRepairCycle(task, body) {
 			_ = s.Postgres.FinalizeLocalBridgeTaskLease(r.Context(), taskID, bridgeID, "completed", stringPtr("completed"), nil, body.Summary)
 			reason := firstNonEmptyString(derefStringPtr(body.Summary), "Objective iteration completed and requested another repair cycle")
@@ -187,6 +214,54 @@ func (s *Server) submitBridgeTaskResult(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+func shouldStopObjectiveAfterSuccess(task *domain.TaskResponse, result domain.LocalBridgeResultRequest) (string, string, bool) {
+	if task == nil || task.InitiativeID == nil {
+		return "", "", false
+	}
+	if !objectiveAsBool(task.Metadata["objective_entrypoint"]) {
+		return "", "", false
+	}
+	if !objectiveTimeBudgetExceeded(task.Metadata, time.Now().UTC()) {
+		return "", "", false
+	}
+	workItemKind := strings.TrimSpace(asString(task.Metadata["work_item_kind"]))
+	if workItemKind == string(domain.WorkItemKindReview) && strings.EqualFold(derefStringPtr(result.ReviewDecision), "approved") {
+		return "", "", false
+	}
+	budgetSeconds, deadline, ok := objectiveTimeBudgetDetails(task.Metadata)
+	if !ok {
+		return "", "", false
+	}
+	return "time_budget_exhausted", objectiveTimeBudgetExceededReason(budgetSeconds, deadline), true
+}
+
+func (s *Server) stopObjectiveAfterTaskCompletion(ctx context.Context, task *domain.TaskResponse, stopReason, blockerReason string) error {
+	if task == nil || task.InitiativeID == nil {
+		return nil
+	}
+	budgetSeconds, deadline, _ := objectiveTimeBudgetDetails(task.Metadata)
+	patch := map[string]any{
+		"objective_stop_reason":              stopReason,
+		"objective_time_budget_exhausted":    stopReason == "time_budget_exhausted",
+		"objective_time_budget_exhausted_at": time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if err := s.Postgres.PatchTaskMetadata(ctx, task.ID, patch); err != nil {
+		return err
+	}
+	if err := s.persistObjectiveStopSnapshot(ctx, task, stopReason, blockerReason, deadline, budgetSeconds); err != nil {
+		return err
+	}
+	blocked := domain.InitiativeStatusBlocked
+	currentPhase := domain.InitiativePhaseExecution
+	if _, err := s.Postgres.UpdateInitiative(ctx, *task.InitiativeID, store.UpdateInitiativeParams{
+		Status:       &blocked,
+		CurrentPhase: &currentPhase,
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, taskID string, task *domain.TaskResponse, result domain.LocalBridgeResultRequest) (map[string]any, string, []string, error) {
 	taskIDPtr := &taskID
 	agentType := string(domain.AgentTypeCoder)
@@ -195,22 +270,19 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 	}
 	agentTypePtr := &agentType
 	output := map[string]any{
-		"summary":                      strings.TrimSpace(derefStringPtr(result.Summary)),
-		"stdout":                       derefStringPtr(result.Stdout),
-		"stderr":                       derefStringPtr(result.Stderr),
-		"exit_code":                    result.ExitCode,
-		"diff":                         derefStringPtr(result.Diff),
-		"changed_files":                result.ChangedFiles,
-		"test_results":                 result.TestResults,
-		"review_decision":              derefStringPtr(result.ReviewDecision),
-		"review_comments":              result.ReviewComments,
-		"semantic_context_sources":     result.SemanticContextSources,
-		"semantic_context_chunk_count": result.SemanticContextChunkCount,
-		"semantic_context_hits":        result.SemanticContextHits,
-		"capability_usage":             result.CapabilityUsage,
-		"capability_helped":            result.CapabilityHelped,
-		"capability_noise":             result.CapabilityNoise,
-		"capability_denied":            result.CapabilityDenied,
+		"summary":           strings.TrimSpace(derefStringPtr(result.Summary)),
+		"stdout":            derefStringPtr(result.Stdout),
+		"stderr":            derefStringPtr(result.Stderr),
+		"exit_code":         result.ExitCode,
+		"diff":              derefStringPtr(result.Diff),
+		"changed_files":     result.ChangedFiles,
+		"test_results":      result.TestResults,
+		"review_decision":   derefStringPtr(result.ReviewDecision),
+		"review_comments":   result.ReviewComments,
+		"capability_usage":  result.CapabilityUsage,
+		"capability_helped": result.CapabilityHelped,
+		"capability_noise":  result.CapabilityNoise,
+		"capability_denied": result.CapabilityDenied,
 	}
 	invocationID, err := s.Postgres.CreateToolInvocation(ctx, store.CreateToolInvocationParams{
 		TaskID:        taskIDPtr,
@@ -315,27 +387,25 @@ func (s *Server) persistLocalBridgeExecution(ctx context.Context, bridgeID, task
 	}
 
 	results := map[string]any{
-		"status":                       strings.ToLower(strings.TrimSpace(result.Status)),
-		"summary":                      derefStringPtr(result.Summary),
-		"stdout":                       derefStringPtr(result.Stdout),
-		"stderr":                       derefStringPtr(result.Stderr),
-		"exit_code":                    result.ExitCode,
-		"diff":                         derefStringPtr(result.Diff),
-		"changed_files":                result.ChangedFiles,
-		"test_results":                 result.TestResults,
-		"review_decision":              derefStringPtr(result.ReviewDecision),
-		"review_comments":              result.ReviewComments,
-		"artifacts":                    artifactsToPersist,
-		"error_message":                derefStringPtr(result.ErrorMessage),
-		"tool_invocation_id":           invocationID,
-		"artifact_ids":                 artifactIDs,
-		"semantic_context_sources":     result.SemanticContextSources,
-		"semantic_context_chunk_count": result.SemanticContextChunkCount,
-		"semantic_context_hits":        result.SemanticContextHits,
-		"capability_usage":             result.CapabilityUsage,
-		"capability_helped":            result.CapabilityHelped,
-		"capability_noise":             result.CapabilityNoise,
-		"capability_denied":            result.CapabilityDenied,
+		"status":             strings.ToLower(strings.TrimSpace(result.Status)),
+		"summary":            derefStringPtr(result.Summary),
+		"stdout":             derefStringPtr(result.Stdout),
+		"stderr":             derefStringPtr(result.Stderr),
+		"exit_code":          result.ExitCode,
+		"diff":               derefStringPtr(result.Diff),
+		"changed_files":      result.ChangedFiles,
+		"test_results":       result.TestResults,
+		"review_decision":    derefStringPtr(result.ReviewDecision),
+		"review_comments":    result.ReviewComments,
+		"findings":           result.Findings,
+		"artifacts":          artifactsToPersist,
+		"error_message":      derefStringPtr(result.ErrorMessage),
+		"tool_invocation_id": invocationID,
+		"artifact_ids":       artifactIDs,
+		"capability_usage":   result.CapabilityUsage,
+		"capability_helped":  result.CapabilityHelped,
+		"capability_noise":   result.CapabilityNoise,
+		"capability_denied":  result.CapabilityDenied,
 	}
 	return results, invocationID, artifactIDs, nil
 }
@@ -395,198 +465,184 @@ func buildRepoWorkflowMemoryArtifacts(task *domain.TaskResponse, result domain.L
 	}
 	errorMessage := strings.TrimSpace(derefStringPtr(result.ErrorMessage))
 	casePayload := map[string]any{
-		"memory_kind":               "repo_workflow_case",
-		"workflow":                  firstNonEmptyString(strings.TrimSpace(asString(metadata["repo_workflow"])), "repo_workflow_v1"),
-		"repo_profile":              repoProfile,
-		"runtime_or_stack":          strings.TrimSpace(asString(projectRequest["runtime_or_stack"])),
-		"language":                  strings.TrimSpace(asString(projectRequest["language"])),
-		"framework":                 strings.TrimSpace(asString(projectRequest["framework"])),
-		"problem_domain":            strings.TrimSpace(asString(projectRequest["problem_domain"])),
-		"error_class":               strings.TrimSpace(asString(projectRequest["error_class"])),
-		"fix_pattern":               strings.TrimSpace(asString(projectRequest["fix_pattern"])),
-		"validation_pattern":        strings.TrimSpace(asString(projectRequest["validation_pattern"])),
-		"repository_name":           repoName,
-		"repository_url":            strings.TrimSpace(asString(projectRequest["repository_url"])),
-		"benchmark_case_id":         strings.TrimSpace(asString(metadata["benchmark_case_id"])),
-		"benchmark_case_type":       strings.TrimSpace(asString(metadata["benchmark_case_type"])),
-		"benchmark_league":          strings.TrimSpace(asString(metadata["benchmark_league"])),
-		"sequence_id":               strings.TrimSpace(asString(metadata["sequence_id"])),
-		"sequence_position":         strings.TrimSpace(asString(metadata["sequence_position"])),
-		"benchmark_memory_mode":     strings.TrimSpace(asString(metadata["benchmark_memory_mode"])),
-		"benchmark_memory_strategy": strings.TrimSpace(asString(metadata["benchmark_memory_strategy"])),
-		"default_branch":            strings.TrimSpace(asString(projectRequest["default_branch"])),
-		"resolved_branch":           resolvedBranch,
-		"resolved_commit":           resolvedCommit,
-		"workspace_root":            workspaceRoot,
-		"project_root":              firstNonEmptyString(projectRoot, "."),
-		"initiative_id":             stringValue(task.InitiativeID),
-		"task_id":                   task.ID,
-		"assigned_agent":            agent,
-		"execution_stage":           stage,
-		"result_status":             status,
-		"outcome":                   outcome,
-		"summary":                   summary,
-		"error_message":             errorMessage,
-		"changed_files":             result.ChangedFiles,
-		"diff_present":              strings.TrimSpace(derefStringPtr(result.Diff)) != "",
-		"test_command":              anyStringSliceHTTPDefault(projectRequest["test_command"], []string{}),
-		"expected_files":            anyStringSliceHTTPDefault(projectRequest["expected_files"], []string{}),
-		"test_results":              nonNilMapHTTP(result.TestResults),
-		"definition_of_done":        strings.TrimSpace(asString(metadata["definition_of_done"])),
+		"memory_kind":         "repo_workflow_case",
+		"workflow":            firstNonEmptyString(strings.TrimSpace(asString(metadata["repo_workflow"])), "repo_workflow_v1"),
+		"repo_profile":        repoProfile,
+		"runtime_or_stack":    strings.TrimSpace(asString(projectRequest["runtime_or_stack"])),
+		"language":            strings.TrimSpace(asString(projectRequest["language"])),
+		"framework":           strings.TrimSpace(asString(projectRequest["framework"])),
+		"problem_domain":      strings.TrimSpace(asString(projectRequest["problem_domain"])),
+		"error_class":         strings.TrimSpace(asString(projectRequest["error_class"])),
+		"fix_pattern":         strings.TrimSpace(asString(projectRequest["fix_pattern"])),
+		"validation_pattern":  strings.TrimSpace(asString(projectRequest["validation_pattern"])),
+		"repository_name":     repoName,
+		"repository_url":      strings.TrimSpace(asString(projectRequest["repository_url"])),
+		"benchmark_case_id":   strings.TrimSpace(asString(metadata["benchmark_case_id"])),
+		"benchmark_case_type": strings.TrimSpace(asString(metadata["benchmark_case_type"])),
+		"benchmark_league":    strings.TrimSpace(asString(metadata["benchmark_league"])),
+		"sequence_id":         strings.TrimSpace(asString(metadata["sequence_id"])),
+		"sequence_position":   strings.TrimSpace(asString(metadata["sequence_position"])),
+		"default_branch":      strings.TrimSpace(asString(projectRequest["default_branch"])),
+		"resolved_branch":     resolvedBranch,
+		"resolved_commit":     resolvedCommit,
+		"workspace_root":      workspaceRoot,
+		"project_root":        firstNonEmptyString(projectRoot, "."),
+		"initiative_id":       stringValue(task.InitiativeID),
+		"task_id":             task.ID,
+		"assigned_agent":      agent,
+		"execution_stage":     stage,
+		"result_status":       status,
+		"outcome":             outcome,
+		"summary":             summary,
+		"error_message":       errorMessage,
+		"changed_files":       result.ChangedFiles,
+		"diff_present":        strings.TrimSpace(derefStringPtr(result.Diff)) != "",
+		"test_command":        anyStringSliceHTTPDefault(projectRequest["test_command"], []string{}),
+		"expected_files":      anyStringSliceHTTPDefault(projectRequest["expected_files"], []string{}),
+		"test_results":        nonNilMapHTTP(result.TestResults),
+		"definition_of_done":  strings.TrimSpace(asString(metadata["definition_of_done"])),
 	}
 	caseRaw, _ := json.MarshalIndent(casePayload, "", "  ")
 	lesson := renderRepoWorkflowLesson(casePayload)
 	artifacts := []map[string]any{
 		{
-			"type":                      "repo_workflow_case",
-			"title":                     fmt.Sprintf("Repo workflow case: %s %s", repoName, stage),
-			"media_type":                "application/json",
-			"content_text":              string(caseRaw),
-			"repo_profile":              repoProfile,
-			"runtime_or_stack":          casePayload["runtime_or_stack"],
-			"language":                  casePayload["language"],
-			"framework":                 casePayload["framework"],
-			"problem_domain":            casePayload["problem_domain"],
-			"error_class":               casePayload["error_class"],
-			"fix_pattern":               casePayload["fix_pattern"],
-			"validation_pattern":        casePayload["validation_pattern"],
-			"repository_url":            casePayload["repository_url"],
-			"benchmark_case_id":         casePayload["benchmark_case_id"],
-			"benchmark_case_type":       casePayload["benchmark_case_type"],
-			"benchmark_league":          casePayload["benchmark_league"],
-			"sequence_id":               casePayload["sequence_id"],
-			"sequence_position":         casePayload["sequence_position"],
-			"benchmark_memory_mode":     casePayload["benchmark_memory_mode"],
-			"benchmark_memory_strategy": casePayload["benchmark_memory_strategy"],
-			"workflow":                  casePayload["workflow"],
-			"execution_stage":           casePayload["execution_stage"],
-			"outcome":                   outcome,
-			"memory_kind":               "case",
+			"type":                "repo_workflow_case",
+			"title":               fmt.Sprintf("Repo workflow case: %s %s", repoName, stage),
+			"media_type":          "application/json",
+			"content_text":        string(caseRaw),
+			"repo_profile":        repoProfile,
+			"runtime_or_stack":    casePayload["runtime_or_stack"],
+			"language":            casePayload["language"],
+			"framework":           casePayload["framework"],
+			"problem_domain":      casePayload["problem_domain"],
+			"error_class":         casePayload["error_class"],
+			"fix_pattern":         casePayload["fix_pattern"],
+			"validation_pattern":  casePayload["validation_pattern"],
+			"repository_url":      casePayload["repository_url"],
+			"benchmark_case_id":   casePayload["benchmark_case_id"],
+			"benchmark_case_type": casePayload["benchmark_case_type"],
+			"benchmark_league":    casePayload["benchmark_league"],
+			"sequence_id":         casePayload["sequence_id"],
+			"sequence_position":   casePayload["sequence_position"],
+			"workflow":            casePayload["workflow"],
+			"execution_stage":     casePayload["execution_stage"],
+			"outcome":             outcome,
+			"memory_kind":         "case",
 		},
 		{
-			"type":                      "repo_workflow_lesson",
-			"title":                     fmt.Sprintf("Repo workflow lesson: %s %s", repoName, stage),
-			"media_type":                "text/markdown",
-			"content_text":              lesson,
-			"repo_profile":              repoProfile,
-			"runtime_or_stack":          casePayload["runtime_or_stack"],
-			"language":                  casePayload["language"],
-			"framework":                 casePayload["framework"],
-			"problem_domain":            casePayload["problem_domain"],
-			"error_class":               casePayload["error_class"],
-			"fix_pattern":               casePayload["fix_pattern"],
-			"validation_pattern":        casePayload["validation_pattern"],
-			"repository_url":            casePayload["repository_url"],
-			"benchmark_case_id":         casePayload["benchmark_case_id"],
-			"benchmark_case_type":       casePayload["benchmark_case_type"],
-			"benchmark_league":          casePayload["benchmark_league"],
-			"sequence_id":               casePayload["sequence_id"],
-			"sequence_position":         casePayload["sequence_position"],
-			"benchmark_memory_mode":     casePayload["benchmark_memory_mode"],
-			"benchmark_memory_strategy": casePayload["benchmark_memory_strategy"],
-			"workflow":                  casePayload["workflow"],
-			"execution_stage":           casePayload["execution_stage"],
-			"outcome":                   outcome,
-			"memory_kind":               "lesson",
+			"type":                "repo_workflow_lesson",
+			"title":               fmt.Sprintf("Repo workflow lesson: %s %s", repoName, stage),
+			"media_type":          "text/markdown",
+			"content_text":        lesson,
+			"repo_profile":        repoProfile,
+			"runtime_or_stack":    casePayload["runtime_or_stack"],
+			"language":            casePayload["language"],
+			"framework":           casePayload["framework"],
+			"problem_domain":      casePayload["problem_domain"],
+			"error_class":         casePayload["error_class"],
+			"fix_pattern":         casePayload["fix_pattern"],
+			"validation_pattern":  casePayload["validation_pattern"],
+			"repository_url":      casePayload["repository_url"],
+			"benchmark_case_id":   casePayload["benchmark_case_id"],
+			"benchmark_case_type": casePayload["benchmark_case_type"],
+			"benchmark_league":    casePayload["benchmark_league"],
+			"sequence_id":         casePayload["sequence_id"],
+			"sequence_position":   casePayload["sequence_position"],
+			"workflow":            casePayload["workflow"],
+			"execution_stage":     casePayload["execution_stage"],
+			"outcome":             outcome,
+			"memory_kind":         "lesson",
 		},
 	}
 	if benchmarkCaseID := strings.TrimSpace(asString(casePayload["benchmark_case_id"])); benchmarkCaseID != "" {
 		benchmarkCaseRaw, _ := json.MarshalIndent(map[string]any{
-			"benchmark_case_id":         benchmarkCaseID,
-			"benchmark_case_type":       casePayload["benchmark_case_type"],
-			"benchmark_league":          casePayload["benchmark_league"],
-			"sequence_id":               casePayload["sequence_id"],
-			"sequence_position":         casePayload["sequence_position"],
-			"repository_name":           repoName,
-			"repository_url":            casePayload["repository_url"],
-			"repo_profile":              repoProfile,
-			"runtime_or_stack":          casePayload["runtime_or_stack"],
-			"language":                  casePayload["language"],
-			"framework":                 casePayload["framework"],
-			"problem_domain":            casePayload["problem_domain"],
-			"error_class":               casePayload["error_class"],
-			"fix_pattern":               casePayload["fix_pattern"],
-			"validation_pattern":        casePayload["validation_pattern"],
-			"default_branch":            casePayload["default_branch"],
-			"benchmark_memory_mode":     casePayload["benchmark_memory_mode"],
-			"benchmark_memory_strategy": casePayload["benchmark_memory_strategy"],
+			"benchmark_case_id":   benchmarkCaseID,
+			"benchmark_case_type": casePayload["benchmark_case_type"],
+			"benchmark_league":    casePayload["benchmark_league"],
+			"sequence_id":         casePayload["sequence_id"],
+			"sequence_position":   casePayload["sequence_position"],
+			"repository_name":     repoName,
+			"repository_url":      casePayload["repository_url"],
+			"repo_profile":        repoProfile,
+			"runtime_or_stack":    casePayload["runtime_or_stack"],
+			"language":            casePayload["language"],
+			"framework":           casePayload["framework"],
+			"problem_domain":      casePayload["problem_domain"],
+			"error_class":         casePayload["error_class"],
+			"fix_pattern":         casePayload["fix_pattern"],
+			"validation_pattern":  casePayload["validation_pattern"],
+			"default_branch":      casePayload["default_branch"],
 		}, "", "  ")
 		benchmarkRunRaw, _ := json.MarshalIndent(map[string]any{
-			"benchmark_case_id":         benchmarkCaseID,
-			"benchmark_case_type":       casePayload["benchmark_case_type"],
-			"workflow":                  casePayload["workflow"],
-			"repository_name":           repoName,
-			"repository_url":            casePayload["repository_url"],
-			"repo_profile":              repoProfile,
-			"resolved_branch":           resolvedBranch,
-			"resolved_commit":           resolvedCommit,
-			"task_id":                   task.ID,
-			"initiative_id":             stringValue(task.InitiativeID),
-			"assigned_agent":            agent,
-			"execution_stage":           stage,
-			"result_status":             status,
-			"outcome":                   outcome,
-			"benchmark_memory_mode":     casePayload["benchmark_memory_mode"],
-			"benchmark_memory_strategy": casePayload["benchmark_memory_strategy"],
-			"benchmark_league":          casePayload["benchmark_league"],
-			"sequence_id":               casePayload["sequence_id"],
-			"sequence_position":         casePayload["sequence_position"],
-			"changed_files":             result.ChangedFiles,
-			"test_command":              anyStringSliceHTTPDefault(projectRequest["test_command"], []string{}),
-			"test_results":              nonNilMapHTTP(result.TestResults),
-			"diff_present":              strings.TrimSpace(derefStringPtr(result.Diff)) != "",
+			"benchmark_case_id":   benchmarkCaseID,
+			"benchmark_case_type": casePayload["benchmark_case_type"],
+			"workflow":            casePayload["workflow"],
+			"repository_name":     repoName,
+			"repository_url":      casePayload["repository_url"],
+			"repo_profile":        repoProfile,
+			"resolved_branch":     resolvedBranch,
+			"resolved_commit":     resolvedCommit,
+			"task_id":             task.ID,
+			"initiative_id":       stringValue(task.InitiativeID),
+			"assigned_agent":      agent,
+			"execution_stage":     stage,
+			"result_status":       status,
+			"outcome":             outcome,
+			"benchmark_league":    casePayload["benchmark_league"],
+			"sequence_id":         casePayload["sequence_id"],
+			"sequence_position":   casePayload["sequence_position"],
+			"changed_files":       result.ChangedFiles,
+			"test_command":        anyStringSliceHTTPDefault(projectRequest["test_command"], []string{}),
+			"test_results":        nonNilMapHTTP(result.TestResults),
+			"diff_present":        strings.TrimSpace(derefStringPtr(result.Diff)) != "",
 		}, "", "  ")
 		artifacts = append(artifacts,
 			map[string]any{
-				"type":                      "benchmark_case",
-				"title":                     fmt.Sprintf("Benchmark case: %s", benchmarkCaseID),
-				"media_type":                "application/json",
-				"content_text":              string(benchmarkCaseRaw),
-				"repo_profile":              repoProfile,
-				"runtime_or_stack":          casePayload["runtime_or_stack"],
-				"language":                  casePayload["language"],
-				"framework":                 casePayload["framework"],
-				"problem_domain":            casePayload["problem_domain"],
-				"error_class":               casePayload["error_class"],
-				"fix_pattern":               casePayload["fix_pattern"],
-				"validation_pattern":        casePayload["validation_pattern"],
-				"repository_url":            casePayload["repository_url"],
-				"benchmark_case_id":         benchmarkCaseID,
-				"benchmark_case_type":       casePayload["benchmark_case_type"],
-				"benchmark_league":          casePayload["benchmark_league"],
-				"sequence_id":               casePayload["sequence_id"],
-				"sequence_position":         casePayload["sequence_position"],
-				"benchmark_memory_mode":     casePayload["benchmark_memory_mode"],
-				"benchmark_memory_strategy": casePayload["benchmark_memory_strategy"],
-				"workflow":                  casePayload["workflow"],
-				"outcome":                   outcome,
-				"memory_kind":               "benchmark_case",
+				"type":                "benchmark_case",
+				"title":               fmt.Sprintf("Benchmark case: %s", benchmarkCaseID),
+				"media_type":          "application/json",
+				"content_text":        string(benchmarkCaseRaw),
+				"repo_profile":        repoProfile,
+				"runtime_or_stack":    casePayload["runtime_or_stack"],
+				"language":            casePayload["language"],
+				"framework":           casePayload["framework"],
+				"problem_domain":      casePayload["problem_domain"],
+				"error_class":         casePayload["error_class"],
+				"fix_pattern":         casePayload["fix_pattern"],
+				"validation_pattern":  casePayload["validation_pattern"],
+				"repository_url":      casePayload["repository_url"],
+				"benchmark_case_id":   benchmarkCaseID,
+				"benchmark_case_type": casePayload["benchmark_case_type"],
+				"benchmark_league":    casePayload["benchmark_league"],
+				"sequence_id":         casePayload["sequence_id"],
+				"sequence_position":   casePayload["sequence_position"],
+				"workflow":            casePayload["workflow"],
+				"outcome":             outcome,
+				"memory_kind":         "benchmark_case",
 			},
 			map[string]any{
-				"type":                      "benchmark_run",
-				"title":                     fmt.Sprintf("Benchmark run: %s %s", benchmarkCaseID, stage),
-				"media_type":                "application/json",
-				"content_text":              string(benchmarkRunRaw),
-				"repo_profile":              repoProfile,
-				"runtime_or_stack":          casePayload["runtime_or_stack"],
-				"language":                  casePayload["language"],
-				"framework":                 casePayload["framework"],
-				"problem_domain":            casePayload["problem_domain"],
-				"error_class":               casePayload["error_class"],
-				"fix_pattern":               casePayload["fix_pattern"],
-				"validation_pattern":        casePayload["validation_pattern"],
-				"repository_url":            casePayload["repository_url"],
-				"benchmark_case_id":         benchmarkCaseID,
-				"benchmark_case_type":       casePayload["benchmark_case_type"],
-				"benchmark_league":          casePayload["benchmark_league"],
-				"sequence_id":               casePayload["sequence_id"],
-				"sequence_position":         casePayload["sequence_position"],
-				"benchmark_memory_mode":     casePayload["benchmark_memory_mode"],
-				"benchmark_memory_strategy": casePayload["benchmark_memory_strategy"],
-				"workflow":                  casePayload["workflow"],
-				"execution_stage":           casePayload["execution_stage"],
-				"outcome":                   outcome,
-				"memory_kind":               "benchmark_run",
+				"type":                "benchmark_run",
+				"title":               fmt.Sprintf("Benchmark run: %s %s", benchmarkCaseID, stage),
+				"media_type":          "application/json",
+				"content_text":        string(benchmarkRunRaw),
+				"repo_profile":        repoProfile,
+				"runtime_or_stack":    casePayload["runtime_or_stack"],
+				"language":            casePayload["language"],
+				"framework":           casePayload["framework"],
+				"problem_domain":      casePayload["problem_domain"],
+				"error_class":         casePayload["error_class"],
+				"fix_pattern":         casePayload["fix_pattern"],
+				"validation_pattern":  casePayload["validation_pattern"],
+				"repository_url":      casePayload["repository_url"],
+				"benchmark_case_id":   benchmarkCaseID,
+				"benchmark_case_type": casePayload["benchmark_case_type"],
+				"benchmark_league":    casePayload["benchmark_league"],
+				"sequence_id":         casePayload["sequence_id"],
+				"sequence_position":   casePayload["sequence_position"],
+				"workflow":            casePayload["workflow"],
+				"execution_stage":     casePayload["execution_stage"],
+				"outcome":             outcome,
+				"memory_kind":         "benchmark_run",
 			},
 		)
 	}
@@ -597,7 +653,7 @@ func buildObjectiveIterationArtifacts(task *domain.TaskResponse, result domain.L
 	if task == nil || task.InitiativeID == nil || !objectiveAsBool(task.Metadata["objective_entrypoint"]) {
 		return nil
 	}
-	status := strings.ToLower(strings.TrimSpace(result.Status))
+	status := objectiveEffectiveResultStatus(task, result)
 	if status == "" || status == "waiting_approval" {
 		return nil
 	}
@@ -631,6 +687,7 @@ func buildObjectiveIterationArtifacts(task *domain.TaskResponse, result domain.L
 		"max_iterations":         maxIterations,
 		"work_item_kind":         workItemKind,
 		"result_status":          status,
+		"raw_result_status":      strings.ToLower(strings.TrimSpace(result.Status)),
 		"review_decision":        reviewDecision,
 		"summary":                summary,
 		"error_message":          errorMessage,
@@ -638,6 +695,7 @@ func buildObjectiveIterationArtifacts(task *domain.TaskResponse, result domain.L
 		"diff_present":           strings.TrimSpace(derefStringPtr(result.Diff)) != "",
 		"test_results":           nonNilMapHTTP(result.TestResults),
 		"review_comments":        result.ReviewComments,
+		"findings":               result.Findings,
 		"validation_commands":    anyStringSliceHTTPDefault(metadata["validation_commands"], []string{}),
 		"definition_of_done":     strings.TrimSpace(asString(metadata["definition_of_done"])),
 		"needs_repair_cycle":     needsRepair,
@@ -645,6 +703,8 @@ func buildObjectiveIterationArtifacts(task *domain.TaskResponse, result domain.L
 		"objective_iteration_id": fmt.Sprintf("%s:%d:%s", stringValue(task.InitiativeID), iteration, workItemKind),
 	}
 	raw, _ := json.MarshalIndent(payload, "", "  ")
+	statusSnapshot := buildObjectiveStatusSnapshot(task, result, payload, needsRepair, repairFeedback)
+	statusSnapshotRaw, _ := json.MarshalIndent(statusSnapshot, "", "  ")
 	artifacts := []map[string]any{
 		{
 			"type":                 "objective_iteration_summary",
@@ -661,6 +721,31 @@ func buildObjectiveIterationArtifacts(task *domain.TaskResponse, result domain.L
 			"review_decision":      reviewDecision,
 			"needs_repair_cycle":   needsRepair,
 			"memory_kind":          "objective_iteration",
+			"findings":             result.Findings,
+		},
+		{
+			"type":                     "objective_status_snapshot",
+			"title":                    fmt.Sprintf("Objective status snapshot %d %s", iteration, workItemKind),
+			"media_type":               "application/json",
+			"content_text":             string(statusSnapshotRaw),
+			"initiative_id":            payload["initiative_id"],
+			"objective_title":          objectiveTitle,
+			"normalized_objective":     normalizedObjective,
+			"iteration":                iteration,
+			"max_iterations":           maxIterations,
+			"work_item_kind":           workItemKind,
+			"result_status":            status,
+			"review_decision":          reviewDecision,
+			"needs_repair_cycle":       needsRepair,
+			"next_expected_action":     statusSnapshot.NextExpectedAction,
+			"remaining_retries":        statusSnapshot.RemainingRetries,
+			"stop_reason":              statusSnapshot.StopReason,
+			"blocker_reason":           statusSnapshot.BlockerReason,
+			"time_budget_seconds":      statusSnapshot.TimeBudgetSeconds,
+			"remaining_budget_seconds": statusSnapshot.RemainingBudgetSeconds,
+			"deadline_at":              statusSnapshot.DeadlineAt,
+			"memory_kind":              "objective_status_snapshot",
+			"findings":                 result.Findings,
 		},
 	}
 	if needsRepair {
@@ -688,6 +773,126 @@ func buildObjectiveIterationArtifacts(task *domain.TaskResponse, result domain.L
 		})
 	}
 	return artifacts
+}
+
+func objectiveEffectiveResultStatus(task *domain.TaskResponse, result domain.LocalBridgeResultRequest) string {
+	status := strings.ToLower(strings.TrimSpace(result.Status))
+	if task != nil && objectiveAsBool(task.Metadata["objective_baseline_validation"]) && status != "" && status != "waiting_approval" {
+		return "success"
+	}
+	return status
+}
+
+func buildObjectiveStatusSnapshot(task *domain.TaskResponse, result domain.LocalBridgeResultRequest, payload map[string]any, needsRepair bool, repairFeedback string) domain.ObjectiveStatusSnapshot {
+	iteration := objectiveAsInt(payload["iteration"], 1)
+	maxIterations := objectiveAsInt(payload["max_iterations"], iteration)
+	if maxIterations < iteration {
+		maxIterations = iteration
+	}
+	remainingRetries := maxIterations - iteration
+	if remainingRetries < 0 {
+		remainingRetries = 0
+	}
+	workItemKind := strings.TrimSpace(asString(payload["work_item_kind"]))
+	resultStatus := strings.TrimSpace(asString(payload["result_status"]))
+	reviewDecision := strings.TrimSpace(asString(payload["review_decision"]))
+	nextExpectedAction := objectiveNextExpectedAction(task.Metadata, workItemKind, resultStatus, reviewDecision, needsRepair)
+	blockerReason := ""
+	stopReason := ""
+	budgetSeconds, remainingBudgetSeconds, deadline, hasBudget := objectiveRemainingBudgetSeconds(task.Metadata, time.Now().UTC())
+	if nextExpectedAction == "block_initiative" {
+		stopReason = objectiveStopReason(task.Metadata, result, iteration, maxIterations)
+		blockerReason = objectiveBlockerReason(task.Metadata, result, repairFeedback, iteration, maxIterations, stopReason, budgetSeconds, deadline)
+	}
+	snapshot := domain.ObjectiveStatusSnapshot{
+		InitiativeID:        strings.TrimSpace(asString(payload["initiative_id"])),
+		ObjectiveTitle:      strings.TrimSpace(asString(payload["objective_title"])),
+		NormalizedObjective: strings.TrimSpace(asString(payload["normalized_objective"])),
+		CurrentPhase:        string(domain.InitiativePhaseExecution),
+		Iteration:           iteration,
+		MaxIterations:       maxIterations,
+		RemainingRetries:    remainingRetries,
+		WorkItemKind:        workItemKind,
+		ResultStatus:        resultStatus,
+		ReviewDecision:      reviewDecision,
+		NeedsRepairCycle:    needsRepair,
+		NextExpectedAction:  nextExpectedAction,
+		StopReason:          stopReason,
+		BlockerReason:       blockerReason,
+		ChangedFiles:        result.ChangedFiles,
+		ValidationCommands:  anyStringSliceHTTPDefault(task.Metadata["validation_commands"], []string{}),
+		TestResults:         nonNilMapHTTP(result.TestResults),
+		Findings:            result.Findings,
+	}
+	if hasBudget {
+		snapshot.TimeBudgetSeconds = budgetSeconds
+		snapshot.RemainingBudgetSeconds = remainingBudgetSeconds
+		snapshot.DeadlineAt = deadline.UTC().Format(time.RFC3339Nano)
+	}
+	return snapshot
+}
+
+func objectiveNextExpectedAction(metadata map[string]any, workItemKind, resultStatus, reviewDecision string, needsRepair bool) string {
+	if needsRepair {
+		return "replan"
+	}
+	if strings.EqualFold(resultStatus, "success") {
+		if explicit := strings.TrimSpace(asString(metadata["objective_next_action_after_success"])); explicit != "" {
+			return explicit
+		}
+		switch workItemKind {
+		case string(domain.WorkItemKindResearch), string(domain.WorkItemKindReplan):
+			return "edit"
+		case string(domain.WorkItemKindAnalyze):
+			return "edit"
+		case string(domain.WorkItemKindEdit):
+			return "validate"
+		case string(domain.WorkItemKindValidate):
+			return "review"
+		case string(domain.WorkItemKindReview):
+			if strings.EqualFold(reviewDecision, "approved") {
+				return "close_initiative"
+			}
+		}
+		return "await_orchestrator"
+	}
+	return "block_initiative"
+}
+
+func objectiveStopReason(metadata map[string]any, result domain.LocalBridgeResultRequest, iteration, maxIterations int) string {
+	if objectiveTimeBudgetExceeded(metadata, time.Now().UTC()) {
+		return "time_budget_exhausted"
+	}
+	if iteration >= maxIterations {
+		return "retry_budget_exhausted"
+	}
+	return "execution_failed"
+}
+
+func objectiveBlockerReason(metadata map[string]any, result domain.LocalBridgeResultRequest, repairFeedback string, iteration, maxIterations int, stopReason string, budgetSeconds int, deadline time.Time) string {
+	switch stopReason {
+	case "time_budget_exhausted":
+		return objectiveTimeBudgetExceededReason(budgetSeconds, deadline)
+	case "retry_budget_exhausted":
+		return fmt.Sprintf("Maximum repair iterations exhausted after %s.", objectiveFailureLabel(result))
+	}
+	if strings.TrimSpace(repairFeedback) != "" {
+		return strings.TrimSpace(repairFeedback)
+	}
+	return "Objective execution failed without a remaining autonomous repair path."
+}
+
+func objectiveFailureLabel(result domain.LocalBridgeResultRequest) string {
+	switch {
+	case strings.EqualFold(derefStringPtr(result.ReviewDecision), "changes_requested"):
+		return "review requested changes"
+	case strings.TrimSpace(derefStringPtr(result.ErrorMessage)) != "":
+		return strings.TrimSpace(derefStringPtr(result.ErrorMessage))
+	case strings.TrimSpace(derefStringPtr(result.Summary)) != "":
+		return strings.TrimSpace(derefStringPtr(result.Summary))
+	default:
+		return "an unresolved failure"
+	}
 }
 
 func renderRepoWorkflowLesson(casePayload map[string]any) string {

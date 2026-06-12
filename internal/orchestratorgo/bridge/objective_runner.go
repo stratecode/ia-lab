@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -17,23 +18,25 @@ const (
 )
 
 type ObjectiveRunRequest struct {
-	Title         string
-	Objective     string
-	WorkspaceRoot string
-	CreatedBy     string
+	Title             string
+	Objective         string
+	WorkspaceRoot     string
+	CreatedBy         string
+	TimeBudgetSeconds int
 }
 
 type ObjectiveRunResult struct {
-	Objective          *domain.ObjectiveResponse  `json:"objective,omitempty"`
-	Initiative         *domain.InitiativeResponse `json:"initiative,omitempty"`
-	BridgeID           string                     `json:"bridge_id"`
-	WorkspaceRoot      string                     `json:"workspace_root"`
-	ProcessedTasks     int                        `json:"processed_tasks"`
-	ResolvedApprovals  int                        `json:"resolved_approvals"`
-	StartedAt          time.Time                  `json:"started_at"`
-	CompletedAt        time.Time                  `json:"completed_at"`
-	TerminalStatus     string                     `json:"terminal_status"`
-	LastBlockingReason *string                    `json:"last_blocking_reason,omitempty"`
+	Objective            *domain.ObjectiveResponse       `json:"objective,omitempty"`
+	Initiative           *domain.InitiativeResponse      `json:"initiative,omitempty"`
+	LatestStatusSnapshot *domain.ObjectiveStatusSnapshot `json:"latest_status_snapshot,omitempty"`
+	BridgeID             string                          `json:"bridge_id"`
+	WorkspaceRoot        string                          `json:"workspace_root"`
+	ProcessedTasks       int                             `json:"processed_tasks"`
+	ResolvedApprovals    int                             `json:"resolved_approvals"`
+	StartedAt            time.Time                       `json:"started_at"`
+	CompletedAt          time.Time                       `json:"completed_at"`
+	TerminalStatus       string                          `json:"terminal_status"`
+	LastBlockingReason   *string                         `json:"last_blocking_reason,omitempty"`
 }
 
 type ObjectiveRunner struct {
@@ -74,10 +77,11 @@ func RunObjective(ctx context.Context, opts CLIOptions, customExecutor ...ClaimE
 		waitTimeout:    durationOrDefault(opts.WaitTimeout, 30*time.Minute),
 	}
 	result, err := runner.Run(ctx, ObjectiveRunRequest{
-		Title:         strings.TrimSpace(opts.ObjectiveTitle),
-		Objective:     strings.TrimSpace(opts.Objective),
-		WorkspaceRoot: runner.workspaceRoot,
-		CreatedBy:     firstNonEmptyString(strings.TrimSpace(opts.CreatedBy), "lab-agent"),
+		Title:             strings.TrimSpace(opts.ObjectiveTitle),
+		Objective:         strings.TrimSpace(opts.Objective),
+		WorkspaceRoot:     runner.workspaceRoot,
+		CreatedBy:         firstNonEmptyString(strings.TrimSpace(opts.CreatedBy), "lab-agent"),
+		TimeBudgetSeconds: durationSeconds(opts.ObjectiveTimeBudget),
 	})
 	if result.Initiative != nil {
 		result.CompletedAt = time.Now().UTC()
@@ -126,10 +130,11 @@ func (r *ObjectiveRunner) Run(ctx context.Context, req ObjectiveRunRequest) (Obj
 		return result, err
 	}
 	objective, err := r.client.CreateObjective(ctx, domain.ObjectiveRequest{
-		Title:         strings.TrimSpace(req.Title),
-		Objective:     req.Objective,
-		WorkspaceRoot: req.WorkspaceRoot,
-		CreatedBy:     firstNonEmptyString(strings.TrimSpace(req.CreatedBy), "lab-agent"),
+		Title:             strings.TrimSpace(req.Title),
+		Objective:         req.Objective,
+		WorkspaceRoot:     req.WorkspaceRoot,
+		CreatedBy:         firstNonEmptyString(strings.TrimSpace(req.CreatedBy), "lab-agent"),
+		TimeBudgetSeconds: req.TimeBudgetSeconds,
 	})
 	if err != nil {
 		return result, err
@@ -151,11 +156,19 @@ func (r *ObjectiveRunner) Run(ctx context.Context, req ObjectiveRunRequest) (Obj
 			return result, fmt.Errorf("initiative %s not found", objective.Initiative.ID)
 		}
 		result.Initiative = detail.Initiative
+		if detail.ObjectiveRuntime != nil && detail.ObjectiveRuntime.LatestStatusSnapshot != nil {
+			result.LatestStatusSnapshot = detail.ObjectiveRuntime.LatestStatusSnapshot
+		} else if snapshot, err := r.loadLatestStatusSnapshot(ctx, objective.Initiative.ID); err == nil {
+			result.LatestStatusSnapshot = snapshot
+		}
 		switch detail.Initiative.Status {
 		case domain.InitiativeStatusCompleted:
 			return result, nil
 		case domain.InitiativeStatusBlocked, domain.InitiativeStatusCancelled:
 			message := fmt.Sprintf("initiative %s ended in %s", detail.Initiative.ID, detail.Initiative.Status)
+			if result.LatestStatusSnapshot != nil && strings.TrimSpace(result.LatestStatusSnapshot.BlockerReason) != "" {
+				message = result.LatestStatusSnapshot.BlockerReason
+			}
 			result.LastBlockingReason = &message
 			return result, fmt.Errorf(message)
 		}
@@ -183,6 +196,68 @@ func (r *ObjectiveRunner) Run(ctx context.Context, req ObjectiveRunRequest) (Obj
 			return result, ctx.Err()
 		case <-time.After(r.pollInterval):
 		}
+	}
+}
+
+func durationSeconds(value time.Duration) int {
+	if value <= 0 {
+		return 0
+	}
+	return int(value / time.Second)
+}
+
+func (r *ObjectiveRunner) loadLatestStatusSnapshot(ctx context.Context, initiativeID string) (*domain.ObjectiveStatusSnapshot, error) {
+	artifacts, err := r.client.GetInitiativeArtifacts(ctx, initiativeID)
+	if err != nil || len(artifacts) == 0 {
+		return nil, err
+	}
+	var latest *domain.ObjectiveStatusSnapshot
+	var latestCreatedAt time.Time
+	for _, artifact := range artifacts {
+		if artifact.ArtifactType != "objective_status_snapshot" || artifact.ContentText == nil {
+			continue
+		}
+		var snapshot domain.ObjectiveStatusSnapshot
+		if err := json.Unmarshal([]byte(*artifact.ContentText), &snapshot); err != nil {
+			continue
+		}
+		if latest == nil || objectiveStatusSnapshotPrecedes(*latest, latestCreatedAt, snapshot, artifact.CreatedAt) {
+			candidate := snapshot
+			latest = &candidate
+			latestCreatedAt = artifact.CreatedAt
+		}
+	}
+	return latest, nil
+}
+
+func objectiveStatusSnapshotPrecedes(current domain.ObjectiveStatusSnapshot, currentCreatedAt time.Time, candidate domain.ObjectiveStatusSnapshot, candidateCreatedAt time.Time) bool {
+	if candidate.Iteration != current.Iteration {
+		return candidate.Iteration > current.Iteration
+	}
+	currentRank := objectiveStatusSnapshotRank(current)
+	candidateRank := objectiveStatusSnapshotRank(candidate)
+	if candidateRank != currentRank {
+		return candidateRank > currentRank
+	}
+	return candidateCreatedAt.After(currentCreatedAt)
+}
+
+func objectiveStatusSnapshotRank(snapshot domain.ObjectiveStatusSnapshot) int {
+	switch snapshot.WorkItemKind {
+	case string(domain.WorkItemKindReview):
+		return 6
+	case string(domain.WorkItemKindValidate):
+		return 5
+	case string(domain.WorkItemKindEdit):
+		return 4
+	case string(domain.WorkItemKindAnalyze):
+		return 3
+	case string(domain.WorkItemKindReplan):
+		return 2
+	case string(domain.WorkItemKindResearch):
+		return 1
+	default:
+		return 0
 	}
 }
 

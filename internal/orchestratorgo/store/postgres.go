@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -485,6 +484,10 @@ func (s *PostgresStore) ListLocalBridges(ctx context.Context) ([]domain.LocalBri
 }
 
 func (s *PostgresStore) ClaimNextLocalBridgeTask(ctx context.Context, bridgeID string) (*domain.LocalBridgeTaskClaimResponse, error) {
+	return s.ClaimNextLocalBridgeTaskWithTTL(ctx, bridgeID, 45)
+}
+
+func (s *PostgresStore) ClaimNextLocalBridgeTaskWithTTL(ctx context.Context, bridgeID string, leaseTTLSeconds int) (*domain.LocalBridgeTaskClaimResponse, error) {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, err
@@ -526,7 +529,7 @@ func (s *PostgresStore) ClaimNextLocalBridgeTask(ctx context.Context, bridgeID s
 		if err := tx.Commit(ctx); err != nil {
 			return nil, err
 		}
-		if err := s.TouchLocalBridgeTaskLease(ctx, task.ID, bridgeID, 45, "resumed", nil, nil, nil); err != nil {
+		if err := s.TouchLocalBridgeTaskLease(ctx, task.ID, bridgeID, leaseTTLSeconds, "resumed", nil, nil, nil); err != nil {
 			return nil, err
 		}
 		return buildLocalBridgeClaim(task, bridge), nil
@@ -590,7 +593,7 @@ func (s *PostgresStore) ClaimNextLocalBridgeTask(ctx context.Context, bridgeID s
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	if err := s.TouchLocalBridgeTaskLease(ctx, task.ID, bridgeID, 45, "claimed", nil, nil, nil); err != nil {
+	if err := s.TouchLocalBridgeTaskLease(ctx, task.ID, bridgeID, leaseTTLSeconds, "claimed", nil, nil, nil); err != nil {
 		return nil, err
 	}
 	return buildLocalBridgeClaim(task, bridge), nil
@@ -934,40 +937,6 @@ type ArtifactIndexSource struct {
 	InvocationID *string
 }
 
-type SemanticChunkParams struct {
-	SourceType    string
-	SourceID      string
-	InitiativeID  *string
-	TaskID        *string
-	ArtifactID    *string
-	WorkspaceRoot *string
-	ChunkIndex    int
-	ContentText   string
-	ContentHash   string
-	Metadata      map[string]any
-	Embedding     []float32
-}
-
-type SemanticSearchFilter struct {
-	Embedding         []float32
-	SourceTypes       []string
-	InitiativeID      *string
-	TaskID            *string
-	ArtifactID        *string
-	WorkspaceRoot     *string
-	RepositoryURL     *string
-	RepoProfile       *string
-	RuntimeOrStack    *string
-	Language          *string
-	Framework         *string
-	ProblemDomain     *string
-	ErrorClass        *string
-	FixPattern        *string
-	ValidationPattern *string
-	CaseType          *string
-	Limit             int
-}
-
 type CreateEvaluationRunParams struct {
 	ResearchRunID     string
 	ReferenceProvider string
@@ -1289,104 +1258,6 @@ func (s *PostgresStore) GetArtifactIndexSource(ctx context.Context, artifactID s
 		item.Metadata = map[string]any{}
 	}
 	return &ArtifactIndexSource{Artifact: item, TaskID: taskID, InvocationID: invocationID}, nil
-}
-
-func (s *PostgresStore) DeleteSemanticChunksForSource(ctx context.Context, sourceType, sourceID string) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM semantic_chunks WHERE source_type = $1 AND source_id = $2`, sourceType, sourceID)
-	return err
-}
-
-func (s *PostgresStore) UpsertSemanticChunk(ctx context.Context, params SemanticChunkParams) (*domain.SemanticChunkResponse, error) {
-	metadataRaw, err := json.Marshal(nonNilMap(params.Metadata))
-	if err != nil {
-		return nil, err
-	}
-	row := s.pool.QueryRow(ctx, `
-		INSERT INTO semantic_chunks (
-			id, source_type, source_id, initiative_id, task_id, artifact_id, workspace_root,
-			chunk_index, content_text, content_hash, metadata, embedding
-		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::vector
-		)
-		ON CONFLICT (source_type, source_id, chunk_index, content_hash)
-		DO UPDATE SET
-			initiative_id = EXCLUDED.initiative_id,
-			task_id = EXCLUDED.task_id,
-			artifact_id = EXCLUDED.artifact_id,
-			workspace_root = EXCLUDED.workspace_root,
-			content_text = EXCLUDED.content_text,
-			metadata = EXCLUDED.metadata,
-			embedding = EXCLUDED.embedding,
-			updated_at = NOW()
-		RETURNING id::text, source_type, source_id::text, initiative_id::text, task_id::text, artifact_id::text,
-		          workspace_root, chunk_index, content_text, content_hash, metadata, created_at, updated_at
-	`, uuid.NewString(), params.SourceType, params.SourceID, params.InitiativeID, params.TaskID, params.ArtifactID,
-		params.WorkspaceRoot, params.ChunkIndex, params.ContentText, params.ContentHash, string(metadataRaw), vectorLiteral(params.Embedding))
-	return scanSemanticChunk(row, nil)
-}
-
-func (s *PostgresStore) SearchSemanticChunks(ctx context.Context, filter SemanticSearchFilter) ([]domain.SemanticChunkResponse, error) {
-	limit := filter.Limit
-	if limit <= 0 {
-		limit = 8
-	} else if limit > 200 {
-		limit = 200
-	}
-	rows, err := s.pool.Query(ctx, `
-		SELECT id::text, source_type, source_id::text, initiative_id::text, task_id::text, artifact_id::text,
-		       workspace_root, chunk_index, content_text, content_hash, metadata, created_at, updated_at,
-		       1 - (embedding <=> $1::vector) AS score
-		FROM semantic_chunks
-		WHERE ($2::text[] IS NULL OR source_type = ANY($2))
-		  AND ($3::uuid IS NULL OR initiative_id = $3)
-		  AND ($4::uuid IS NULL OR task_id = $4)
-		  AND ($5::uuid IS NULL OR artifact_id = $5)
-		  AND ($6::text IS NULL OR workspace_root = $6)
-		  AND ($7::text IS NULL OR COALESCE(metadata->>'repository_url', metadata->'project_request'->>'repository_url', '') = $7)
-		  AND ($8::text IS NULL OR COALESCE(metadata->>'repo_profile', metadata->'project_request'->>'repo_profile', '') = $8)
-		  AND ($9::text IS NULL OR COALESCE(metadata->>'benchmark_case_type', metadata->'project_request'->>'benchmark_case_type', '') = $9)
-		  AND ($10::text IS NULL OR COALESCE(metadata->>'runtime_or_stack', metadata->'project_request'->>'runtime_or_stack', '') = $10)
-		  AND ($11::text IS NULL OR COALESCE(metadata->>'language', metadata->'project_request'->>'language', '') = $11)
-		  AND ($12::text IS NULL OR COALESCE(metadata->>'framework', metadata->'project_request'->>'framework', '') = $12)
-		  AND ($13::text IS NULL OR COALESCE(metadata->>'problem_domain', metadata->'project_request'->>'problem_domain', '') = $13)
-		  AND ($14::text IS NULL OR COALESCE(metadata->>'error_class', metadata->'project_request'->>'error_class', '') = $14)
-		  AND ($15::text IS NULL OR COALESCE(metadata->>'fix_pattern', metadata->'project_request'->>'fix_pattern', '') = $15)
-		  AND ($16::text IS NULL OR COALESCE(metadata->>'validation_pattern', metadata->'project_request'->>'validation_pattern', '') = $16)
-		ORDER BY embedding <=> $1::vector, updated_at DESC
-		LIMIT $17
-	`, vectorLiteral(filter.Embedding), nullableStringSlice(filter.SourceTypes), nullableUUID(filter.InitiativeID),
-		nullableUUID(filter.TaskID), nullableUUID(filter.ArtifactID), nullableString(filter.WorkspaceRoot),
-		nullableString(filter.RepositoryURL), nullableString(filter.RepoProfile), nullableString(filter.CaseType),
-		nullableString(filter.RuntimeOrStack), nullableString(filter.Language), nullableString(filter.Framework),
-		nullableString(filter.ProblemDomain), nullableString(filter.ErrorClass), nullableString(filter.FixPattern),
-		nullableString(filter.ValidationPattern), limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := make([]domain.SemanticChunkResponse, 0)
-	for rows.Next() {
-		item, err := scanSemanticChunk(rows, new(float64))
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, *item)
-	}
-	return items, rows.Err()
-}
-
-func (s *PostgresStore) GetSemanticChunk(ctx context.Context, chunkID string) (*domain.SemanticChunkResponse, error) {
-	row := s.pool.QueryRow(ctx, `
-		SELECT id::text, source_type, source_id::text, initiative_id::text, task_id::text, artifact_id::text,
-		       workspace_root, chunk_index, content_text, content_hash, metadata, created_at, updated_at
-		FROM semantic_chunks
-		WHERE id = $1
-	`, chunkID)
-	item, err := scanSemanticChunk(row, nil)
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
-	return item, err
 }
 
 func (s *PostgresStore) PatchTaskMetadata(ctx context.Context, taskID string, patch map[string]any) error {
@@ -1732,19 +1603,6 @@ func nullableStringSlice(input []string) any {
 	return input
 }
 
-func vectorLiteral(values []float32) string {
-	var b strings.Builder
-	b.WriteByte('[')
-	for i, value := range values {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		b.WriteString(strconv.FormatFloat(float64(value), 'f', -1, 32))
-	}
-	b.WriteByte(']')
-	return b.String()
-}
-
 func nonNilMap(input map[string]any) map[string]any {
 	if input == nil {
 		return map[string]any{}
@@ -1831,60 +1689,6 @@ func collectArtifacts(rows pgx.Rows) ([]domain.ArtifactResponse, error) {
 		items = append(items, *item)
 	}
 	return items, rows.Err()
-}
-
-func scanSemanticChunk(row interface{ Scan(dest ...any) error }, scoreDest *float64) (*domain.SemanticChunkResponse, error) {
-	var (
-		item        domain.SemanticChunkResponse
-		metadataRaw []byte
-		score       *float64
-	)
-	if scoreDest != nil {
-		score = scoreDest
-		err := row.Scan(
-			&item.ID,
-			&item.SourceType,
-			&item.SourceID,
-			&item.InitiativeID,
-			&item.TaskID,
-			&item.ArtifactID,
-			&item.WorkspaceRoot,
-			&item.ChunkIndex,
-			&item.ContentText,
-			&item.ContentHash,
-			&metadataRaw,
-			&item.CreatedAt,
-			&item.UpdatedAt,
-			score,
-		)
-		if err != nil {
-			return nil, err
-		}
-		item.Score = score
-	} else {
-		if err := row.Scan(
-			&item.ID,
-			&item.SourceType,
-			&item.SourceID,
-			&item.InitiativeID,
-			&item.TaskID,
-			&item.ArtifactID,
-			&item.WorkspaceRoot,
-			&item.ChunkIndex,
-			&item.ContentText,
-			&item.ContentHash,
-			&metadataRaw,
-			&item.CreatedAt,
-			&item.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-	}
-	_ = json.Unmarshal(metadataRaw, &item.Metadata)
-	if item.Metadata == nil {
-		item.Metadata = map[string]any{}
-	}
-	return &item, nil
 }
 
 func scanTask(row taskScanner) (*domain.TaskResponse, error) {

@@ -15,7 +15,6 @@ import (
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 	"github.com/stratecode/lab/internal/orchestratorgo/research"
 	"github.com/stratecode/lab/internal/orchestratorgo/runner"
-	"github.com/stratecode/lab/internal/orchestratorgo/semantic"
 	"github.com/stratecode/lab/internal/orchestratorgo/store"
 )
 
@@ -24,7 +23,6 @@ type RuntimeWorker struct {
 	postgres    *store.PostgresStore
 	redis       *store.RedisStore
 	runner      *runner.TaskRunner
-	indexer     *semantic.Indexer
 	workerID    string
 	startedAt   time.Time
 	cancel      context.CancelFunc
@@ -34,22 +32,12 @@ type RuntimeWorker struct {
 }
 
 func New(cfg config.Config, postgres *store.PostgresStore, redis *store.RedisStore, researchService *research.Service, extras ...any) *RuntimeWorker {
-	var builder runner.ContextBuilder
-	var indexer *semantic.Indexer
-	for _, extra := range extras {
-		switch typed := extra.(type) {
-		case runner.ContextBuilder:
-			builder = typed
-		case *semantic.Indexer:
-			indexer = typed
-		}
-	}
+	_ = extras
 	return &RuntimeWorker{
 		cfg:       cfg,
 		postgres:  postgres,
 		redis:     redis,
-		runner:    runner.New(cfg, researchService, builder),
-		indexer:   indexer,
+		runner:    runner.New(cfg, researchService),
 		workerID:  store.GenerateWorkerID(),
 		startedAt: time.Now(),
 		done:      make(chan struct{}),
@@ -494,10 +482,8 @@ func (w *RuntimeWorker) reconcileRootTask(ctx context.Context, taskID string) {
 }
 
 func (w *RuntimeWorker) indexTask(ctx context.Context, taskID string) {
-	if w.indexer == nil {
-		return
-	}
-	w.indexer.IndexTask(ctx, taskID)
+	_ = ctx
+	_ = taskID
 }
 
 type plannerSubtask struct {

@@ -12,11 +12,9 @@
   ],
   "repo_ids": [],
   "modes": [
-    "memory_off",
-    "memory_on",
+    "standard",
     "reference_external"
   ],
   "runs_per_case": 3,
-  "default_memory_strategy": "repo_specific_first",
   "external_soft_fail": true
 }

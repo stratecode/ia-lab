@@ -29,7 +29,6 @@
   "patch_target": ".lab/reviewer-pattern-marker.txt",
   "write_content": "reviewer pattern marker\n",
   "coder_summary": "Write a deterministic reviewer pattern marker file before repository review.",
-  "benchmark_memory_strategy": "pattern_first",
   "benchmark_league": "pattern_transfer",
   "sequence_id": "agent_maturity_reviewer_http_clients",
   "sequence_position": 1,

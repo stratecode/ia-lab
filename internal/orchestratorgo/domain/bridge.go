@@ -53,26 +53,24 @@ type LocalBridgeTaskClaimResponse struct {
 }
 
 type LocalBridgeResultRequest struct {
-	Status                    string           `json:"status"`
-	Summary                   *string          `json:"summary"`
-	Stdout                    *string          `json:"stdout"`
-	Stderr                    *string          `json:"stderr"`
-	ExitCode                  *int             `json:"exit_code"`
-	Diff                      *string          `json:"diff"`
-	ChangedFiles              []string         `json:"changed_files"`
-	TestResults               map[string]any   `json:"test_results"`
-	Artifacts                 []map[string]any `json:"artifacts"`
-	ErrorMessage              *string          `json:"error_message"`
-	ActionType                *string          `json:"action_type"`
-	TargetResource            *string          `json:"target_resource"`
-	TimeoutSeconds            *int             `json:"timeout_seconds"`
-	ReviewDecision            *string          `json:"review_decision,omitempty"`
-	ReviewComments            []map[string]any `json:"review_comments,omitempty"`
-	SemanticContextSources    []string         `json:"semantic_context_sources"`
-	SemanticContextChunkCount int              `json:"semantic_context_chunk_count"`
-	SemanticContextHits       []map[string]any `json:"semantic_context_hits"`
-	CapabilityUsage           []map[string]any `json:"capability_usage"`
-	CapabilityHelped          []string         `json:"capability_helped"`
-	CapabilityNoise           []string         `json:"capability_noise"`
-	CapabilityDenied          []string         `json:"capability_denied"`
+	Status           string           `json:"status"`
+	Summary          *string          `json:"summary"`
+	Stdout           *string          `json:"stdout"`
+	Stderr           *string          `json:"stderr"`
+	ExitCode         *int             `json:"exit_code"`
+	Diff             *string          `json:"diff"`
+	ChangedFiles     []string         `json:"changed_files"`
+	TestResults      map[string]any   `json:"test_results"`
+	Artifacts        []map[string]any `json:"artifacts"`
+	ErrorMessage     *string          `json:"error_message"`
+	ActionType       *string          `json:"action_type"`
+	TargetResource   *string          `json:"target_resource"`
+	TimeoutSeconds   *int             `json:"timeout_seconds"`
+	ReviewDecision   *string          `json:"review_decision,omitempty"`
+	ReviewComments   []map[string]any `json:"review_comments,omitempty"`
+	Findings         []map[string]any `json:"findings,omitempty"`
+	CapabilityUsage  []map[string]any `json:"capability_usage"`
+	CapabilityHelped []string         `json:"capability_helped"`
+	CapabilityNoise  []string         `json:"capability_noise"`
+	CapabilityDenied []string         `json:"capability_denied"`
 }

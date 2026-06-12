@@ -26,7 +26,6 @@
   "patch_target": ".lab/coder-maturity-marker.txt",
   "write_content": "coder maturity marker\n",
   "coder_summary": "Write a deterministic coder maturity marker file before repository review.",
-  "benchmark_memory_strategy": "repo_specific_first",
   "benchmark_league": "repo_recall",
   "sequence_id": "agent_maturity_coder_python",
   "sequence_position": 1,

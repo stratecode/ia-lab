@@ -37,26 +37,16 @@ var runnerToolCapabilityMap = map[string]string{
 }
 
 type TaskRunner struct {
-	cfg            config.Config
-	planner        *planner.Service
-	research       *research.Service
-	contextBuilder ContextBuilder
+	cfg      config.Config
+	planner  *planner.Service
+	research *research.Service
 }
 
-type ContextBuilder interface {
-	BuildForTask(ctx context.Context, task *domain.TaskResponse) (*domain.ContextPackage, error)
-}
-
-func New(cfg config.Config, researchService *research.Service, contextBuilder ...ContextBuilder) *TaskRunner {
-	var builder ContextBuilder
-	if len(contextBuilder) > 0 {
-		builder = contextBuilder[0]
-	}
+func New(cfg config.Config, researchService *research.Service) *TaskRunner {
 	return &TaskRunner{
-		cfg:            cfg,
-		planner:        planner.New(cfg.LlamaPlannerBaseURL, cfg.LlamaPlannerAPIKey, cfg.LlamaTimeoutSeconds),
-		research:       researchService,
-		contextBuilder: builder,
+		cfg:      cfg,
+		planner:  planner.New(cfg.LlamaPlannerBaseURL, cfg.LlamaPlannerAPIKey, cfg.LlamaTimeoutSeconds),
+		research: researchService,
 	}
 }
 
@@ -64,7 +54,6 @@ func (r *TaskRunner) Execute(task *domain.TaskResponse) Result {
 	if task == nil {
 		return Result{Status: "error", ErrorMessage: "task is nil"}
 	}
-	task = r.withContextPackage(task)
 	var result Result
 	switch agent := derefAgent(task.AssignedAgent); agent {
 	case domain.AgentTypePlanner:
@@ -81,93 +70,7 @@ func (r *TaskRunner) Execute(task *domain.TaskResponse) Result {
 			ErrorMessage: fmt.Sprintf("agent type %q is not supported in orchestrator-go runner", agent),
 		}
 	}
-	return attachContextRefs(result, task)
-}
-
-func (r *TaskRunner) withContextPackage(task *domain.TaskResponse) *domain.TaskResponse {
-	if r.contextBuilder == nil || task == nil {
-		return task
-	}
-	cloned := *task
-	cloned.Metadata = cloneMap(task.Metadata)
-	pkg, err := r.contextBuilder.BuildForTask(context.Background(), &cloned)
-	if err != nil {
-		cloned.Metadata["semantic_context_error"] = err.Error()
-		return &cloned
-	}
-	if pkg == nil || len(pkg.Chunks) == 0 {
-		return &cloned
-	}
-	cloned.Metadata["context_package"] = pkg
-	if pkg.PromptSection != "" {
-		existing := anyStringSliceDefault(cloned.Metadata["capability_context"], []string{})
-		existing = append(existing, pkg.PromptSection)
-		cloned.Metadata["capability_context"] = existing
-	}
-	return &cloned
-}
-
-func attachContextRefs(result Result, task *domain.TaskResponse) Result {
-	pkg, ok := task.Metadata["context_package"].(*domain.ContextPackage)
-	if !ok || pkg == nil {
-		return result
-	}
-	if result.Results == nil {
-		result.Results = map[string]any{}
-	}
-	result.Results["semantic_context_sources"] = pkg.SourceRefs
-	result.Results["semantic_context_chunk_count"] = len(pkg.Chunks)
-	hits := make([]map[string]any, 0, len(pkg.Chunks))
-	for _, chunk := range pkg.Chunks {
-		matchType := strings.TrimSpace(asStringRunner(chunk.Metadata["memory_match_type"]))
-		hit := map[string]any{
-			"source_ref": chunk.SourceRef,
-		}
-		if matchType != "" {
-			hit["match_type"] = matchType
-		}
-		if repoProfile := strings.TrimSpace(asStringRunner(chunk.Metadata["repo_profile"])); repoProfile != "" {
-			hit["repo_profile"] = repoProfile
-		}
-		hits = append(hits, hit)
-	}
-	if len(hits) > 0 {
-		result.Results["semantic_context_hits"] = hits
-	}
 	return result
-}
-
-func reviewerSemanticMemory(metadata map[string]any) ([]string, []string, []string) {
-	pkg, ok := metadata["context_package"].(*domain.ContextPackage)
-	if !ok || pkg == nil || pkg.OperationalIR == nil {
-		return []string{}, []string{}, []string{}
-	}
-	rules := append([]string{}, pkg.OperationalIR.ValidationRules...)
-	checks := make([]string, 0, len(pkg.OperationalIR.Invalid))
-	for _, item := range pkg.OperationalIR.Invalid {
-		if strings.TrimSpace(item.FailureReason) == "" {
-			continue
-		}
-		checks = append(checks, fmt.Sprintf("%s: %s", item.SourceRef, item.FailureReason))
-	}
-	return append([]string{}, pkg.SourceRefs...), rules, checks
-}
-
-func plannerSemanticMemory(metadata map[string]any) ([]string, []string, []string) {
-	pkg, ok := metadata["context_package"].(*domain.ContextPackage)
-	if !ok || pkg == nil || pkg.OperationalIR == nil {
-		return []string{}, []string{}, []string{}
-	}
-	constraintRefs := append([]string{}, pkg.SourceRefs...)
-	insights := append([]string{}, pkg.OperationalIR.ValidationRules...)
-	antiPatterns := make([]string, 0, len(pkg.OperationalIR.Invalid))
-	for _, item := range pkg.OperationalIR.Invalid {
-		if strings.TrimSpace(item.FailureReason) == "" {
-			continue
-		}
-		antiPatterns = append(antiPatterns, fmt.Sprintf("%s: %s", item.SourceRef, item.FailureReason))
-	}
-	return constraintRefs, insights, antiPatterns
 }
 
 func asStringRunner(value any) string {
@@ -182,17 +85,6 @@ func asStringRunner(value any) string {
 
 func (r *TaskRunner) executePlanner(task *domain.TaskResponse) Result {
 	metadata := cloneMap(task.Metadata)
-	semanticSources, semanticRules, priorFailureChecks := plannerSemanticMemory(metadata)
-	if len(semanticRules) > 0 || len(priorFailureChecks) > 0 {
-		existing := anyStringSliceDefault(metadata["capability_context"], []string{})
-		if len(semanticRules) > 0 {
-			existing = append(existing, "Semantic planning rules:\n- "+strings.Join(semanticRules, "\n- "))
-		}
-		if len(priorFailureChecks) > 0 {
-			existing = append(existing, "Semantic planning anti-patterns:\n- "+strings.Join(priorFailureChecks, "\n- "))
-		}
-		metadata["capability_context"] = existing
-	}
 	if repoWorkflow, ok := buildRepoWorkflowPlan(metadata); ok {
 		return repoWorkflow
 	}
@@ -214,15 +106,12 @@ func (r *TaskRunner) executePlanner(task *domain.TaskResponse) Result {
 				Status:  "success",
 				Summary: "planner completed",
 				Results: map[string]any{
-					"status":                    "success",
-					"plan_summary":              result.Summary,
-					"plan_markdown":             result.Plan,
-					"subtasks":                  result.Subtasks,
-					"raw_response":              result.Raw,
-					"plan_only":                 planOnly,
-					"semantic_context_sources":  semanticSources,
-					"semantic_validation_rules": semanticRules,
-					"prior_failure_checks":      priorFailureChecks,
+					"status":        "success",
+					"plan_summary":  result.Summary,
+					"plan_markdown": result.Plan,
+					"subtasks":      result.Subtasks,
+					"raw_response":  result.Raw,
+					"plan_only":     planOnly,
 				},
 			}
 		}
@@ -233,14 +122,11 @@ func (r *TaskRunner) executePlanner(task *domain.TaskResponse) Result {
 		Status:  "success",
 		Summary: "planner completed in fallback mode",
 		Results: map[string]any{
-			"status":                    "success",
-			"plan_summary":              fmt.Sprintf("Fallback plan generated for task %s", task.ID),
-			"plan_markdown":             "# Execution plan\n\n1. Scope\n2. Prepare\n3. Deliver",
-			"subtasks":                  []map[string]any{},
-			"plan_only":                 asBool(task.Metadata["plan_only"]),
-			"semantic_context_sources":  semanticSources,
-			"semantic_validation_rules": semanticRules,
-			"prior_failure_checks":      priorFailureChecks,
+			"status":        "success",
+			"plan_summary":  fmt.Sprintf("Fallback plan generated for task %s", task.ID),
+			"plan_markdown": "# Execution plan\n\n1. Scope\n2. Prepare\n3. Deliver",
+			"subtasks":      []map[string]any{},
+			"plan_only":     asBool(task.Metadata["plan_only"]),
 		},
 	}
 }
@@ -371,7 +257,6 @@ func (r *TaskRunner) executeCoder(task *domain.TaskResponse) Result {
 
 func (r *TaskRunner) executeReviewer(task *domain.TaskResponse) Result {
 	metadata := cloneMap(task.Metadata)
-	semanticSources, semanticRules, priorFailureChecks := reviewerSemanticMemory(metadata)
 	projectRequest, _ := metadata["project_request"].(map[string]any)
 	workspaceRoot := strings.TrimSpace(firstNonEmptyMetadata(metadata, "workspace_root"))
 	if projectRequest == nil || workspaceRoot == "" {
@@ -428,13 +313,10 @@ func (r *TaskRunner) executeReviewer(task *domain.TaskResponse) Result {
 					"stderr", "stdout", "error",
 				),
 				Results: map[string]any{
-					"status":                    "error",
-					"validation_summary":        "Project scaffold failed reviewer checks",
-					"missing_files":             missing,
-					"test_result":               testResult,
-					"semantic_context_sources":  semanticSources,
-					"semantic_validation_rules": semanticRules,
-					"prior_failure_checks":      priorFailureChecks,
+					"status":             "error",
+					"validation_summary": "Project scaffold failed reviewer checks",
+					"missing_files":      missing,
+					"test_result":        testResult,
 				},
 			}
 		}
@@ -445,13 +327,10 @@ func (r *TaskRunner) executeReviewer(task *domain.TaskResponse) Result {
 			Summary:      "reviewer detected missing files",
 			ErrorMessage: "project scaffold is incomplete",
 			Results: map[string]any{
-				"status":                    "error",
-				"validation_summary":        "Project scaffold is missing expected files",
-				"missing_files":             missing,
-				"test_result":               testResult,
-				"semantic_context_sources":  semanticSources,
-				"semantic_validation_rules": semanticRules,
-				"prior_failure_checks":      priorFailureChecks,
+				"status":             "error",
+				"validation_summary": "Project scaffold is missing expected files",
+				"missing_files":      missing,
+				"test_result":        testResult,
 			},
 		}
 	}
@@ -459,14 +338,11 @@ func (r *TaskRunner) executeReviewer(task *domain.TaskResponse) Result {
 		Status:  "success",
 		Summary: "reviewer validated scaffolded project",
 		Results: map[string]any{
-			"status":                    "success",
-			"validation_summary":        "Project scaffold passed reviewer checks",
-			"project_root":              projectRoot,
-			"expected_files":            expectedFiles,
-			"test_result":               testResult,
-			"semantic_context_sources":  semanticSources,
-			"semantic_validation_rules": semanticRules,
-			"prior_failure_checks":      priorFailureChecks,
+			"status":             "success",
+			"validation_summary": "Project scaffold passed reviewer checks",
+			"project_root":       projectRoot,
+			"expected_files":     expectedFiles,
+			"test_result":        testResult,
 			"pass_checks": []string{
 				"project directory exists",
 				"expected files present",
@@ -649,13 +525,6 @@ func buildRepoWorkflowPlan(metadata map[string]any) (Result, bool) {
 	if profile.sequencePosition != "" {
 		projectRequest["sequence_position"] = profile.sequencePosition
 	}
-	if profile.benchmarkMemoryMode != "" {
-		projectRequest["benchmark_memory_mode"] = profile.benchmarkMemoryMode
-	}
-	if profile.benchmarkMemoryPolicy != "" {
-		projectRequest["benchmark_memory_strategy"] = profile.benchmarkMemoryPolicy
-	}
-
 	researcherMetadata := map[string]any{
 		"project_request":           projectRequest,
 		"workspace_root":            workspaceRoot,
@@ -1049,34 +918,32 @@ func cloneMap(input map[string]any) map[string]any {
 var runnerProjectNameSanitizer = regexp.MustCompile(`[^a-zA-Z0-9._-]+`)
 
 type runnerRepoWorkflowProfile struct {
-	profileName           string
-	projectType           string
-	stack                 string
-	language              string
-	framework             string
-	problemDomain         string
-	errorClass            string
-	fixPattern            string
-	validationPattern     string
-	repoName              string
-	projectRoot           string
-	repositoryURL         string
-	defaultBranch         string
-	testFocus             string
-	testCommand           []string
-	expectedFiles         []string
-	coderTool             string
-	patchTarget           string
-	patch                 string
-	writeContent          string
-	coderSummary          string
-	benchmarkCaseID       string
-	benchmarkCaseType     string
-	benchmarkLeague       string
-	sequenceID            string
-	sequencePosition      string
-	benchmarkMemoryMode   string
-	benchmarkMemoryPolicy string
+	profileName       string
+	projectType       string
+	stack             string
+	language          string
+	framework         string
+	problemDomain     string
+	errorClass        string
+	fixPattern        string
+	validationPattern string
+	repoName          string
+	projectRoot       string
+	repositoryURL     string
+	defaultBranch     string
+	testFocus         string
+	testCommand       []string
+	expectedFiles     []string
+	coderTool         string
+	patchTarget       string
+	patch             string
+	writeContent      string
+	coderSummary      string
+	benchmarkCaseID   string
+	benchmarkCaseType string
+	benchmarkLeague   string
+	sequenceID        string
+	sequencePosition  string
 }
 
 func sanitizeProjectName(value string) string {
@@ -1192,14 +1059,6 @@ func applyRunnerBenchmarkMetadata(metadata map[string]any, profile runnerRepoWor
 	if profile.sequencePosition != "" {
 		metadata["sequence_position"] = profile.sequencePosition
 	}
-	if profile.benchmarkMemoryMode != "" {
-		metadata["benchmark_memory_mode"] = profile.benchmarkMemoryMode
-		metadata["context_memory_mode"] = profile.benchmarkMemoryMode
-	}
-	if profile.benchmarkMemoryPolicy != "" {
-		metadata["benchmark_memory_strategy"] = profile.benchmarkMemoryPolicy
-		metadata["context_memory_strategy"] = profile.benchmarkMemoryPolicy
-	}
 	if profile.language != "" {
 		metadata["language"] = profile.language
 	}
@@ -1246,8 +1105,6 @@ func loadRunnerBenchmarkRepoWorkflowProfile(workspaceRoot string) (runnerRepoWor
 		BenchmarkLeague   string   `json:"benchmark_league"`
 		SequenceID        string   `json:"sequence_id"`
 		SequencePosition  any      `json:"sequence_position"`
-		MemoryMode        string   `json:"benchmark_memory_mode"`
-		MemoryStrategy    string   `json:"benchmark_memory_strategy"`
 		Language          string   `json:"language"`
 		Framework         string   `json:"framework"`
 		ProblemDomain     string   `json:"problem_domain"`
@@ -1259,34 +1116,32 @@ func loadRunnerBenchmarkRepoWorkflowProfile(workspaceRoot string) (runnerRepoWor
 		return runnerRepoWorkflowProfile{}, false
 	}
 	profile := runnerRepoWorkflowProfile{
-		profileName:           firstNonEmptyString(strings.TrimSpace(payload.RepoProfile), "benchmark_repo_workflow"),
-		projectType:           firstNonEmptyString(strings.TrimSpace(payload.ProjectType), "existing_repo"),
-		stack:                 firstNonEmptyString(strings.TrimSpace(payload.Runtime), "python"),
-		language:              firstNonEmptyString(strings.TrimSpace(payload.Language), strings.TrimSpace(payload.Runtime)),
-		framework:             strings.TrimSpace(payload.Framework),
-		problemDomain:         strings.TrimSpace(payload.ProblemDomain),
-		errorClass:            strings.TrimSpace(payload.ErrorClass),
-		fixPattern:            strings.TrimSpace(payload.FixPattern),
-		validationPattern:     strings.TrimSpace(payload.ValidationPattern),
-		repoName:              filepath.Base(strings.TrimSpace(workspaceRoot)),
-		projectRoot:           firstNonEmptyString(strings.TrimSpace(payload.ProjectRoot), "."),
-		repositoryURL:         strings.TrimSpace(payload.RepoURL),
-		defaultBranch:         strings.TrimSpace(payload.DefaultBranch),
-		testFocus:             firstNonEmptyString(strings.TrimSpace(payload.TestFocus), "benchmark workflow"),
-		testCommand:           cloneRunnerStrings(payload.TestCommand),
-		expectedFiles:         cloneRunnerStrings(payload.ExpectedFiles),
-		coderTool:             firstNonEmptyString(strings.TrimSpace(payload.CoderTool), "filesystem.write"),
-		patchTarget:           strings.TrimSpace(payload.PatchTarget),
-		patch:                 payload.Patch,
-		writeContent:          payload.WriteContent,
-		coderSummary:          firstNonEmptyString(strings.TrimSpace(payload.CoderSummary), "Apply benchmark-defined repository change."),
-		benchmarkCaseID:       strings.TrimSpace(payload.ID),
-		benchmarkCaseType:     strings.TrimSpace(payload.CaseType),
-		benchmarkLeague:       strings.TrimSpace(payload.BenchmarkLeague),
-		sequenceID:            strings.TrimSpace(payload.SequenceID),
-		sequencePosition:      strings.TrimSpace(fmt.Sprintf("%v", payload.SequencePosition)),
-		benchmarkMemoryMode:   firstNonEmptyString(strings.TrimSpace(payload.MemoryMode), "on"),
-		benchmarkMemoryPolicy: firstNonEmptyString(strings.TrimSpace(payload.MemoryStrategy), "repo_specific_first"),
+		profileName:       firstNonEmptyString(strings.TrimSpace(payload.RepoProfile), "benchmark_repo_workflow"),
+		projectType:       firstNonEmptyString(strings.TrimSpace(payload.ProjectType), "existing_repo"),
+		stack:             firstNonEmptyString(strings.TrimSpace(payload.Runtime), "python"),
+		language:          firstNonEmptyString(strings.TrimSpace(payload.Language), strings.TrimSpace(payload.Runtime)),
+		framework:         strings.TrimSpace(payload.Framework),
+		problemDomain:     strings.TrimSpace(payload.ProblemDomain),
+		errorClass:        strings.TrimSpace(payload.ErrorClass),
+		fixPattern:        strings.TrimSpace(payload.FixPattern),
+		validationPattern: strings.TrimSpace(payload.ValidationPattern),
+		repoName:          filepath.Base(strings.TrimSpace(workspaceRoot)),
+		projectRoot:       firstNonEmptyString(strings.TrimSpace(payload.ProjectRoot), "."),
+		repositoryURL:     strings.TrimSpace(payload.RepoURL),
+		defaultBranch:     strings.TrimSpace(payload.DefaultBranch),
+		testFocus:         firstNonEmptyString(strings.TrimSpace(payload.TestFocus), "benchmark workflow"),
+		testCommand:       cloneRunnerStrings(payload.TestCommand),
+		expectedFiles:     cloneRunnerStrings(payload.ExpectedFiles),
+		coderTool:         firstNonEmptyString(strings.TrimSpace(payload.CoderTool), "filesystem.write"),
+		patchTarget:       strings.TrimSpace(payload.PatchTarget),
+		patch:             payload.Patch,
+		writeContent:      payload.WriteContent,
+		coderSummary:      firstNonEmptyString(strings.TrimSpace(payload.CoderSummary), "Apply benchmark-defined repository change."),
+		benchmarkCaseID:   strings.TrimSpace(payload.ID),
+		benchmarkCaseType: strings.TrimSpace(payload.CaseType),
+		benchmarkLeague:   strings.TrimSpace(payload.BenchmarkLeague),
+		sequenceID:        strings.TrimSpace(payload.SequenceID),
+		sequencePosition:  strings.TrimSpace(fmt.Sprintf("%v", payload.SequencePosition)),
 	}
 	if profile.repoName == "" || profile.repoName == "." || profile.repoName == string(filepath.Separator) {
 		profile.repoName = "repo"

@@ -28,7 +28,6 @@
   "patch_target": ".lab/planner-maturity-marker.txt",
   "write_content": "planner maturity marker\n",
   "coder_summary": "Write a deterministic planner maturity marker file before repository review.",
-  "benchmark_memory_strategy": "repo_specific_first",
   "benchmark_league": "repo_recall",
   "sequence_id": "agent_maturity_planner",
   "sequence_position": 1,

@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -165,57 +166,6 @@ func TestWorkspaceExecutorSkipsRepeatApprovalAfterGrant(t *testing.T) {
 	}
 }
 
-func TestWorkspaceExecutorPropagatesSemanticContextHits(t *testing.T) {
-	root := initGitWorkspace(t)
-	executor, err := NewWorkspaceExecutor(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
-		Metadata: map[string]any{
-			"context_package": map[string]any{
-				"source_refs": []any{
-					"artifact:repo_workflow_case:1",
-					"artifact:repo_workflow_lesson:1",
-				},
-				"chunks": []any{
-					map[string]any{
-						"source_ref": "artifact:repo_workflow_case:1",
-						"metadata": map[string]any{
-							"memory_match_type": "technology_similar",
-							"repo_profile":      "php_logging_library",
-							"repository_url":    "https://github.com/Seldaek/monolog",
-							"benchmark_case_id": "monolog-experience-review",
-						},
-					},
-				},
-			},
-			"tool_request": map[string]any{
-				"tool": "run_command",
-				"argv": []any{"python3", "-c", "print('semantic-ok')"},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := result.SemanticContextChunkCount; got != 1 {
-		t.Fatalf("expected semantic chunk count 1, got %d", got)
-	}
-	if len(result.SemanticContextSources) != 2 {
-		t.Fatalf("expected semantic sources, got %#v", result.SemanticContextSources)
-	}
-	if len(result.SemanticContextHits) != 1 {
-		t.Fatalf("expected semantic hits, got %#v", result.SemanticContextHits)
-	}
-	if got := result.SemanticContextHits[0]["match_type"]; got != "technology_similar" {
-		t.Fatalf("expected technology_similar hit, got %#v", result.SemanticContextHits[0])
-	}
-	if got := result.SemanticContextHits[0]["benchmark_case_id"]; got != "monolog-experience-review" {
-		t.Fatalf("expected benchmark_case_id propagated, got %#v", result.SemanticContextHits[0])
-	}
-}
-
 func TestWorkspaceExecutorScaffoldProject(t *testing.T) {
 	root := initGitWorkspace(t)
 	executor, err := NewWorkspaceExecutor(root)
@@ -253,6 +203,46 @@ func TestWorkspaceExecutorScaffoldProject(t *testing.T) {
 	gitDir := filepath.Join(root, "projects", "demo-tui", ".git")
 	if _, err := os.Stat(gitDir); err != nil {
 		t.Fatalf("expected initialized git repo: %v", err)
+	}
+}
+
+func TestWorkspaceExecutorScaffoldProjectInPlace(t *testing.T) {
+	root := t.TempDir()
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"tool_request": map[string]any{
+				"tool":             "scaffold_project",
+				"project_root":     ".",
+				"project_name":     "demo-inline",
+				"project_type":     "cli_simple",
+				"runtime_or_stack": "python",
+				"goal":             "bootstrap the workspace in place",
+				"test_focus":       "greenfield objective flow",
+				"initialize_git":   true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" {
+		t.Fatalf("unexpected status: %s", result.Status)
+	}
+	if _, err := os.Stat(filepath.Join(root, "README.md")); err != nil {
+		t.Fatalf("expected in-place README scaffold: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "main.py")); err != nil {
+		t.Fatalf("expected in-place main.py scaffold: %v", err)
+	}
+	if containsString(result.ChangedFiles, "./README.md") {
+		t.Fatalf("expected normalized changed files, got %#v", result.ChangedFiles)
+	}
+	if !containsString(result.ChangedFiles, "README.md") || !containsString(result.ChangedFiles, "main.py") {
+		t.Fatalf("expected in-place changed files, got %#v", result.ChangedFiles)
 	}
 }
 
@@ -410,6 +400,45 @@ func TestWorkspaceExecutorAllowsAiderTaskCommand(t *testing.T) {
 			},
 			"validation_commands": []string{"go", "test", "./..."},
 			"suspected_paths":     []string{"internal/orchestratorgo/httpapi/objectives.go"},
+			"objective_failure_hypotheses": []map[string]any{
+				{
+					"path":         "internal/orchestratorgo/httpapi/objectives.go",
+					"failure_mode": "validation_failure",
+					"priority":     "high",
+					"evidence":     "Declared validation command exited with code 1.",
+				},
+			},
+			"objective_patch_intent": []map[string]any{
+				{
+					"path":   "internal/orchestratorgo/httpapi/objectives.go",
+					"action": "narrow the repair loop to the file implicated by the failed iteration",
+				},
+			},
+			"objective_analysis_findings": []map[string]any{
+				{
+					"severity": "warning",
+					"message":  "large source file (540 lines)",
+					"location": map[string]any{"file": "internal/orchestratorgo/httpapi/legacy_objectives.go"},
+				},
+			},
+			"objective_baseline_summary": "Baseline validation failed before editing.",
+			"objective_baseline_findings": []map[string]any{
+				{
+					"severity": "high",
+					"message":  "CLI regression reproduced before editing.",
+				},
+			},
+			"excluded_scope_paths":              []string{"internal/orchestratorgo/httpapi/legacy_objectives.go"},
+			"scope_correction_reason":           "drop the contradicted shortlist and stay on the observed diff",
+			"planner_scope_resolution":          "contradicted",
+			"planner_rejected_scope_resolution": "confirmed",
+			"retrieval_packet_artifact_id":      "artifact-retrieval-1",
+			"objective_retrieval_precedents": []map[string]any{
+				{
+					"source_ref": "artifact:objective_iteration_summary:1",
+					"summary":    "A previous objective narrowed the patch to the validation target and passed on the second attempt.",
+				},
+			},
 			"context_package": map[string]any{
 				"prompt_section": "Previous successful objective iterations fixed similar validation drift.",
 				"source_refs":    []any{"artifact:objective_iteration_summary:1"},
@@ -449,6 +478,65 @@ func TestWorkspaceExecutorAllowsAiderTaskCommand(t *testing.T) {
 	if !strings.Contains(argsText, "Fix the failing validation before approval.") {
 		t.Fatalf("expected enriched description with repair feedback, got %s", argsText)
 	}
+	if !strings.Contains(argsText, "Failure hypotheses:") || !strings.Contains(argsText, "Declared validation command exited with code 1.") {
+		t.Fatalf("expected failure hypotheses in aider-task description, got %s", argsText)
+	}
+	if !strings.Contains(argsText, "Baseline validation:") || !strings.Contains(argsText, "CLI regression reproduced before editing.") {
+		t.Fatalf("expected baseline validation evidence in aider-task description, got %s", argsText)
+	}
+	if !strings.Contains(argsText, "Patch intent:") || !strings.Contains(argsText, "internal/orchestratorgo/httpapi/objectives.go") {
+		t.Fatalf("expected patch intent in aider-task description, got %s", argsText)
+	}
+	if !strings.Contains(argsText, "Static analysis findings:") || !strings.Contains(argsText, "legacy_objectives.go") {
+		t.Fatalf("expected static analysis findings in aider-task description, got %s", argsText)
+	}
+	if !strings.Contains(argsText, "Scope correction:") || !strings.Contains(argsText, "drop the contradicted shortlist") {
+		t.Fatalf("expected scope correction guidance in aider-task description, got %s", argsText)
+	}
+	if !strings.Contains(argsText, "Planner selected paths contradicted by review:") {
+		t.Fatalf("expected explicit contradicted planner guidance in aider-task description, got %s", argsText)
+	}
+	if !strings.Contains(argsText, "Planner rejected paths still excluded: internal/orchestratorgo/httpapi/legacy_objectives.go") {
+		t.Fatalf("expected explicit rejected-scope exclusion guidance in aider-task description, got %s", argsText)
+	}
+	if !strings.Contains(argsText, "Excluded paths: internal/orchestratorgo/httpapi/legacy_objectives.go") {
+		t.Fatalf("expected excluded scope paths in aider-task description, got %s", argsText)
+	}
+	if !strings.Contains(argsText, "Retrieved precedents:") || !strings.Contains(argsText, "artifact:objective_iteration_summary:1") {
+		t.Fatalf("expected retrieved precedents in aider-task description, got %s", argsText)
+	}
+	foundCoderPacket := false
+	for _, artifact := range result.Artifacts {
+		if artifact["type"] != "coder_packet" {
+			continue
+		}
+		foundCoderPacket = true
+		content := strings.TrimSpace(asString(artifact["content_text"]))
+		if content == "" {
+			t.Fatalf("expected coder packet content, got %#v", artifact)
+		}
+		var packet map[string]any
+		if err := json.Unmarshal([]byte(content), &packet); err != nil {
+			t.Fatalf("expected coder packet JSON, got %v", err)
+		}
+		if packet["tool"] != "aider-task" {
+			t.Fatalf("expected aider-task coder packet, got %#v", packet)
+		}
+		if packet["diff_present"] != true {
+			t.Fatalf("expected coder packet diff_present=true, got %#v", packet)
+		}
+		selfCheck, _ := packet["self_check"].(map[string]any)
+		if selfCheck["diff_present"] != true {
+			t.Fatalf("expected self_check diff_present=true, got %#v", selfCheck)
+		}
+		if packet["changed_file_count"] == nil {
+			t.Fatalf("expected changed_file_count in coder packet, got %#v", packet)
+		}
+		break
+	}
+	if !foundCoderPacket {
+		t.Fatalf("expected coder_packet artifact, got %#v", result.Artifacts)
+	}
 }
 
 func TestWorkspaceExecutorReviewWorkspaceDecidesApproved(t *testing.T) {
@@ -467,6 +555,18 @@ func TestWorkspaceExecutorReviewWorkspaceDecidesApproved(t *testing.T) {
 	}
 	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
 		Metadata: map[string]any{
+			"initial_scope_hypotheses": []map[string]any{
+				{"path": "README.md", "rationale": "planner sees README as primary target", "confidence": "high"},
+			},
+			"rejected_scope_hypotheses": []map[string]any{
+				{"path": "legacy.md", "rationale": "planner rejected legacy docs path", "confidence": "low", "rejected_because": "ranked below README.md"},
+			},
+			"objective_retrieval_precedents": []map[string]any{
+				{"source_ref": "artifact:repair_plan:2", "summary": "Previous README.md repair kept the patch narrow and passed validation."},
+			},
+			"objective_patch_intent": []map[string]any{
+				{"path": "README.md", "action": "update documentation"},
+			},
 			"tool_request": map[string]any{
 				"tool":         "review_workspace",
 				"project_root": ".",
@@ -488,6 +588,38 @@ func TestWorkspaceExecutorReviewWorkspaceDecidesApproved(t *testing.T) {
 	}
 	if result.Diff == nil || !strings.Contains(*result.Diff, "updated") {
 		t.Fatalf("expected diff in review result, got %#v", result.Diff)
+	}
+	if len(result.Artifacts) == 0 {
+		t.Fatalf("expected review_packet artifact, got %#v", result.Artifacts)
+	}
+	packet := firstArtifactByType(result.Artifacts, "review_packet")
+	if packet == nil {
+		t.Fatalf("expected review_packet artifact, got %#v", result.Artifacts)
+	}
+	body := asString(packet["content_text"])
+	if !strings.Contains(body, "\"planner_scope_alignment\":\"confirmed\"") {
+		t.Fatalf("expected planner scope alignment in review packet, got %s", body)
+	}
+	if !strings.Contains(body, "\"planner_rejected_scope_alignment\":\"confirmed\"") {
+		t.Fatalf("expected planner rejected scope alignment in review packet, got %s", body)
+	}
+	if !strings.Contains(body, "\"research_scope_alignment\":\"confirmed\"") {
+		t.Fatalf("expected research scope alignment in review packet, got %s", body)
+	}
+	if !strings.Contains(body, "\"retrieval_scope_alignment\":\"confirmed\"") {
+		t.Fatalf("expected retrieval scope alignment in review packet, got %s", body)
+	}
+	if !strings.Contains(body, "artifact:repair_plan:2") {
+		t.Fatalf("expected retrieval precedent refs in review packet, got %s", body)
+	}
+	if !strings.Contains(body, "planner_scope_confirmed") {
+		t.Fatalf("expected planner_scope_confirmed finding in review packet, got %s", body)
+	}
+	if !strings.Contains(body, "planner_rejected_scope_confirmed") {
+		t.Fatalf("expected planner_rejected_scope_confirmed finding in review packet, got %s", body)
+	}
+	if !strings.Contains(body, "retrieval_scope_confirmed") {
+		t.Fatalf("expected retrieval_scope_confirmed finding in review packet, got %s", body)
 	}
 }
 
@@ -519,6 +651,204 @@ func TestWorkspaceExecutorReviewWorkspaceRequestsChangesWhenNoDiff(t *testing.T)
 	}
 	if result.ReviewDecision == nil || *result.ReviewDecision != "changes_requested" {
 		t.Fatalf("expected changes_requested review decision, got %#v", result.ReviewDecision)
+	}
+	packet := firstArtifactByType(result.Artifacts, "review_packet")
+	if packet == nil {
+		t.Fatalf("expected review_packet artifact on rejected review, got %#v", result.Artifacts)
+	}
+}
+
+func TestWorkspaceExecutorReviewWorkspaceFlagsPlannerContradiction(t *testing.T) {
+	root := initGitWorkspace(t)
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# repo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "actual.py"), []byte("updated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitInDir(t, root, "add", "README.md", "actual.py")
+	runGitInDir(t, root, "-c", "user.name=Codex", "-c", "user.email=codex@example.com", "commit", "-m", "init")
+	if err := os.WriteFile(filepath.Join(root, "actual.py"), []byte("updated again\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"initial_scope_hypotheses": []map[string]any{
+				{"path": "wrong.py", "rationale": "planner guessed wrong", "confidence": "medium"},
+			},
+			"rejected_scope_hypotheses": []map[string]any{
+				{"path": "actual.py", "rationale": "planner wrongly rejected actual.py", "confidence": "low", "rejected_because": "legacy tie-break"},
+			},
+			"objective_retrieval_precedents": []map[string]any{
+				{"source_ref": "artifact:repair_plan:9", "summary": "Previous README.md repair stayed in docs only."},
+			},
+			"objective_patch_intent": []map[string]any{
+				{"path": "actual.py", "action": "update implementation"},
+			},
+			"tool_request": map[string]any{
+				"tool":         "review_workspace",
+				"project_root": ".",
+				"test_command": []any{"python3", "-c", "print('ok')"},
+				"execution_contract": map[string]any{
+					"title": "Objective",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet := firstArtifactByType(result.Artifacts, "review_packet")
+	if packet == nil {
+		t.Fatalf("expected review_packet artifact, got %#v", result.Artifacts)
+	}
+	body := asString(packet["content_text"])
+	if !strings.Contains(body, "\"planner_scope_alignment\":\"contradicted\"") {
+		t.Fatalf("expected contradicted planner scope alignment, got %s", body)
+	}
+	if !strings.Contains(body, "\"planner_rejected_scope_alignment\":\"contradicted\"") {
+		t.Fatalf("expected planner rejected scope alignment in review packet, got %s", body)
+	}
+	if !strings.Contains(body, "\"research_scope_alignment\":\"confirmed\"") {
+		t.Fatalf("expected confirmed research scope alignment, got %s", body)
+	}
+	if !strings.Contains(body, "\"retrieval_scope_alignment\":\"contradicted\"") {
+		t.Fatalf("expected contradicted retrieval scope alignment, got %s", body)
+	}
+	if len(result.Findings) == 0 {
+		t.Fatalf("expected structured review findings, got %#v", result.Findings)
+	}
+	if asString(result.Findings[0]["kind"]) != "planner_scope_contradicted" {
+		t.Fatalf("expected planner_scope_contradicted finding, got %#v", result.Findings[0])
+	}
+	if len(result.Findings) < 2 || asString(result.Findings[1]["kind"]) != "planner_rejected_scope_contradicted" {
+		t.Fatalf("expected planner_rejected_scope_contradicted finding, got %#v", result.Findings)
+	}
+	foundRetrievalContradiction := false
+	for _, finding := range result.Findings {
+		if asString(finding["kind"]) == "retrieval_scope_contradicted" {
+			foundRetrievalContradiction = true
+			break
+		}
+	}
+	if !foundRetrievalContradiction {
+		t.Fatalf("expected retrieval_scope_contradicted finding, got %#v", result.Findings)
+	}
+}
+
+func TestWorkspaceExecutorReviewWorkspaceFlagsRejectedPlannerContradiction(t *testing.T) {
+	root := initGitWorkspace(t)
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# repo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "legacy.py"), []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitInDir(t, root, "add", "README.md", "legacy.py")
+	runGitInDir(t, root, "-c", "user.name=Codex", "-c", "user.email=codex@example.com", "commit", "-m", "init")
+	if err := os.WriteFile(filepath.Join(root, "legacy.py"), []byte("old again\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"initial_scope_hypotheses": []map[string]any{
+				{"path": "README.md", "rationale": "planner selected README", "confidence": "medium"},
+			},
+			"rejected_scope_hypotheses": []map[string]any{
+				{"path": "legacy.py", "rationale": "planner rejected legacy path", "confidence": "low", "rejected_because": "ranked below README.md"},
+			},
+			"tool_request": map[string]any{
+				"tool":         "review_workspace",
+				"project_root": ".",
+				"test_command": []any{"python3", "-c", "print('ok')"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	packet := firstArtifactByType(result.Artifacts, "review_packet")
+	if packet == nil {
+		t.Fatalf("expected review_packet artifact, got %#v", result.Artifacts)
+	}
+	body := asString(packet["content_text"])
+	if !strings.Contains(body, "\"planner_rejected_scope_alignment\":\"contradicted\"") {
+		t.Fatalf("expected contradicted rejected planner scope alignment, got %s", body)
+	}
+	found := false
+	for _, finding := range result.Findings {
+		if asString(finding["kind"]) == "planner_rejected_scope_contradicted" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected planner_rejected_scope_contradicted finding, got %#v", result.Findings)
+	}
+}
+
+func firstArtifactByType(items []map[string]any, kind string) map[string]any {
+	for _, item := range items {
+		if asString(item["type"]) == kind {
+			return item
+		}
+	}
+	return nil
+}
+
+func TestInterpretPlannerRepairFindingsPromotesRejectedChangedPaths(t *testing.T) {
+	correction := interpretPlannerRepairFindings(
+		[]map[string]any{
+			{"kind": "planner_scope_contradicted"},
+			{"kind": "planner_rejected_scope_contradicted"},
+		},
+		[]string{"internal/orchestratorgo/initiative/objectives.go"},
+		[]string{"internal/orchestratorgo/httpapi/objectives.go"},
+		[]string{"internal/orchestratorgo/httpapi/objectives.go"},
+	)
+	if correction.PlannerScopeResolution != "contradicted" {
+		t.Fatalf("expected planner scope contradiction, got %#v", correction)
+	}
+	if correction.RejectedPlannerScopeResolution != "contradicted" {
+		t.Fatalf("expected rejected planner contradiction, got %#v", correction)
+	}
+	if len(correction.PromotedRejectedPaths) != 1 || correction.PromotedRejectedPaths[0] != "internal/orchestratorgo/httpapi/objectives.go" {
+		t.Fatalf("expected rejected changed path to be promoted, got %#v", correction.PromotedRejectedPaths)
+	}
+	if len(correction.ExcludedScopePaths) != 1 || correction.ExcludedScopePaths[0] != "internal/orchestratorgo/initiative/objectives.go" {
+		t.Fatalf("expected contradicted shortlist path to be excluded, got %#v", correction.ExcludedScopePaths)
+	}
+}
+
+func TestInterpretPlannerRepairFindingsKeepsConfirmedAndExcludedPaths(t *testing.T) {
+	correction := interpretPlannerRepairFindings(
+		[]map[string]any{
+			{"kind": "planner_scope_confirmed"},
+			{"kind": "planner_rejected_scope_confirmed"},
+		},
+		[]string{"src/feature_flag.py"},
+		[]string{"src/legacy_flag.py"},
+		[]string{"src/feature_flag.py"},
+	)
+	if correction.PlannerScopeResolution != "confirmed" {
+		t.Fatalf("expected planner scope confirmation, got %#v", correction)
+	}
+	if len(correction.ConfirmedPlannerPaths) != 1 || correction.ConfirmedPlannerPaths[0] != "src/feature_flag.py" {
+		t.Fatalf("expected confirmed planner path, got %#v", correction.ConfirmedPlannerPaths)
+	}
+	if correction.RejectedPlannerScopeResolution != "confirmed" {
+		t.Fatalf("expected rejected planner scope confirmation, got %#v", correction)
+	}
+	if len(correction.ExcludedScopePaths) != 1 || correction.ExcludedScopePaths[0] != "src/legacy_flag.py" {
+		t.Fatalf("expected rejected competitor to stay excluded, got %#v", correction.ExcludedScopePaths)
 	}
 }
 
@@ -552,12 +882,37 @@ func TestWorkspaceExecutorResearchProjectBuildsRepairPlan(t *testing.T) {
 				},
 				"prior_findings": []any{
 					map[string]any{"severity": "high", "message": "Validation still fails in the objective loop."},
+					map[string]any{"kind": "planner_scope_contradicted", "severity": "medium", "message": "The observed diff contradicts the planner shortlist."},
+					map[string]any{"kind": "planner_rejected_scope_contradicted", "severity": "medium", "message": "The observed diff landed in a path the planner rejected."},
 				},
 				"prior_test_results": map[string]any{
 					"exit_code": 1,
 				},
 				"prior_changed_files": []any{"internal/orchestratorgo/httpapi/objectives.go"},
 				"repair_feedback":     "Narrow the patch and keep validation green.",
+				"initial_scope_hypotheses": []any{
+					map[string]any{"path": "internal/orchestratorgo/initiative/objectives.go"},
+				},
+				"rejected_scope_hypotheses": []any{
+					map[string]any{"path": "internal/orchestratorgo/httpapi/objectives.go"},
+				},
+				"patch_intent": []any{
+					map[string]any{"path": "internal/orchestratorgo/initiative/objectives.go", "action": "retry the original shortlist"},
+				},
+			},
+			"context_package": map[string]any{
+				"chunks": []any{
+					map[string]any{
+						"source_ref":    "artifact:repair_plan:1",
+						"source_type":   "artifact",
+						"source_id":     "repair-plan-1",
+						"content_text":  "Previous repair narrowed scope to objectives.go and passed after focusing on the failed validation path.",
+						"initiative_id": "initiative-prior",
+						"task_id":       "task-prior",
+						"artifact_id":   "artifact-prior",
+						"score":         0.91,
+					},
+				},
 			},
 		},
 	})
@@ -573,6 +928,65 @@ func TestWorkspaceExecutorResearchProjectBuildsRepairPlan(t *testing.T) {
 	if result.Stdout == nil || !strings.Contains(*result.Stdout, "\"next_edit_brief\"") {
 		t.Fatalf("expected next_edit_brief in research output, got %#v", result.Stdout)
 	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(*result.Stdout), &payload); err != nil {
+		t.Fatalf("expected valid research payload json: %v", err)
+	}
+	patchIntent, ok := payload["patch_intent"].([]any)
+	if !ok || len(patchIntent) == 0 {
+		t.Fatalf("expected patch_intent entries, got %#v", payload["patch_intent"])
+	}
+	firstIntent, ok := patchIntent[0].(map[string]any)
+	if !ok || asString(firstIntent["path"]) != "internal/orchestratorgo/httpapi/objectives.go" {
+		t.Fatalf("expected patch intent for changed file, got %#v", patchIntent[0])
+	}
+	if asString(firstIntent["failure_mode"]) != "validation_failure" {
+		t.Fatalf("expected validation_failure patch intent, got %#v", firstIntent)
+	}
+	if asString(firstIntent["cause_category"]) != "edit_landed_in_rejected_path" {
+		t.Fatalf("expected rejected-path cause category, got %#v", firstIntent)
+	}
+	hypotheses, ok := payload["failure_hypotheses"].([]any)
+	if !ok || len(hypotheses) == 0 {
+		t.Fatalf("expected failure_hypotheses entries, got %#v", payload["failure_hypotheses"])
+	}
+	firstHypothesis, ok := hypotheses[0].(map[string]any)
+	if !ok || asString(firstHypothesis["path"]) != "internal/orchestratorgo/httpapi/objectives.go" {
+		t.Fatalf("expected first hypothesis to target changed file, got %#v", hypotheses[0])
+	}
+	if asString(firstHypothesis["failure_mode"]) != "validation_failure" {
+		t.Fatalf("expected validation_failure hypothesis, got %#v", firstHypothesis)
+	}
+	if asString(firstHypothesis["priority"]) != "high" {
+		t.Fatalf("expected high-priority hypothesis, got %#v", firstHypothesis)
+	}
+	if asString(payload["planner_scope_resolution"]) != "contradicted" {
+		t.Fatalf("expected contradicted planner scope resolution, got %#v", payload["planner_scope_resolution"])
+	}
+	if asString(payload["planner_rejected_scope_resolution"]) != "contradicted" {
+		t.Fatalf("expected contradicted rejected planner scope resolution, got %#v", payload["planner_rejected_scope_resolution"])
+	}
+	excluded, ok := payload["excluded_scope_paths"].([]any)
+	if !ok || len(excluded) == 0 || asString(excluded[0]) != "internal/orchestratorgo/initiative/objectives.go" {
+		t.Fatalf("expected excluded contradicted shortlist path, got %#v", payload["excluded_scope_paths"])
+	}
+	if !strings.Contains(asString(payload["scope_correction_reason"]), "promote rejected paths") {
+		t.Fatalf("expected scope correction reason, got %#v", payload["scope_correction_reason"])
+	}
+	if brief := asString(payload["next_edit_brief"]); !strings.Contains(brief, "Excluded paths for next attempt: internal/orchestratorgo/initiative/objectives.go") {
+		t.Fatalf("expected next_edit_brief to mention excluded scope, got %q", brief)
+	}
+	precedents, ok := payload["retrieval_precedents"].([]any)
+	if !ok || len(precedents) == 0 {
+		t.Fatalf("expected retrieval_precedents in repair payload, got %#v", payload["retrieval_precedents"])
+	}
+	firstPrecedent, _ := precedents[0].(map[string]any)
+	if asString(firstPrecedent["source_ref"]) != "artifact:repair_plan:1" {
+		t.Fatalf("expected retrieval precedent source_ref, got %#v", firstPrecedent)
+	}
+	if !strings.Contains(asString(payload["next_edit_brief"]), "artifact:repair_plan:1") {
+		t.Fatalf("expected next_edit_brief to cite retrieval precedent, got %q", asString(payload["next_edit_brief"]))
+	}
 	foundRepairPlan := false
 	for _, artifact := range result.Artifacts {
 		if artifact["type"] == "repair_plan" {
@@ -582,6 +996,255 @@ func TestWorkspaceExecutorResearchProjectBuildsRepairPlan(t *testing.T) {
 	}
 	if !foundRepairPlan {
 		t.Fatalf("expected repair_plan artifact, got %#v", result.Artifacts)
+	}
+}
+
+func TestRecommendResearchScopePathsPrioritizesPlannerCorrections(t *testing.T) {
+	scope := recommendResearchScopePaths(
+		"Fix the objective repair loop",
+		plannerRepairScopeCorrection{
+			PlannerScopeResolution:         "confirmed",
+			RejectedPlannerScopeResolution: "contradicted",
+			ConfirmedPlannerPaths:          []string{"internal/orchestratorgo/bridge/executor.go"},
+			PromotedRejectedPaths:          []string{"internal/orchestratorgo/httpapi/objectives.go"},
+			ExcludedScopePaths:             []string{"internal/orchestratorgo/initiative/objectives.go"},
+		},
+		[]string{"internal/orchestratorgo/httpapi/objectives.go", "internal/orchestratorgo/initiative/objectives.go"},
+		[]string{"internal/orchestratorgo/initiative/objectives.go"},
+		[]string{"README.md"},
+		[]string{"internal/orchestratorgo/httpapi/objectives.go", "internal/orchestratorgo/bridge/executor.go", "README.md"},
+		"",
+	)
+
+	if len(scope) < 3 {
+		t.Fatalf("expected prioritized scope paths, got %#v", scope)
+	}
+	if scope[0] != "internal/orchestratorgo/httpapi/objectives.go" {
+		t.Fatalf("expected promoted rejected path to lead scope, got %#v", scope)
+	}
+	if scope[1] != "internal/orchestratorgo/bridge/executor.go" {
+		t.Fatalf("expected confirmed planner path to remain high priority, got %#v", scope)
+	}
+	if containsString(scope, "internal/orchestratorgo/initiative/objectives.go") {
+		t.Fatalf("expected excluded contradicted shortlist path to be removed, got %#v", scope)
+	}
+}
+
+func TestInterpretPlannerRepairFindingsKeepsRejectedExclusionsConfirmed(t *testing.T) {
+	correction := interpretPlannerRepairFindings(
+		[]map[string]any{
+			{"kind": "planner_scope_confirmed"},
+			{"kind": "planner_rejected_scope_confirmed"},
+		},
+		[]string{"internal/orchestratorgo/bridge/executor.go"},
+		[]string{"internal/orchestratorgo/httpapi/legacy_objectives.go"},
+		[]string{"internal/orchestratorgo/bridge/executor.go"},
+	)
+
+	if correction.PlannerScopeResolution != "confirmed" {
+		t.Fatalf("expected confirmed planner resolution, got %#v", correction)
+	}
+	if correction.RejectedPlannerScopeResolution != "confirmed" {
+		t.Fatalf("expected confirmed rejected-scope resolution, got %#v", correction)
+	}
+	if len(correction.ConfirmedPlannerPaths) != 1 || correction.ConfirmedPlannerPaths[0] != "internal/orchestratorgo/bridge/executor.go" {
+		t.Fatalf("expected confirmed planner path, got %#v", correction.ConfirmedPlannerPaths)
+	}
+	if len(correction.ExcludedScopePaths) != 1 || correction.ExcludedScopePaths[0] != "internal/orchestratorgo/httpapi/legacy_objectives.go" {
+		t.Fatalf("expected rejected path to remain excluded, got %#v", correction.ExcludedScopePaths)
+	}
+	if !strings.Contains(correction.ScopeCorrectionReason, "keep planner-rejected competitor paths excluded") {
+		t.Fatalf("expected exclusion reason, got %q", correction.ScopeCorrectionReason)
+	}
+}
+
+func TestBuildRepairEditBriefExplicitlyCallsOutPlannerResolution(t *testing.T) {
+	brief := buildRepairEditBrief(
+		"Repair the objective flow",
+		"Keep the patch narrow.",
+		[]map[string]any{
+			{"kind": "planner_scope_contradicted", "severity": "medium", "message": "Planner shortlist missed the changed file."},
+			{"kind": "planner_rejected_scope_confirmed", "severity": "info", "message": "Legacy file stayed untouched."},
+		},
+		map[string]any{"exit_code": 1},
+		[]string{"internal/orchestratorgo/httpapi/objectives.go"},
+		[]map[string]any{
+			{
+				"path":           "internal/orchestratorgo/httpapi/objectives.go",
+				"failure_mode":   "validation_failure",
+				"priority":       "high",
+				"cause_category": "bad_edit_against_good_shortlist",
+				"evidence":       "Validation still fails in the corrected scope.",
+			},
+		},
+		[]map[string]any{
+			{
+				"path":   "internal/orchestratorgo/httpapi/objectives.go",
+				"action": "repair the validation failure in this file first",
+			},
+		},
+		plannerRepairScopeCorrection{
+			PlannerScopeResolution:         "contradicted",
+			RejectedPlannerScopeResolution: "confirmed",
+			ConfirmedPlannerPaths:          []string{"internal/orchestratorgo/httpapi/objectives.go"},
+			ExcludedScopePaths:             []string{"internal/orchestratorgo/httpapi/legacy_objectives.go"},
+			ScopeCorrectionReason:          "drop the contradicted shortlist and keep the rejected competitor excluded",
+		},
+		nil,
+	)
+
+	if !strings.Contains(brief, "Planner confirmed paths: internal/orchestratorgo/httpapi/objectives.go") {
+		t.Fatalf("expected explicit confirmed planner section, got %q", brief)
+	}
+	if !strings.Contains(brief, "Planner selected paths contradicted by review:") {
+		t.Fatalf("expected explicit contradicted planner section, got %q", brief)
+	}
+	if !strings.Contains(brief, "Planner rejected paths still excluded: internal/orchestratorgo/httpapi/legacy_objectives.go") {
+		t.Fatalf("expected explicit rejected exclusion section, got %q", brief)
+	}
+	if !strings.Contains(brief, "Excluded paths for next attempt: internal/orchestratorgo/httpapi/legacy_objectives.go") {
+		t.Fatalf("expected excluded scope paths in brief, got %q", brief)
+	}
+}
+
+func TestWorkspaceExecutorResearchProjectInfersScopeFromReadmeEvidence(t *testing.T) {
+	root := initGitWorkspace(t)
+	projectDir := filepath.Join(root, "projects", "readme-scope-demo")
+	if err := os.MkdirAll(filepath.Join(projectDir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	readme := "# readme-scope-demo\n\nThe objective toggle is implemented in src/switchboard.py.\n"
+	if err := os.WriteFile(filepath.Join(projectDir, "README.md"), []byte(readme), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "src", "switchboard.py"), []byte("ENABLED = False\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"tool_request": map[string]any{
+				"tool": "research_project",
+				"project_request": map[string]any{
+					"project_name":     "readme-scope-demo",
+					"project_root":     "projects/readme-scope-demo",
+					"project_type":     "existing_repo",
+					"runtime_or_stack": "python",
+					"goal":             "Enable the objective toggle cleanly for the autonomous flow.",
+					"test_focus":       "initial objective scope inference",
+				},
+				"expected_files": []any{"README.md", "PASS"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" || result.Stdout == nil {
+		t.Fatalf("unexpected research result: %#v", result)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(*result.Stdout), &payload); err != nil {
+		t.Fatalf("expected valid research payload json: %v", err)
+	}
+	scope, ok := payload["recommended_scope_paths"].([]any)
+	if !ok || len(scope) == 0 {
+		t.Fatalf("expected recommended_scope_paths, got %#v", payload["recommended_scope_paths"])
+	}
+	if asString(scope[0]) != "src/switchboard.py" {
+		t.Fatalf("expected README-derived primary scope, got %#v", scope)
+	}
+	if brief := asString(payload["next_edit_brief"]); !strings.Contains(brief, "src/switchboard.py") {
+		t.Fatalf("expected next_edit_brief to mention README-derived file, got %q", brief)
+	}
+}
+
+func TestWorkspaceExecutorResearchProjectReadmeDisambiguatesCompetingFiles(t *testing.T) {
+	root := initGitWorkspace(t)
+	projectDir := filepath.Join(root, "projects", "readme-ambiguity-demo")
+	if err := os.MkdirAll(filepath.Join(projectDir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	readme := "# readme-ambiguity-demo\n\nThe current objective toggle lives in switchboard.py.\nfeature_toggle.py is legacy and should not be the first target.\n"
+	if err := os.WriteFile(filepath.Join(projectDir, "README.md"), []byte(readme), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "src", "switchboard.py"), []byte("ENABLED = False\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "src", "feature_toggle.py"), []byte("LEGACY = True\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"tool_request": map[string]any{
+				"tool": "research_project",
+				"project_request": map[string]any{
+					"project_name":     "readme-ambiguity-demo",
+					"project_root":     "projects/readme-ambiguity-demo",
+					"project_type":     "existing_repo",
+					"runtime_or_stack": "python",
+					"goal":             "Enable the objective toggle cleanly for the autonomous flow.",
+					"test_focus":       "ambiguous initial objective scope inference",
+				},
+				"expected_files": []any{"README.md", "PASS"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" || result.Stdout == nil {
+		t.Fatalf("unexpected research result: %#v", result)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(*result.Stdout), &payload); err != nil {
+		t.Fatalf("expected valid research payload json: %v", err)
+	}
+	scope, ok := payload["recommended_scope_paths"].([]any)
+	if !ok || len(scope) < 2 {
+		t.Fatalf("expected ranked recommended_scope_paths, got %#v", payload["recommended_scope_paths"])
+	}
+	if asString(scope[0]) != "src/switchboard.py" {
+		t.Fatalf("expected README to rank current file first, got %#v", scope)
+	}
+	if asString(scope[1]) == "src/switchboard.py" {
+		t.Fatalf("expected competing file after primary scope, got %#v", scope)
+	}
+}
+
+func TestWorkspaceExecutorRunTestsProducesStructuredFindings(t *testing.T) {
+	root := t.TempDir()
+	executor, err := NewWorkspaceExecutor(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := executor.Execute(context.Background(), domain.LocalBridgeTaskClaimResponse{
+		Metadata: map[string]any{
+			"tool_request": map[string]any{
+				"tool": "run_tests",
+				"argv": []string{"python3", "-c", "import sys; sys.exit(1)"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "error" {
+		t.Fatalf("expected error result, got %#v", result)
+	}
+	if len(result.Findings) != 1 {
+		t.Fatalf("expected one structured finding, got %#v", result.Findings)
+	}
+	if asString(result.Findings[0]["kind"]) != "validation_failure" {
+		t.Fatalf("expected validation_failure finding, got %#v", result.Findings[0])
 	}
 }
 

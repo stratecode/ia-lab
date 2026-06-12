@@ -345,8 +345,8 @@
       StandardOutput=append:/var/log/llama-cpp/{{ item.service_name }}.log
       StandardError=append:/var/log/llama-cpp/{{ item.service_name }}.log
       ExecStart={{ llama_cpp_build_dir }}/bin/llama-server \
-        --host {% if cognitive_gateway_enabled | default(false) and not (item.embedding_mode | default(false)) %}127.0.0.1{% else %}0.0.0.0{% endif %} \
-        --port {% if cognitive_gateway_enabled | default(false) and not (item.embedding_mode | default(false)) %}{{ item.port | int + cognitive_gateway_backend_port_offset | int }}{% else %}{{ item.port }}{% endif %} \
+        --host 0.0.0.0 \
+        --port {{ item.port }} \
         --alias {{ item.alias }} \
         --hf-repo {{ item.hf_repo }} \
         -c {{ item.ctx_size }} \
@@ -404,7 +404,7 @@
 
 - name: Wait for llama.cpp instance API
   ansible.builtin.uri:
-    url: "http://127.0.0.1:{% if cognitive_gateway_enabled | default(false) and not (item.embedding_mode | default(false)) %}{{ item.port | int + cognitive_gateway_backend_port_offset | int }}{% else %}{{ item.port }}{% endif %}/v1/models"
+    url: "http://127.0.0.1:{{ item.port }}/v1/models"
     return_content: true
     headers:
       Authorization: "Bearer {{ item.api_key }}"

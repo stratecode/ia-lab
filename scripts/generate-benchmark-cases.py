@@ -154,14 +154,6 @@ SEQUENCE_OVERRIDES = {
     "serde": {"benchmark_league": "repo_recall", "sequence_id": "repo_recall_rust", "sequence_position": 1},
 }
 
-LEAGUE_STRATEGIES = {
-    "repo_recall": "repo_specific_first",
-    "technology_transfer": "technology_first",
-    "pattern_transfer": "pattern_first",
-    "negative_transfer": "semantic_only",
-}
-
-
 def analyze_profile(repo_profile: str, runtime: str) -> dict:
     tokens = [token for token in (repo_profile or "").strip().lower().split("_") if token]
     framework = "library"
@@ -195,17 +187,14 @@ def sequence_metadata(repo_id: str, repo_profile: str, runtime: str, memory_shap
         league = "repo_recall"
         sequence_id = f"repo_recall_{runtime}_{repo_id}"
         sequence_position = 1
-    strategy = LEAGUE_STRATEGIES[league]
     if league == "pattern_transfer" and memory_shape["problem_domain"] not in {"http_client", "cli", "json", "data_validation"}:
         league = "technology_transfer"
         sequence_id = f"technology_transfer_{runtime}_{repo_id}"
         sequence_position = 1
-        strategy = LEAGUE_STRATEGIES[league]
     return {
         "benchmark_league": league,
         "sequence_id": sequence_id,
         "sequence_position": sequence_position,
-        "benchmark_memory_strategy": strategy,
     }
 
 

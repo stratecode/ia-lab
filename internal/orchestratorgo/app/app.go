@@ -10,12 +10,10 @@ import (
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilitybroker"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
-	"github.com/stratecode/lab/internal/orchestratorgo/contextbuilder"
 	"github.com/stratecode/lab/internal/orchestratorgo/httpapi"
 	"github.com/stratecode/lab/internal/orchestratorgo/initiative"
 	"github.com/stratecode/lab/internal/orchestratorgo/logging"
 	"github.com/stratecode/lab/internal/orchestratorgo/research"
-	"github.com/stratecode/lab/internal/orchestratorgo/semantic"
 	"github.com/stratecode/lab/internal/orchestratorgo/store"
 	"github.com/stratecode/lab/internal/orchestratorgo/telegram"
 	"github.com/stratecode/lab/internal/orchestratorgo/worker"
@@ -28,7 +26,6 @@ type Runtime struct {
 	Redis    *store.RedisStore
 	Worker   *worker.RuntimeWorker
 	Research *research.Service
-	Semantic *semantic.Service
 	Bot      *telegram.Bot
 	SafeMode *httpapi.SafeModeState
 }
@@ -71,10 +68,7 @@ func New() (*Runtime, error) {
 		UtilityTimeoutSeconds: cfg.LlamaTimeoutSeconds,
 	})
 	initiativeService := initiative.New(cfg, researchService)
-	semanticService := semantic.New(cfg, postgres)
-	semanticIndexer := semantic.NewIndexer(semanticService, postgres)
-	contextBuilderService := contextbuilder.New(cfg, semanticService, postgres)
-	runtimeWorker := worker.New(cfg, postgres, redisStore, researchService, contextBuilderService, semanticIndexer)
+	runtimeWorker := worker.New(cfg, postgres, redisStore, researchService)
 	safeMode := httpapi.NewSafeModeState(cfg.SafeMode)
 	server := &httpapi.Server{
 		Config:          cfg,
@@ -83,9 +77,6 @@ func New() (*Runtime, error) {
 		Research:        researchService,
 		Initiatives:     initiativeService,
 		Capabilities:    capabilityClient,
-		Semantic:        semanticService,
-		SemanticIndexer: semanticIndexer,
-		ContextBuilder:  contextBuilderService,
 		SafeMode:        safeMode,
 		Now:             time.Now,
 		Version:         "0.1.0-go-runtime",
@@ -145,7 +136,6 @@ func New() (*Runtime, error) {
 		Redis:    redisStore,
 		Worker:   runtimeWorker,
 		Research: researchService,
-		Semantic: semanticService,
 		Bot:      bot,
 		SafeMode: safeMode,
 	}, nil

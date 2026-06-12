@@ -226,9 +226,7 @@ It is a cockpit, not a shrine to terminal aesthetics.
 
 ## Official benchmark path
 
-The canonical benchmark path is:
-
-- [scripts/benchmark-context-memory.sh](/Users/fran.lopez/Development/StrateCode/lab/scripts/benchmark-context-memory.sh)
+The canonical benchmark path is the orchestrator's current objective/initiative harness and regression scripts.
 
 That harness is expected to:
 
@@ -313,7 +311,7 @@ A result is contaminated when:
 
 - the harness silently falls back to a generic flow
 - a transfer league improves because it reused same-repo memory
-- a negative-transfer case improves because unrelated semantic hits leaked in
+- a negative-transfer case improves because unrelated prior-case artifacts leaked in
 - the run is only reproducible through a side runner or one-off script
 
 ### TUI keybindings
@@ -632,7 +630,6 @@ The bridge is considered healthy when all of these pass:
 Current defaults and operational notes:
 
 - official `agent_maturity` campaigns now default to `runs_per_case=3`
-- `planner` and `reviewer` can consume reusable semantic experience outside benchmark-only flows when repo memory scope is available
 - `researcher` now carries governed read-oriented capability intent (`web.search`, `web.fetch`, `document.read`) in deterministic repo workflows
 - `reviewer` now carries governed `code.analysis` intent and `review_project` can attach a code-analysis artifact during validation
 - `coder` can now use governed filesystem aliases (`filesystem.read`, `filesystem.list`, `filesystem.write`) with workspace-root scope and explicit `allowed_capabilities`

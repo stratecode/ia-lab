@@ -118,12 +118,22 @@ type InitiativeExecutionPolicyResponse struct {
 	ApprovalRequiredModes []string `json:"approval_required_modes"`
 }
 
+type InitiativeObjectiveRuntimeViewResponse struct {
+	LatestStatusSnapshot          *ObjectiveStatusSnapshot `json:"latest_status_snapshot,omitempty"`
+	LatestCoderPacket             *ArtifactResponse        `json:"latest_coder_packet,omitempty"`
+	LatestReviewPacket            *ArtifactResponse        `json:"latest_review_packet,omitempty"`
+	LatestRepairSignal            *ArtifactResponse        `json:"latest_repair_signal,omitempty"`
+	LatestRetrievalPacket         *ArtifactResponse        `json:"latest_retrieval_packet,omitempty"`
+	LatestPlanningRetrievalPacket *ArtifactResponse        `json:"latest_planning_retrieval_packet,omitempty"`
+}
+
 type InitiativeDetailResponse struct {
-	Initiative       *InitiativeResponse                `json:"initiative"`
-	Reviews          []InitiativePhaseReviewResponse    `json:"reviews"`
-	Histories        []InitiativePhaseHistoryResponse   `json:"histories"`
-	ExecutionSummary InitiativeExecutionSummaryResponse `json:"execution_summary"`
-	ExecutionPolicy  InitiativeExecutionPolicyResponse  `json:"execution_policy"`
+	Initiative       *InitiativeResponse                     `json:"initiative"`
+	Reviews          []InitiativePhaseReviewResponse         `json:"reviews"`
+	Histories        []InitiativePhaseHistoryResponse        `json:"histories"`
+	ExecutionSummary InitiativeExecutionSummaryResponse      `json:"execution_summary"`
+	ExecutionPolicy  InitiativeExecutionPolicyResponse       `json:"execution_policy"`
+	ObjectiveRuntime *InitiativeObjectiveRuntimeViewResponse `json:"objective_runtime,omitempty"`
 }
 
 type InitiativeArtifactsResponse struct {

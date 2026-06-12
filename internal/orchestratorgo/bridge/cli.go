@@ -14,19 +14,20 @@ import (
 )
 
 type CLIOptions struct {
-	BaseURL           string
-	APIKey            string
-	BridgeID          string
-	WorkspaceRoot     string
-	Name              string
-	Hostname          string
-	PollInterval      time.Duration
-	HeartbeatInterval time.Duration
-	ObjectiveTitle    string
-	Objective         string
-	CreatedBy         string
-	ApprovalMode      string
-	WaitTimeout       time.Duration
+	BaseURL             string
+	APIKey              string
+	BridgeID            string
+	WorkspaceRoot       string
+	Name                string
+	Hostname            string
+	PollInterval        time.Duration
+	HeartbeatInterval   time.Duration
+	ObjectiveTitle      string
+	Objective           string
+	CreatedBy           string
+	ApprovalMode        string
+	ObjectiveTimeBudget time.Duration
+	WaitTimeout         time.Duration
 }
 
 func RunRegister(ctx context.Context, opts CLIOptions) error {

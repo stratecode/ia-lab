@@ -54,16 +54,6 @@ type Config struct {
 	LlamaCodeBaseURL            string
 	LlamaCodeAPIKey             string
 	LlamaTimeoutSeconds         int
-	SemanticEnabled             bool
-	SemanticEmbeddingBaseURL    string
-	SemanticEmbeddingAPIKey     string
-	SemanticEmbeddingModel      string
-	SemanticEmbeddingDimensions int
-	SemanticChunkMaxChars       int
-	SemanticChunkOverlapChars   int
-	SemanticMaxChunksPerSource  int
-	SemanticContextMaxChunks    int
-	SemanticContextMaxChars     int
 	AiderTaskPath               string
 	AiderTimeoutSeconds         int
 	DefaultGitBranch            string
@@ -122,16 +112,6 @@ func Load() (Config, error) {
 		LlamaCodeBaseURL:            getString(k, "lab.llama.code.base.url", "http://127.0.0.1:8080/v1"),
 		LlamaCodeAPIKey:             getString(k, "lab.llama.code.api.key", "local-code"),
 		LlamaTimeoutSeconds:         getInt(k, "lab.llama.timeout.seconds", 90),
-		SemanticEnabled:             getBool(k, "lab.semantic.enabled", true),
-		SemanticEmbeddingBaseURL:    getString(k, "lab.semantic.embedding.base.url", "http://127.0.0.1:8084/v1"),
-		SemanticEmbeddingAPIKey:     getString(k, "lab.semantic.embedding.api.key", "local-embeddings"),
-		SemanticEmbeddingModel:      getString(k, "lab.semantic.embedding.model", "embeddings"),
-		SemanticEmbeddingDimensions: getInt(k, "lab.semantic.embedding.dimensions", 1024),
-		SemanticChunkMaxChars:       getInt(k, "lab.semantic.chunk.max.chars", 900),
-		SemanticChunkOverlapChars:   getInt(k, "lab.semantic.chunk.overlap.chars", 120),
-		SemanticMaxChunksPerSource:  getInt(k, "lab.semantic.max.chunks.per.source", 64),
-		SemanticContextMaxChunks:    getInt(k, "lab.semantic.context.max.chunks", 8),
-		SemanticContextMaxChars:     getInt(k, "lab.semantic.context.max.chars", 12000),
 		AiderTaskPath:               getString(k, "lab.aider.task.path", "/usr/local/bin/aider-task"),
 		AiderTimeoutSeconds:         getInt(k, "lab.aider.timeout.seconds", 1800),
 		DefaultGitBranch:            getString(k, "lab.aider.default.branch", "main"),

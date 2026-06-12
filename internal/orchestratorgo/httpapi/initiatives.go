@@ -118,6 +118,7 @@ func (s *Server) getInitiative(w http.ResponseWriter, r *http.Request) {
 		Histories:        buildInitiativePhaseHistories(item, reviews, artifacts),
 		ExecutionSummary: buildInitiativeExecutionSummary(item, tasks),
 		ExecutionPolicy:  buildInitiativeExecutionPolicy(s.Config.WorkspaceRoot, item.WorkspaceRoot),
+		ObjectiveRuntime: buildInitiativeObjectiveRuntimeView(artifacts),
 	})
 }
 
@@ -548,35 +549,6 @@ func (s *Server) launchInitiativeTasks(w http.ResponseWriter, r *http.Request) {
 		if err := s.Postgres.UpdateTaskLaunchMode(r.Context(), link.TaskID, mode); err != nil {
 			writeDetail(w, http.StatusInternalServerError, err.Error())
 			return
-		}
-		if s.ContextBuilder != nil {
-			task, err := s.Postgres.GetTask(r.Context(), link.TaskID)
-			if err != nil {
-				writeDetail(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			if task != nil {
-				contextPackage, err := s.ContextBuilder.BuildForTask(r.Context(), task)
-				if err != nil {
-					log.Warn().
-						Err(err).
-						Str("initiative_id", item.ID).
-						Str("task_id", link.TaskID).
-						Msg("failed to build task context; launching without semantic context")
-					if patchErr := s.Postgres.PatchTaskMetadata(r.Context(), link.TaskID, map[string]any{
-						"context_build_error": err.Error(),
-					}); patchErr != nil {
-						writeDetail(w, http.StatusInternalServerError, patchErr.Error())
-						return
-					}
-				}
-				if contextPackage != nil && len(contextPackage.Chunks) > 0 {
-					if err := s.Postgres.PatchTaskMetadata(r.Context(), link.TaskID, map[string]any{"context_package": contextPackage}); err != nil {
-						writeDetail(w, http.StatusInternalServerError, err.Error())
-						return
-					}
-				}
-			}
 		}
 		if mode == domain.TaskLaunchModeManual {
 			continue
@@ -1072,6 +1044,89 @@ func buildInitiativeExecutionSummary(item *domain.InitiativeResponse, tasks []do
 		}
 	}
 	return summary
+}
+
+func buildInitiativeObjectiveRuntimeView(artifacts []domain.ArtifactResponse) *domain.InitiativeObjectiveRuntimeViewResponse {
+	if len(artifacts) == 0 {
+		return nil
+	}
+	view := &domain.InitiativeObjectiveRuntimeViewResponse{}
+	var latestStatusCreatedAt time.Time
+	for _, artifact := range artifacts {
+		switch artifact.ArtifactType {
+		case "objective_status_snapshot":
+			if artifact.ContentText == nil {
+				continue
+			}
+			var snapshot domain.ObjectiveStatusSnapshot
+			if err := json.Unmarshal([]byte(*artifact.ContentText), &snapshot); err != nil {
+				continue
+			}
+			if view.LatestStatusSnapshot == nil || initiativeObjectiveSnapshotPrecedes(*view.LatestStatusSnapshot, latestStatusCreatedAt, snapshot, artifact.CreatedAt) {
+				candidate := snapshot
+				view.LatestStatusSnapshot = &candidate
+				latestStatusCreatedAt = artifact.CreatedAt
+			}
+		case "coder_packet":
+			view.LatestCoderPacket = latestArtifactByCreatedAt(view.LatestCoderPacket, artifact)
+		case "review_packet":
+			view.LatestReviewPacket = latestArtifactByCreatedAt(view.LatestReviewPacket, artifact)
+		case "objective_repair_signal":
+			view.LatestRepairSignal = latestArtifactByCreatedAt(view.LatestRepairSignal, artifact)
+		case "retrieval_packet":
+			view.LatestRetrievalPacket = latestArtifactByCreatedAt(view.LatestRetrievalPacket, artifact)
+		case "planning_retrieval_packet":
+			view.LatestPlanningRetrievalPacket = latestArtifactByCreatedAt(view.LatestPlanningRetrievalPacket, artifact)
+		}
+	}
+	if view.LatestStatusSnapshot == nil &&
+		view.LatestCoderPacket == nil &&
+		view.LatestReviewPacket == nil &&
+		view.LatestRepairSignal == nil &&
+		view.LatestRetrievalPacket == nil &&
+		view.LatestPlanningRetrievalPacket == nil {
+		return nil
+	}
+	return view
+}
+
+func latestArtifactByCreatedAt(current *domain.ArtifactResponse, candidate domain.ArtifactResponse) *domain.ArtifactResponse {
+	if current == nil || candidate.CreatedAt.After(current.CreatedAt) {
+		copy := candidate
+		return &copy
+	}
+	return current
+}
+
+func initiativeObjectiveSnapshotPrecedes(current domain.ObjectiveStatusSnapshot, currentCreatedAt time.Time, candidate domain.ObjectiveStatusSnapshot, candidateCreatedAt time.Time) bool {
+	if candidate.Iteration != current.Iteration {
+		return candidate.Iteration > current.Iteration
+	}
+	currentRank := initiativeObjectiveSnapshotRank(current)
+	candidateRank := initiativeObjectiveSnapshotRank(candidate)
+	if candidateRank != currentRank {
+		return candidateRank > currentRank
+	}
+	return candidateCreatedAt.After(currentCreatedAt)
+}
+
+func initiativeObjectiveSnapshotRank(snapshot domain.ObjectiveStatusSnapshot) int {
+	switch snapshot.WorkItemKind {
+	case string(domain.WorkItemKindReview):
+		return 6
+	case string(domain.WorkItemKindValidate):
+		return 5
+	case string(domain.WorkItemKindEdit):
+		return 4
+	case string(domain.WorkItemKindAnalyze):
+		return 3
+	case string(domain.WorkItemKindReplan):
+		return 2
+	case string(domain.WorkItemKindResearch):
+		return 1
+	default:
+		return 0
+	}
 }
 
 func deriveInitiativeExecutionStatusHTTP(current domain.InitiativeStatus, items []domain.InitiativeTaskLinkResponse) domain.InitiativeStatus {

@@ -28,14 +28,12 @@
   "patch_target": ".lab/repo-workflow-marker.txt",
   "write_content": "pydantic benchmark marker\n",
   "coder_summary": "Write a deterministic benchmark marker file before repository review.",
-  "benchmark_memory_strategy": "semantic_only",
   "benchmark_league": "negative_transfer",
   "sequence_id": "negative_transfer_pydantic",
   "sequence_position": 1,
   "memory_expectation": "avoid_transfer",
   "forbidden_match_types": [
     "technology_similar",
-    "pattern_similar",
-    "semantic_related"
+    "pattern_similar"
   ]
 }
