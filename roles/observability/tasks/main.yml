@@ -74,13 +74,13 @@
                 summary: High CPU usage
                 description: CPU usage is above 85% for more than 10 minutes.
 
-            - alert: HighMemoryUsage
+            - alert: HostMemoryHigh
               expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
               for: 10m
               labels:
                 severity: warning
               annotations:
-                summary: High memory usage
+                summary: Host memory usage is high
                 description: Memory usage is above 90% for more than 10 minutes.
 
             - alert: RootFilesystemHighUsage
@@ -110,23 +110,59 @@
                 summary: Host temperature is high
                 description: A hardware sensor is reporting above 80C.
 
-            - alert: OrchestratorPostgresBackupFailed
-              expr: orchestrator_pg_backup_validation_failed{job="orchestrator"} == 1
-              for: 10m
+            - alert: CodexGatewayDown
+              expr: up{job="codex-local-gateway"} == 0
+              for: 2m
               labels:
                 severity: critical
               annotations:
-                summary: Orchestrator PostgreSQL backup validation failed
-                description: The last orchestrator backup could not be validated with pg_restore --list.
+                summary: Codex local gateway is down
+                description: Prometheus cannot scrape the Codex local gateway.
 
-            - alert: OrchestratorPostgresBackupStale
-              expr: time() - orchestrator_pg_backup_last_success_timestamp_seconds{job="orchestrator"} > 93600
-              for: 15m
+            - alert: LlamaCppDown
+              expr: up{job="llama-cpp-code"} == 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: llama.cpp code server is down
+                description: Prometheus cannot scrape llama-cpp-code.
+
+            - alert: CodexGatewayHighErrorRate
+              expr: sum(rate(codex_gateway_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(codex_gateway_requests_total[5m])), 1) > 0.10
+              for: 5m
               labels:
                 severity: warning
               annotations:
-                summary: Orchestrator PostgreSQL backup is stale
-                description: No successful orchestrator PostgreSQL backup has been recorded in the last 26 hours.
+                summary: Codex gateway error rate is high
+                description: More than 10% of Codex gateway requests are failing with 5xx responses.
+
+            - alert: CodexGatewayHighLatency
+              expr: histogram_quantile(0.95, sum(rate(codex_gateway_request_duration_seconds_bucket[5m])) by (le)) > 30
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: Codex gateway latency is high
+                description: p95 Codex gateway request latency is above 30 seconds.
+
+            - alert: LlamaCppMemoryHigh
+              expr: max(llama_cpp_memory_usage_percent{instance="llama-cpp-code"}) > 90
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: llama.cpp memory usage is high
+                description: llama-cpp-code is using more than 90% of its systemd MemoryMax.
+
+            - alert: LlamaCppQueueBacklog
+              expr: max(llama_cpp_queue_depth{instance="llama-cpp-code"}) > 2
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: llama.cpp queue backlog detected
+                description: llama-cpp-code has more than two pending requests for five minutes.
   notify: Restart prometheus
   when: alertmanager_enabled
 
@@ -157,11 +193,18 @@
           static_configs:
             - targets: ["localhost:9090"]
 
-        - job_name: "orchestrator"
+        - job_name: "codex-local-gateway"
           metrics_path: /metrics
           file_sd_configs:
             - files:
                 - /var/snap/prometheus/common/file_sd/*.yml
+
+        - job_name: "llama-cpp-code"
+          metrics_path: /metrics
+          authorization:
+            credentials: "{{ (llama_cpp_instances | first).api_key }}"
+          static_configs:
+            - targets: ["127.0.0.1:{{ (llama_cpp_instances | first).port }}"]
   notify: Restart prometheus
   when: alertmanager_enabled
 
@@ -218,8 +261,75 @@
         "panels": [
           {
             "type": "timeseries",
-            "title": "CPU Usage %",
+            "title": "Codex Gateway Request Rate",
             "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+            "targets": [
+              {"expr": "sum by (endpoint) (rate(codex_gateway_requests_total[5m]))", "legendFormat": "{% raw %}{{endpoint}}{% endraw %}"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Codex Gateway Error Rate",
+            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+            "targets": [
+              {"expr": "sum by (status) (rate(codex_gateway_requests_total{status=~\"4..|5..\"}[5m]))", "legendFormat": "{% raw %}{{status}}{% endraw %}"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Codex Gateway p50/p95 Latency",
+            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+            "targets": [
+              {"expr": "histogram_quantile(0.50, sum(rate(codex_gateway_request_duration_seconds_bucket[5m])) by (le, endpoint))", "legendFormat": "p50 {% raw %}{{endpoint}}{% endraw %}"},
+              {"expr": "histogram_quantile(0.95, sum(rate(codex_gateway_request_duration_seconds_bucket[5m])) by (le, endpoint))", "legendFormat": "p95 {% raw %}{{endpoint}}{% endraw %}"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Upstream Latency",
+            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+            "targets": [
+              {"expr": "histogram_quantile(0.95, sum(rate(codex_gateway_upstream_duration_seconds_bucket[5m])) by (le, endpoint))", "legendFormat": "p95 {% raw %}{{endpoint}}{% endraw %}"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Tokens",
+            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+            "targets": [
+              {"expr": "sum by (type) (rate(codex_gateway_tokens_total[5m]))", "legendFormat": "{% raw %}{{type}}{% endraw %}"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Streams",
+            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+            "targets": [
+              {"expr": "sum by (status) (rate(codex_gateway_streams_total[5m]))", "legendFormat": "{% raw %}{{status}}{% endraw %}"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "llama.cpp Memory / KV / Queue",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+            "targets": [
+              {"expr": "llama_cpp_memory_usage_percent{instance=\"llama-cpp-code\"}", "legendFormat": "memory %"},
+              {"expr": "llama_cpp_kv_cache_usage_percent{instance=\"llama-cpp-code\"}", "legendFormat": "kv cache %"},
+              {"expr": "llama_cpp_queue_depth{instance=\"llama-cpp-code\"}", "legendFormat": "queue"}
+            ]
+          },
+          {
+            "type": "stat",
+            "title": "Service Status",
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+            "targets": [
+              {"expr": "up{job=~\"codex-local-gateway|llama-cpp-code|node\"}", "legendFormat": "{% raw %}{{job}}{% endraw %}"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "CPU Usage %",
+            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 24},
             "targets": [
               {"expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\",job=\"node\"}[5m])) * 100)", "legendFormat": "CPU"}
             ]
@@ -227,7 +337,7 @@
           {
             "type": "timeseries",
             "title": "Memory Usage %",
-            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 24},
             "targets": [
               {"expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100", "legendFormat": "Memory"}
             ]
@@ -235,7 +345,7 @@
           {
             "type": "timeseries",
             "title": "Root Filesystem Usage %",
-            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 24},
             "targets": [
               {"expr": "100 * (1 - (node_filesystem_avail_bytes{mountpoint=\"/\",fstype!=\"tmpfs\"} / node_filesystem_size_bytes{mountpoint=\"/\",fstype!=\"tmpfs\"}))", "legendFormat": "/"}
             ]
@@ -243,7 +353,7 @@
           {
             "type": "timeseries",
             "title": "Load Average",
-            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
+            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 32},
             "targets": [
               {"expr": "node_load1", "legendFormat": "load1"},
               {"expr": "node_load5", "legendFormat": "load5"},
@@ -253,7 +363,7 @@
           {
             "type": "timeseries",
             "title": "Disk IO Time",
-            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
+            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 32},
             "targets": [
               {"expr": "rate(node_disk_io_time_seconds_total{device!~\"^(loop|ram|zram|dm-|md).*\"}[5m])", "legendFormat": "{% raw %}{{device}}{% endraw %}"}
             ]
@@ -261,7 +371,7 @@
           {
             "type": "timeseries",
             "title": "Temperature C",
-            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 32},
             "targets": [
               {"expr": "node_hwmon_temp_celsius", "legendFormat": "{% raw %}{{sensor}}{% endraw %}"}
             ]
@@ -269,7 +379,7 @@
           {
             "type": "timeseries",
             "title": "Network Errors",
-            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 40},
             "targets": [
               {"expr": "rate(node_network_receive_errs_total{device!=\"lo\"}[5m])", "legendFormat": "{% raw %}{{device}}{% endraw %} rx"},
               {"expr": "rate(node_network_transmit_errs_total{device!=\"lo\"}[5m])", "legendFormat": "{% raw %}{{device}}{% endraw %} tx"}
@@ -278,7 +388,7 @@
           {
             "type": "stat",
             "title": "Targets Up",
-            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 40},
             "targets": [
               {"expr": "sum(up)", "legendFormat": "up"}
             ]
@@ -286,12 +396,12 @@
         ],
         "schemaVersion": 39,
         "style": "dark",
-        "tags": ["lab"],
+        "tags": ["lab", "codex"],
         "templating": {"list": []},
         "time": {"from": "now-6h", "to": "now"},
         "timezone": "browser",
-        "title": "Lab Overview",
-        "uid": "lab-overview",
+        "title": "Codex Local Runner",
+        "uid": "codex-local-runner",
         "version": 1
       }
   when: grafana_enabled

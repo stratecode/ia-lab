@@ -1,0 +1,17 @@
+- name: Reload systemd for codex local gateway
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart codex local gateway
+  ansible.builtin.systemd:
+    name: codex-local-gateway
+    state: restarted
+    daemon_reload: true
+  when: not ansible_check_mode
+
+- name: Restart prometheus after codex gateway target update
+  ansible.builtin.systemd:
+    name: snap.prometheus.prometheus
+    state: restarted
+  failed_when: false
+  when: not ansible_check_mode

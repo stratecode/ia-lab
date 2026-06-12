@@ -1,0 +1,159 @@
+- name: Configure Codex remote host runtime
+  when: codex_host_enabled
+  block:
+    - name: Install Codex host runtime packages
+      ansible.builtin.apt:
+        name: "{{ codex_host_packages }}"
+        state: present
+
+    - name: Ensure Codex host group exists
+      ansible.builtin.group:
+        name: "{{ codex_host_group }}"
+        state: present
+
+    - name: Ensure Codex host user exists
+      ansible.builtin.user:
+        name: "{{ codex_host_user }}"
+        group: "{{ codex_host_group }}"
+        home: "{{ codex_host_root_dir }}"
+        shell: /bin/bash
+        create_home: false
+        groups:
+          - docker
+        append: true
+        state: present
+
+    - name: Ensure Codex host directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner | default(codex_host_user) }}"
+        group: "{{ item.group | default(codex_host_group) }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ codex_host_root_dir }}", mode: "0755" }
+        - { path: "{{ codex_host_repos_dir }}", mode: "0755" }
+        - { path: "{{ codex_host_worktrees_dir }}", mode: "0755" }
+        - { path: "{{ codex_host_cache_dir }}", mode: "0755" }
+        - { path: "{{ codex_host_root_dir }}/.codex", mode: "0700" }
+        - { path: "{{ codex_host_log_dir }}", mode: "0755" }
+
+    - name: Configure Codex local provider
+      ansible.builtin.copy:
+        dest: "{{ codex_host_root_dir }}/.codex/config.toml"
+        owner: "{{ codex_host_user }}"
+        group: "{{ codex_host_group }}"
+        mode: "0600"
+        content: |
+          model = "{{ codex_gateway_model }}"
+          model_provider = "lab-codex-gateway"
+
+          [model_providers.lab-codex-gateway]
+          name = "Lab Codex Gateway"
+          base_url = "https://{{ codex_gateway_domain }}/v1"
+          env_key = "CODEX_GATEWAY_API_KEY"
+          wire_api = "responses"
+
+    - name: Install Codex host environment file
+      ansible.builtin.copy:
+        dest: "{{ codex_host_root_dir }}/.codex/env"
+        owner: "{{ codex_host_user }}"
+        group: "{{ codex_host_group }}"
+        mode: "0600"
+        content: |
+          CODEX_GATEWAY_API_KEY={{ codex_gateway_api_key }}
+
+    - name: Install optional Codex CLI with npm
+      ansible.builtin.command:
+        argv:
+          - npm
+          - install
+          - -g
+          - "@openai/codex"
+      register: codex_cli_install
+      changed_when: "'up to date' not in (codex_cli_install.stdout | lower)"
+      when: codex_host_install_cli
+
+    - name: Install Codex host README
+      ansible.builtin.copy:
+        dest: "{{ codex_host_root_dir }}/README.md"
+        owner: "{{ codex_host_user }}"
+        group: "{{ codex_host_group }}"
+        mode: "0644"
+        content: |
+          # Codex Local Runner Host
+
+          This host is prepared for low-stakes Codex coding and test tasks using
+          the private gateway at https://{{ codex_gateway_domain }}/v1.
+
+          Load the local gateway key before running Codex:
+
+          ```bash
+          set -a
+          source {{ codex_host_root_dir }}/.codex/env
+          set +a
+          export CODEX_HOME={{ codex_host_root_dir }}/.codex
+          codex
+          ```
+
+          If `codex` is not installed, install or authenticate it once manually
+          for user `{{ codex_host_user }}`. Keep high-stakes work on hosted GPT models;
+          this route is optimized for simple code edits and test execution.
+
+    - name: Install Codex worktree cleanup script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/codex-worktree-cleanup
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -euo pipefail
+          find "{{ codex_host_worktrees_dir }}" -mindepth 1 -maxdepth 1 -type d \
+            -mmin +$(({{ codex_host_cleanup_retention_hours }} * 60)) \
+            -print0 | xargs -0r rm -rf
+
+    - name: Install Codex worktree cleanup service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/codex-worktree-cleanup.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Clean old Codex worktrees
+
+          [Service]
+          Type=oneshot
+          User=root
+          Group=root
+          ExecStart=/usr/local/bin/codex-worktree-cleanup
+      notify: Reload systemd for codex host timers
+
+    - name: Install Codex worktree cleanup timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/codex-worktree-cleanup.timer
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Codex worktree cleanup timer
+
+          [Timer]
+          OnCalendar=hourly
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+      notify:
+        - Reload systemd for codex host timers
+        - Restart codex worktree cleanup timer
+
+    - name: Enable Codex worktree cleanup timer
+      ansible.builtin.systemd:
+        name: codex-worktree-cleanup.timer
+        state: started
+        enabled: true
+        daemon_reload: true
+      when: not ansible_check_mode

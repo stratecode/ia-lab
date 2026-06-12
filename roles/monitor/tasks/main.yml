@@ -96,6 +96,30 @@
     creates: "/etc/ssl/certs/{{ cockpit_domain }}.crt"
   when: monitor_tls_mode in ["selfsigned", "letsencrypt"]
 
+- name: Generate self-signed certificate for Codex gateway nginx vhost
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -x509
+      - -nodes
+      - -newkey
+      - rsa:4096
+      - -days
+      - "365"
+      - -keyout
+      - "/etc/ssl/private/{{ codex_gateway_domain }}.key"
+      - -out
+      - "/etc/ssl/certs/{{ codex_gateway_domain }}.crt"
+      - -subj
+      - "/CN={{ codex_gateway_domain }}"
+  args:
+    creates: "/etc/ssl/certs/{{ codex_gateway_domain }}.crt"
+  when:
+    - codex_gateway_enabled | default(false)
+    - monitor_tls_mode in ["selfsigned", "letsencrypt"]
+    - codex_gateway_domain.endswith('.local')
+
 - name: Issue Let's Encrypt certificate with Route53 DNS challenge
   ansible.builtin.command:
     argv: >-
@@ -113,8 +137,8 @@
           '-d', observability_domain
         ]
         + (
-          ['-d', open_webui_domain]
-          if open_webui_enabled | default(false)
+          ['-d', codex_gateway_domain]
+          if (codex_gateway_enabled | default(false)) and not codex_gateway_domain.endswith('.local')
           else []
         )
         + (
@@ -148,6 +172,26 @@
         '/etc/letsencrypt/live/' ~ cockpit_domain ~ '/privkey.pem'
         if monitor_tls_mode == 'letsencrypt'
         else '/etc/ssl/private/' ~ cockpit_domain ~ '.key'
+      }}
+    monitor_codex_gateway_ssl_certificate: >-
+      {{
+        '/etc/ssl/certs/' ~ codex_gateway_domain ~ '.crt'
+        if (codex_gateway_enabled | default(false)) and codex_gateway_domain.endswith('.local')
+        else (
+          '/etc/letsencrypt/live/' ~ cockpit_domain ~ '/fullchain.pem'
+          if monitor_tls_mode == 'letsencrypt'
+          else '/etc/ssl/certs/' ~ cockpit_domain ~ '.crt'
+        )
+      }}
+    monitor_codex_gateway_ssl_certificate_key: >-
+      {{
+        '/etc/ssl/private/' ~ codex_gateway_domain ~ '.key'
+        if (codex_gateway_enabled | default(false)) and codex_gateway_domain.endswith('.local')
+        else (
+          '/etc/letsencrypt/live/' ~ cockpit_domain ~ '/privkey.pem'
+          if monitor_tls_mode == 'letsencrypt'
+          else '/etc/ssl/private/' ~ cockpit_domain ~ '.key'
+        )
       }}
 
 - name: Configure nginx reverse proxy for cockpit
@@ -187,23 +231,6 @@
       {% endif %}
           deny all;
 
-      {% if orchestrator_enabled | default(false) %}
-          location {{ orchestrator_proxy_path }} {
-              proxy_pass http://127.0.0.1:{{ orchestrator_port }}/;
-              proxy_set_header Host $host;
-              proxy_set_header X-Forwarded-Proto $scheme;
-              proxy_set_header X-Forwarded-Host $host;
-              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-              proxy_set_header X-Forwarded-Prefix {{ orchestrator_proxy_path | regex_replace('/$','') }};
-              proxy_http_version 1.1;
-              proxy_buffering off;
-              proxy_request_buffering off;
-              proxy_read_timeout 300s;
-              proxy_send_timeout 300s;
-              proxy_connect_timeout 60s;
-          }
-      {% endif %}
-
           location / {
               proxy_pass https://127.0.0.1:{{ monitor_backend_port }};
               proxy_set_header Host $host;
@@ -236,8 +263,8 @@
           http2 on;
           server_name {{ observability_domain }};
 
-          ssl_certificate {{ monitor_nginx_ssl_certificate }};
-          ssl_certificate_key {{ monitor_nginx_ssl_certificate_key }};
+          ssl_certificate {{ monitor_codex_gateway_ssl_certificate }};
+          ssl_certificate_key {{ monitor_codex_gateway_ssl_certificate_key }};
 
           allow 127.0.0.1;
           allow ::1;
@@ -262,12 +289,12 @@
               proxy_set_header X-Forwarded-Host $host;
           }
       }
-      {% if open_webui_enabled | default(false) %}
+      {% if codex_gateway_enabled | default(false) %}
 
       server {
           listen 80;
           listen [::]:80;
-          server_name {{ open_webui_domain }};
+          server_name {{ codex_gateway_domain }};
 
           location /.well-known/acme-challenge/ {
               root /var/www/html;
@@ -282,7 +309,7 @@
           listen 443 ssl;
           listen [::]:443 ssl;
           http2 on;
-          server_name {{ open_webui_domain }};
+          server_name {{ codex_gateway_domain }};
 
           ssl_certificate {{ monitor_nginx_ssl_certificate }};
           ssl_certificate_key {{ monitor_nginx_ssl_certificate_key }};
@@ -297,14 +324,17 @@
           deny all;
 
           location / {
-              proxy_pass http://127.0.0.1:{{ open_webui_port }}/;
+              proxy_pass http://{{ codex_gateway_addr }}/;
               proxy_set_header Host $host;
               proxy_set_header X-Forwarded-Proto $scheme;
               proxy_set_header X-Forwarded-Host $host;
               proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
               proxy_http_version 1.1;
-              proxy_set_header Upgrade $http_upgrade;
-              proxy_set_header Connection "upgrade";
+              proxy_buffering off;
+              proxy_request_buffering off;
+              proxy_read_timeout 300s;
+              proxy_send_timeout 300s;
+              proxy_connect_timeout 60s;
           }
       }
       {% endif %}
@@ -371,7 +401,7 @@
   ansible.builtin.debug:
     msg: >-
       Let's Encrypt not attempted for {{ cockpit_domain }}, {{ observability_domain }}.
-      {% if open_webui_enabled | default(false) %} {{ open_webui_domain }}.{% endif %}
+      {% if codex_gateway_enabled | default(false) %} {{ codex_gateway_domain }}.{% endif %}
       For dns-route53, ensure AWS profile {{ monitor_letsencrypt_aws_profile }}
       can edit Route53. For HTTP challenge, public DNS and ports 80/443 must
       point to this server.

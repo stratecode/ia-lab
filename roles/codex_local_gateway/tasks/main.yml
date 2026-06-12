@@ -1,0 +1,139 @@
+- name: Configure Codex local gateway
+  when: codex_gateway_enabled
+  block:
+    - name: Assert Codex gateway API key is configured
+      ansible.builtin.assert:
+        that:
+          - codex_gateway_api_key | length > 0
+          - codex_gateway_api_key != 'change-me-codex-gateway-key'
+        fail_msg: >-
+          Set LAB_CODEX_GATEWAY_API_KEY or vault_codex_gateway_api_key before
+          enabling the Codex local gateway.
+
+    - name: Ensure Codex gateway group exists
+      ansible.builtin.group:
+        name: "{{ codex_gateway_group }}"
+        system: true
+        state: present
+
+    - name: Ensure Codex gateway user exists
+      ansible.builtin.user:
+        name: "{{ codex_gateway_user }}"
+        group: "{{ codex_gateway_group }}"
+        home: "{{ codex_gateway_root_dir }}"
+        shell: /usr/sbin/nologin
+        system: true
+        create_home: false
+        state: present
+
+    - name: Ensure Codex gateway directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ codex_gateway_root_dir }}", owner: "{{ codex_gateway_user }}", group: "{{ codex_gateway_group }}", mode: "0755" }
+        - { path: "{{ codex_gateway_runtime_dir }}", owner: "{{ codex_gateway_user }}", group: "{{ codex_gateway_group }}", mode: "0755" }
+        - { path: "{{ codex_gateway_config_dir }}", owner: "root", group: "{{ codex_gateway_group }}", mode: "0750" }
+        - { path: "{{ codex_gateway_log_dir }}", owner: "{{ codex_gateway_user }}", group: "{{ codex_gateway_group }}", mode: "0755" }
+        - { path: "/var/snap/prometheus/common/file_sd", owner: "root", group: "root", mode: "0755" }
+
+    - name: Install Codex local gateway binary
+      ansible.builtin.copy:
+        src: "{{ codex_gateway_binary_path }}"
+        dest: "{{ codex_gateway_runtime_dir }}/codex-local-gateway"
+        owner: "{{ codex_gateway_user }}"
+        group: "{{ codex_gateway_group }}"
+        mode: "0755"
+      notify: Restart codex local gateway
+
+    - name: Install Codex gateway environment file
+      ansible.builtin.copy:
+        dest: "{{ codex_gateway_config_dir }}/env"
+        owner: root
+        group: "{{ codex_gateway_group }}"
+        mode: "0640"
+        content: |
+          CODEX_GATEWAY_ADDR={{ codex_gateway_addr }}
+          CODEX_GATEWAY_PUBLIC_BASE_URL={{ codex_gateway_public_base_url }}
+          CODEX_GATEWAY_API_KEY={{ codex_gateway_api_key }}
+          CODEX_GATEWAY_UPSTREAM_BASE_URL={{ codex_gateway_upstream_base_url }}
+          CODEX_GATEWAY_UPSTREAM_API_KEY={{ codex_gateway_upstream_api_key }}
+          CODEX_GATEWAY_MODEL={{ codex_gateway_model }}
+          CODEX_GATEWAY_UPSTREAM_MODEL={{ codex_gateway_upstream_model }}
+          CODEX_GATEWAY_REQUEST_TIMEOUT_SECONDS={{ codex_gateway_request_timeout_seconds }}
+          CODEX_GATEWAY_MAX_BODY_BYTES={{ codex_gateway_max_body_bytes }}
+          CODEX_GATEWAY_RATE_LIMIT_RPM={{ codex_gateway_rate_limit_rpm }}
+          CODEX_GATEWAY_RATE_LIMIT_BURST={{ codex_gateway_rate_limit_burst }}
+      notify: Restart codex local gateway
+
+    - name: Install Codex local gateway systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/codex-local-gateway.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Codex local OpenAI-compatible gateway
+          After=network-online.target llama-cpp-code.service
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User={{ codex_gateway_user }}
+          Group={{ codex_gateway_group }}
+          WorkingDirectory={{ codex_gateway_runtime_dir }}
+          EnvironmentFile={{ codex_gateway_config_dir }}/env
+          ExecStart={{ codex_gateway_runtime_dir }}/codex-local-gateway
+          Restart=on-failure
+          RestartSec=3
+          NoNewPrivileges=true
+          PrivateTmp=true
+          ProtectSystem=strict
+          ProtectHome=true
+          ReadWritePaths={{ codex_gateway_log_dir }}
+          StandardOutput=append:{{ codex_gateway_log_dir }}/gateway.log
+          StandardError=append:{{ codex_gateway_log_dir }}/gateway.log
+
+          [Install]
+          WantedBy=multi-user.target
+      notify:
+        - Reload systemd for codex local gateway
+        - Restart codex local gateway
+
+    - name: Publish Codex gateway Prometheus file_sd target
+      ansible.builtin.copy:
+        dest: /var/snap/prometheus/common/file_sd/codex-local-gateway.yml
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          - targets:
+              - "{{ codex_gateway_addr }}"
+            labels:
+              job: codex-local-gateway
+      notify: Restart prometheus after codex gateway target update
+
+    - name: Flush Codex gateway handlers before readiness check
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start Codex local gateway
+      ansible.builtin.systemd:
+        name: codex-local-gateway
+        state: started
+        enabled: true
+        daemon_reload: true
+      when: not ansible_check_mode
+
+    - name: Wait for Codex local gateway readiness
+      ansible.builtin.uri:
+        url: "http://{{ codex_gateway_addr }}/ready"
+        return_content: true
+      register: codex_gateway_ready
+      retries: 20
+      delay: 2
+      until: codex_gateway_ready.status == 200
+      when: not ansible_check_mode

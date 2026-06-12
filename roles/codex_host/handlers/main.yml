@@ -1,0 +1,11 @@
+- name: Reload systemd for codex host timers
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart codex worktree cleanup timer
+  ansible.builtin.systemd:
+    name: codex-worktree-cleanup.timer
+    state: restarted
+    enabled: true
+    daemon_reload: true
+  when: not ansible_check_mode

@@ -78,21 +78,83 @@
         - /etc/cognitive-gateway
         - /srv/ai-lab/cognitive-gateway
 
+    - name: Stop retired AI stack compose projects
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for dir in /srv/ai-lab/open-webui /opt/docker/orchestrator; do
+          if [[ -f "${dir}/docker-compose.yml" ]]; then
+            docker compose -f "${dir}/docker-compose.yml" down -v --remove-orphans || true
+          fi
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Stop and disable retired AI stack units
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - aider-cleanup.timer
+        - aider-cleanup.service
+        - orchestrator.service
+        - orchestrator-cap-docs.service
+        - orchestrator-cap-images.service
+        - orchestrator-workspace-cleanup.timer
+        - orchestrator-workspace-cleanup.service
+        - orchestrator-pg-backup.timer
+        - orchestrator-pg-backup.service
+      failed_when: false
+
+    - name: Remove retired AI stack unit files
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: absent
+      loop:
+        - aider-cleanup.timer
+        - aider-cleanup.service
+        - orchestrator.service
+        - orchestrator-cap-docs.service
+        - orchestrator-cap-images.service
+        - orchestrator-workspace-cleanup.timer
+        - orchestrator-workspace-cleanup.service
+        - orchestrator-pg-backup.timer
+        - orchestrator-pg-backup.service
+
+    - name: Remove retired AI stack runtime and data
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /srv/ai-lab/aider
+        - /etc/aider
+        - /var/log/aider
+        - /run/aider
+        - /srv/ai-lab/orchestrator
+        - /etc/orchestrator
+        - /opt/docker/orchestrator
+        - /opt/docker/postgres
+        - /srv/ai-lab/open-webui
+        - /usr/local/bin/aider-task
+        - /usr/local/bin/aider-cleanup
+        - /var/snap/prometheus/common/file_sd/orchestrator-targets.yml
+
+    - name: Reload systemd after retired AI stack cleanup
+      ansible.builtin.systemd:
+        daemon_reload: true
+
     - name: Install llama.cpp with Vulkan
       ansible.builtin.import_role:
         name: llama_cpp
 
-    - name: Install Aider coding agent
+    - name: Configure Codex host runtime
       ansible.builtin.import_role:
-        name: aider
+        name: codex_host
 
-    - name: Install Orchestrator platform
+    - name: Install Codex local gateway
       ansible.builtin.import_role:
-        name: orchestrator
-
-    - name: Install Open WebUI
-      ansible.builtin.import_role:
-        name: open_webui
+        name: codex_local_gateway
 
     - name: Install monitoring web console
       ansible.builtin.import_role:

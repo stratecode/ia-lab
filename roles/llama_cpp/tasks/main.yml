@@ -82,6 +82,8 @@
     single_branch: true
     version: master
     force: true
+    recursive: true
+    track_submodules: true
   register: llama_cpp_git_clone
   when: llama_cpp_enabled
 
@@ -116,8 +118,6 @@
       {{
         llama_cpp_git_clone.changed
         or not llama_cpp_binary.stat.exists
-        or ((llama_cpp_binary_ldd.rc | default(0)) != 0)
-        or ((llama_cpp_zero_byte_libs.matched | default(0)) | int > 0)
       }}
   when: llama_cpp_enabled
 
@@ -127,9 +127,7 @@
     state: absent
   when:
     - llama_cpp_enabled
-    - llama_cpp_rebuild_required | default(false)
-    - llama_cpp_binary.stat.exists
-    - ((llama_cpp_binary_ldd.rc | default(0)) != 0 or ((llama_cpp_zero_byte_libs.matched | default(0)) | int > 0))
+    - llama_cpp_rebuild_required | default(false) | bool
 
 - name: Configure llama.cpp build
   ansible.builtin.command:
@@ -147,22 +145,24 @@
       - -DGGML_NATIVE=ON
       - -DGGML_BLAS=ON
       - -DGGML_BLAS_VENDOR=OpenBLAS
-  when: llama_cpp_enabled and llama_cpp_rebuild_required | default(false)
+      - -DLLAMA_BUILD_TESTS=OFF
+      - -DLLAMA_BUILD_EXAMPLES=OFF
+  when: llama_cpp_enabled and (llama_cpp_rebuild_required | default(false) | bool)
 
-- name: Build llama.cpp (async — may take several minutes)
+- name: Build llama.cpp
   ansible.builtin.command:
     argv:
       - cmake
       - --build
       - "{{ llama_cpp_build_dir }}"
+      - --target
+      - llama-server
       - "-j{{ llama_cpp_build_jobs | default(ansible_facts['processor_vcpus'], true) }}"
       - --config
       - Release
-  async: "{{ llama_cpp_build_async_seconds }}"
-  poll: "{{ llama_cpp_build_poll_seconds }}"
   register: llama_cpp_build_result
   notify: Restart llama.cpp services
-  when: llama_cpp_enabled and llama_cpp_rebuild_required | default(false)
+  when: llama_cpp_enabled and (llama_cpp_rebuild_required | default(false) | bool)
 
 - name: Validate Vulkan detection before service install
   ansible.builtin.command:
@@ -345,7 +345,7 @@
       StandardOutput=append:/var/log/llama-cpp/{{ item.service_name }}.log
       StandardError=append:/var/log/llama-cpp/{{ item.service_name }}.log
       ExecStart={{ llama_cpp_build_dir }}/bin/llama-server \
-        --host 0.0.0.0 \
+        --host {{ item.host | default(llama_cpp_host | default('127.0.0.1')) }} \
         --port {{ item.port }} \
         --alias {{ item.alias }} \
         --hf-repo {{ item.hf_repo }} \
