@@ -60,6 +60,24 @@
       ansible.builtin.import_role:
         name: wireguard
 
+    - name: Stop retired cognitive gateway processes
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if pgrep -f '/srv/ai-lab/cognitive-gateway/runtime/cognitive-gateway' >/dev/null; then
+          pkill -f '/srv/ai-lab/cognitive-gateway/runtime/cognitive-gateway'
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Remove retired cognitive gateway artifacts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/cognitive-gateway
+        - /srv/ai-lab/cognitive-gateway
+
     - name: Install llama.cpp with Vulkan
       ansible.builtin.import_role:
         name: llama_cpp
