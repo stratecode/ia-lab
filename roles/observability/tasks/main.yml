@@ -146,6 +146,15 @@
                 summary: Codex gateway latency is high
                 description: p95 Codex gateway request latency is above 30 seconds.
 
+            - alert: CodexGatewayToolParseErrors
+              expr: rate(codex_gateway_tool_parse_errors_total[5m]) > 0
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: Codex gateway tool-call parsing is failing
+                description: The local model is not producing valid native tool calls or fallback JSON for required tools.
+
             - alert: LlamaCppMemoryHigh
               expr: max(llama_cpp_memory_usage_percent{instance="llama-cpp-code"}) > 90
               for: 5m
@@ -310,8 +319,35 @@
           },
           {
             "type": "timeseries",
+            "title": "Tool Calls",
+            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
+            "targets": [
+              {"expr": "sum by (source, name) (rate(codex_gateway_tool_calls_total[5m]))", "legendFormat": "{% raw %}{{source}} {{name}}{% endraw %}"},
+              {"expr": "rate(codex_gateway_tool_outputs_total[5m])", "legendFormat": "tool outputs"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Tool Parse Errors / Compactions",
+            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
+            "targets": [
+              {"expr": "rate(codex_gateway_tool_parse_errors_total[5m])", "legendFormat": "parse errors"},
+              {"expr": "rate(codex_gateway_compactions_total[5m])", "legendFormat": "compactions"},
+              {"expr": "rate(codex_gateway_sse_failures_total[5m])", "legendFormat": "sse failures"}
+            ]
+          },
+          {
+            "type": "timeseries",
+            "title": "Response Store",
+            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
+            "targets": [
+              {"expr": "sum by (result) (rate(codex_gateway_response_store_total[5m]))", "legendFormat": "{% raw %}{{result}}{% endraw %}"}
+            ]
+          },
+          {
+            "type": "timeseries",
             "title": "llama.cpp Memory / KV / Queue",
-            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
             "targets": [
               {"expr": "llama_cpp_memory_usage_percent{instance=\"llama-cpp-code\"}", "legendFormat": "memory %"},
               {"expr": "llama_cpp_kv_cache_usage_percent{instance=\"llama-cpp-code\"}", "legendFormat": "kv cache %"},
@@ -321,7 +357,7 @@
           {
             "type": "stat",
             "title": "Service Status",
-            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
             "targets": [
               {"expr": "up{job=~\"codex-local-gateway|llama-cpp-code|node\"}", "legendFormat": "{% raw %}{{job}}{% endraw %}"}
             ]
@@ -329,7 +365,7 @@
           {
             "type": "timeseries",
             "title": "CPU Usage %",
-            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 24},
+            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 32},
             "targets": [
               {"expr": "100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\",job=\"node\"}[5m])) * 100)", "legendFormat": "CPU"}
             ]
@@ -337,7 +373,7 @@
           {
             "type": "timeseries",
             "title": "Memory Usage %",
-            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 24},
+            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 32},
             "targets": [
               {"expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100", "legendFormat": "Memory"}
             ]
@@ -345,7 +381,7 @@
           {
             "type": "timeseries",
             "title": "Root Filesystem Usage %",
-            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 24},
+            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 32},
             "targets": [
               {"expr": "100 * (1 - (node_filesystem_avail_bytes{mountpoint=\"/\",fstype!=\"tmpfs\"} / node_filesystem_size_bytes{mountpoint=\"/\",fstype!=\"tmpfs\"}))", "legendFormat": "/"}
             ]
@@ -353,7 +389,7 @@
           {
             "type": "timeseries",
             "title": "Load Average",
-            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 32},
+            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 40},
             "targets": [
               {"expr": "node_load1", "legendFormat": "load1"},
               {"expr": "node_load5", "legendFormat": "load5"},
@@ -363,7 +399,7 @@
           {
             "type": "timeseries",
             "title": "Disk IO Time",
-            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 32},
+            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 40},
             "targets": [
               {"expr": "rate(node_disk_io_time_seconds_total{device!~\"^(loop|ram|zram|dm-|md).*\"}[5m])", "legendFormat": "{% raw %}{{device}}{% endraw %}"}
             ]
@@ -371,7 +407,7 @@
           {
             "type": "timeseries",
             "title": "Temperature C",
-            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 32},
+            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 40},
             "targets": [
               {"expr": "node_hwmon_temp_celsius", "legendFormat": "{% raw %}{{sensor}}{% endraw %}"}
             ]
@@ -379,7 +415,7 @@
           {
             "type": "timeseries",
             "title": "Network Errors",
-            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 40},
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 48},
             "targets": [
               {"expr": "rate(node_network_receive_errs_total{device!=\"lo\"}[5m])", "legendFormat": "{% raw %}{{device}}{% endraw %} rx"},
               {"expr": "rate(node_network_transmit_errs_total{device!=\"lo\"}[5m])", "legendFormat": "{% raw %}{{device}}{% endraw %} tx"}
@@ -388,7 +424,7 @@
           {
             "type": "stat",
             "title": "Targets Up",
-            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 40},
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 48},
             "targets": [
               {"expr": "sum(up)", "legendFormat": "up"}
             ]

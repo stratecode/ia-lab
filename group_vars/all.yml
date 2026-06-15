@@ -233,8 +233,14 @@ codex_gateway_model: "{{ lookup('env', 'LAB_CODEX_GATEWAY_MODEL') | default('qwe
 codex_gateway_upstream_model: "{{ lookup('env', 'LAB_CODEX_GATEWAY_UPSTREAM_MODEL') | default('codex-local', true) }}"
 codex_gateway_request_timeout_seconds: "{{ lookup('env', 'LAB_CODEX_GATEWAY_REQUEST_TIMEOUT_SECONDS') | default('180', true) | int }}"
 codex_gateway_max_body_bytes: "{{ lookup('env', 'LAB_CODEX_GATEWAY_MAX_BODY_BYTES') | default('2097152', true) | int }}"
-codex_gateway_rate_limit_rpm: "{{ lookup('env', 'LAB_CODEX_GATEWAY_RATE_LIMIT_RPM') | default('30', true) | int }}"
-codex_gateway_rate_limit_burst: "{{ lookup('env', 'LAB_CODEX_GATEWAY_RATE_LIMIT_BURST') | default('3', true) | int }}"
+codex_gateway_rate_limit_rpm: "{{ lookup('env', 'LAB_CODEX_GATEWAY_RATE_LIMIT_RPM') | default('120', true) | int }}"
+codex_gateway_rate_limit_burst: "{{ lookup('env', 'LAB_CODEX_GATEWAY_RATE_LIMIT_BURST') | default('20', true) | int }}"
+codex_gateway_default_max_output_tokens: "{{ lookup('env', 'LAB_CODEX_GATEWAY_DEFAULT_MAX_OUTPUT_TOKENS') | default('4096', true) | int }}"
+codex_gateway_context_window: "{{ lookup('env', 'LAB_CODEX_GATEWAY_CONTEXT_WINDOW') | default('12000', true) | int }}"
+codex_gateway_auto_compact_token_limit: "{{ lookup('env', 'LAB_CODEX_GATEWAY_AUTO_COMPACT_TOKEN_LIMIT') | default('8000', true) | int }}"
+codex_gateway_max_prompt_chars: "{{ lookup('env', 'LAB_CODEX_GATEWAY_MAX_PROMPT_CHARS') | default('30000', true) | int }}"
+codex_gateway_response_store_ttl_minutes: "{{ lookup('env', 'LAB_CODEX_GATEWAY_RESPONSE_STORE_TTL_MINUTES') | default('30', true) | int }}"
+codex_gateway_response_store_max_entries: "{{ lookup('env', 'LAB_CODEX_GATEWAY_RESPONSE_STORE_MAX_ENTRIES') | default('256', true) | int }}"
 
 # ─── Codex remote host runtime ──────────────────────────────────────────────
 codex_host_enabled: true

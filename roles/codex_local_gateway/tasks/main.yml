@@ -67,6 +67,12 @@
           CODEX_GATEWAY_MAX_BODY_BYTES={{ codex_gateway_max_body_bytes }}
           CODEX_GATEWAY_RATE_LIMIT_RPM={{ codex_gateway_rate_limit_rpm }}
           CODEX_GATEWAY_RATE_LIMIT_BURST={{ codex_gateway_rate_limit_burst }}
+          CODEX_GATEWAY_DEFAULT_MAX_OUTPUT_TOKENS={{ codex_gateway_default_max_output_tokens }}
+          CODEX_GATEWAY_CONTEXT_WINDOW={{ codex_gateway_context_window }}
+          CODEX_GATEWAY_AUTO_COMPACT_TOKEN_LIMIT={{ codex_gateway_auto_compact_token_limit }}
+          CODEX_GATEWAY_MAX_PROMPT_CHARS={{ codex_gateway_max_prompt_chars }}
+          CODEX_GATEWAY_RESPONSE_STORE_TTL_MINUTES={{ codex_gateway_response_store_ttl_minutes }}
+          CODEX_GATEWAY_RESPONSE_STORE_MAX_ENTRIES={{ codex_gateway_response_store_max_entries }}
       notify: Restart codex local gateway
 
     - name: Install Codex local gateway systemd unit

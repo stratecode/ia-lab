@@ -113,6 +113,8 @@
       - "/etc/ssl/certs/{{ codex_gateway_domain }}.crt"
       - -subj
       - "/CN={{ codex_gateway_domain }}"
+      - -addext
+      - "subjectAltName=DNS:{{ codex_gateway_domain }}"
   args:
     creates: "/etc/ssl/certs/{{ codex_gateway_domain }}.crt"
   when:
@@ -263,8 +265,8 @@
           http2 on;
           server_name {{ observability_domain }};
 
-          ssl_certificate {{ monitor_codex_gateway_ssl_certificate }};
-          ssl_certificate_key {{ monitor_codex_gateway_ssl_certificate_key }};
+          ssl_certificate {{ monitor_nginx_ssl_certificate }};
+          ssl_certificate_key {{ monitor_nginx_ssl_certificate_key }};
 
           allow 127.0.0.1;
           allow ::1;
@@ -311,8 +313,8 @@
           http2 on;
           server_name {{ codex_gateway_domain }};
 
-          ssl_certificate {{ monitor_nginx_ssl_certificate }};
-          ssl_certificate_key {{ monitor_nginx_ssl_certificate_key }};
+          ssl_certificate {{ monitor_codex_gateway_ssl_certificate }};
+          ssl_certificate_key {{ monitor_codex_gateway_ssl_certificate_key }};
 
           allow 127.0.0.1;
           allow ::1;
@@ -332,9 +334,12 @@
               proxy_http_version 1.1;
               proxy_buffering off;
               proxy_request_buffering off;
+              proxy_cache off;
               proxy_read_timeout 300s;
               proxy_send_timeout 300s;
               proxy_connect_timeout 60s;
+              gzip off;
+              add_header X-Accel-Buffering no always;
           }
       }
       {% endif %}

@@ -1,0 +1,10 @@
+{
+  "name": "codex-lab-status-board-benchmark",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "quality": "node scripts/quality-check.mjs"
+  }
+}

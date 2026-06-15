@@ -70,6 +70,28 @@
         executable: /bin/bash
       changed_when: false
 
+    - name: Stop and disable retired cognitive gateway units
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - cognitive-gateway.service
+        - cognitive-gateway-code.service
+        - cognitive-gateway-planner.service
+        - cognitive-gateway-utility.service
+      failed_when: false
+
+    - name: Remove retired cognitive gateway unit files
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: absent
+      loop:
+        - cognitive-gateway.service
+        - cognitive-gateway-code.service
+        - cognitive-gateway-planner.service
+        - cognitive-gateway-utility.service
+
     - name: Remove retired cognitive gateway artifacts
       ansible.builtin.file:
         path: "{{ item }}"

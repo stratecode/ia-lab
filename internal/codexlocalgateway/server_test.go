@@ -18,10 +18,17 @@ func newTestServer(t *testing.T, upstream http.Handler) (*httptest.Server, *http
 	upstreamServer := httptest.NewServer(upstream)
 	t.Cleanup(upstreamServer.Close)
 
-	cfg := Config{
+	cfg := testConfig(upstreamServer.URL + "/v1")
+	srv := httptest.NewServer(NewServer(cfg, zerolog.Nop()))
+	t.Cleanup(srv.Close)
+	return srv, upstreamServer
+}
+
+func testConfig(upstreamBaseURL string) Config {
+	return Config{
 		Addr:            "127.0.0.1:0",
 		APIKey:          "test-key",
-		UpstreamBaseURL: upstreamServer.URL + "/v1",
+		UpstreamBaseURL: upstreamBaseURL,
 		UpstreamAPIKey:  "upstream-key",
 		Model:           "qwen-local-code",
 		UpstreamModel:   "codex-local",
@@ -30,6 +37,13 @@ func newTestServer(t *testing.T, upstream http.Handler) (*httptest.Server, *http
 		RateLimitRPM:    60,
 		RateLimitBurst:  10,
 	}
+}
+
+func newTestServerWithConfig(t *testing.T, cfg Config, upstream http.Handler) (*httptest.Server, *httptest.Server) {
+	t.Helper()
+	upstreamServer := httptest.NewServer(upstream)
+	t.Cleanup(upstreamServer.Close)
+	cfg.UpstreamBaseURL = upstreamServer.URL + "/v1"
 	srv := httptest.NewServer(NewServer(cfg, zerolog.Nop()))
 	t.Cleanup(srv.Close)
 	return srv, upstreamServer
@@ -106,6 +120,30 @@ func TestResponsesMapsStringInputAndInstructionsToChatCompletion(t *testing.T) {
 	}
 }
 
+func TestResponsesAppliesDefaultMaxOutputTokens(t *testing.T) {
+	var upstreamBody map[string]any
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{"model":"qwen-local-code","input":"hi"}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("unexpected status %d: %s", res.StatusCode, body)
+	}
+	if upstreamBody["max_tokens"] != float64(defaultMaxOutputTokens) {
+		t.Fatalf("expected default max_tokens, got %#v", upstreamBody["max_tokens"])
+	}
+}
+
 func TestResponsesFlattensArrayInput(t *testing.T) {
 	var upstreamBody map[string]any
 	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -131,6 +169,555 @@ func TestResponsesFlattensArrayInput(t *testing.T) {
 	content := messages[len(messages)-1].(map[string]any)["content"]
 	if content != "first\nsecond\nthird" {
 		t.Fatalf("unexpected flattened content: %#v", content)
+	}
+}
+
+func TestResponsesCompactsToolsForUpstreamAndMapsNativeToolCall(t *testing.T) {
+	var upstreamBody map[string]any
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl_tool",
+			"choices":[{
+				"message":{
+					"role":"assistant",
+					"tool_calls":[{
+						"id":"call_read_1",
+						"type":"function",
+						"function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}
+					}]
+				},
+				"finish_reason":"tool_calls"
+			}],
+			"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}
+		}`))
+	}))
+
+	payload := `{
+		"model":"qwen-local-code",
+		"input":"Inspect README",
+		"tools":[{
+			"type":"function",
+			"function":{
+				"name":"read_file",
+				"description":"Read a local file",
+				"parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}
+			}
+		}],
+		"tool_choice":"auto",
+		"parallel_tool_calls":false
+	}`
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(payload)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("unexpected status %d: %s", res.StatusCode, body)
+	}
+	if _, ok := upstreamBody["tools"]; ok {
+		t.Fatalf("expected gateway to strip verbose tools before llama.cpp upstream, got %#v", upstreamBody["tools"])
+	}
+	messages := upstreamBody["messages"].([]any)
+	toolInstruction := messages[len(messages)-2].(map[string]any)["content"].(string)
+	if !strings.Contains(toolInstruction, "read_file") {
+		t.Fatalf("expected compact tool instruction to mention read_file, got %q", toolInstruction)
+	}
+
+	var out responsesEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Output) != 1 {
+		t.Fatalf("expected one output item, got %#v", out.Output)
+	}
+	item := out.Output[0]
+	if item.Type != "function_call" || item.CallID != "call_read_1" || item.Name != "read_file" || item.Arguments != `{"path":"README.md"}` {
+		t.Fatalf("unexpected function_call output: %#v", item)
+	}
+	if out.OutputText != "" {
+		t.Fatalf("tool call response should not synthesize output_text, got %q", out.OutputText)
+	}
+}
+
+func TestResponsesNormalizesNativeJSONBlobExecCommandToFileWrite(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices":[{
+				"message":{
+					"role":"assistant",
+					"tool_calls":[{
+						"id":"call_exec_1",
+						"type":"function",
+						"function":{"name":"exec_command","arguments":"{\"cmd\":\"{\\\"file_path\\\":\\\"hello.txt\\\",\\\"patch_content\\\":\\\"after\\n\\\"}\"}"}
+					}]
+				},
+				"finish_reason":"tool_calls"
+			}]
+		}`))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Write file",
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out responsesEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Output) != 1 || out.Output[0].Name != "exec_command" {
+		t.Fatalf("expected exec_command output, got %#v", out.Output)
+	}
+	if !strings.Contains(out.Output[0].Arguments, "write_text") || strings.Contains(out.Output[0].Arguments, "file_path") {
+		t.Fatalf("expected normalized file write command, got %q", out.Output[0].Arguments)
+	}
+}
+
+func TestResponsesPreviousResponseAddsFunctionCallOutput(t *testing.T) {
+	var upstreamRequests []map[string]any
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var upstreamBody map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Fatal(err)
+		}
+		upstreamRequests = append(upstreamRequests, upstreamBody)
+		w.Header().Set("Content-Type", "application/json")
+		if len(upstreamRequests) == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call_read_1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]},"finish_reason":"tool_calls"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"README inspected"}}]}`))
+	}))
+
+	first, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Inspect README",
+		"tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Body.Close()
+	var firstOut responsesEnvelope
+	if err := json.NewDecoder(first.Body).Decode(&firstOut); err != nil {
+		t.Fatal(err)
+	}
+
+	secondPayload := `{
+		"model":"qwen-local-code",
+		"previous_response_id":"` + firstOut.ID + `",
+		"input":[{"type":"function_call_output","call_id":"call_read_1","output":"# Lab\n"}],
+		"tools":[{"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}}]
+	}`
+	second, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(secondPayload)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(second.Body)
+		t.Fatalf("unexpected status %d: %s", second.StatusCode, body)
+	}
+	if len(upstreamRequests) != 2 {
+		t.Fatalf("expected two upstream requests, got %d", len(upstreamRequests))
+	}
+	messages := upstreamRequests[1]["messages"].([]any)
+	last := messages[len(messages)-1].(map[string]any)
+	if last["role"] != "tool" || last["tool_call_id"] != "call_read_1" || last["content"] != "# Lab\n" {
+		t.Fatalf("expected function_call_output as tool message, got %#v", last)
+	}
+}
+
+func TestResponsesFallbackJSONToolCall(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"```json\\n{\\\"type\\\":\\\"function_call\\\",\\\"call_id\\\":\\\"call_patch_1\\\",\\\"name\\\":\\\"apply_patch\\\",\\\"arguments\\\":{\\\"patch\\\":\\\"*** Begin Patch\\\\n*** End Patch\\\"}}\\n```\"}}]}"))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Patch file",
+		"tools":[{"type":"function","function":{"name":"apply_patch","parameters":{"type":"object"}}}],
+		"tool_choice":{"type":"function","function":{"name":"apply_patch"}}
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out responsesEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Output) != 1 || out.Output[0].Type != "function_call" || out.Output[0].Name != "apply_patch" {
+		t.Fatalf("expected fallback function_call, got %#v", out.Output)
+	}
+	if out.Output[0].Arguments != `{"patch":"*** Begin Patch\n*** End Patch"}` {
+		t.Fatalf("unexpected fallback arguments: %q", out.Output[0].Arguments)
+	}
+}
+
+func TestResponsesStreamBuffersFallbackToolCall(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"```json\\n\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"type\\\":\\\"function_call\\\",\\\"call_id\\\":\\\"call_write_1\\\",\\\"name\\\":\\\"write_file\\\",\\\"arguments\\\":{\\\"path\\\":\\\"hello.txt\\\",\\\"content\\\":\\\"after\\\\n\\\"}}\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"\\n```\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Change hello.txt",
+		"stream":true,
+		"tools":[{"type":"function","function":{"name":"write_file","parameters":{"type":"object"}}}],
+		"tool_choice":{"type":"function","function":{"name":"write_file"}}
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	for _, want := range []string{
+		"event: response.output_item.added",
+		`"type":"function_call"`,
+		`"call_id":"call_write_1"`,
+		`"name":"write_file"`,
+		"event: response.completed",
+	} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Fatalf("missing %q in stream: %s", want, body)
+		}
+	}
+	if bytes.Contains(body, []byte("response.output_text.delta")) {
+		t.Fatalf("tool streams must not leak fallback JSON as text deltas: %s", body)
+	}
+}
+
+func TestResponsesStreamMapsCustomApplyPatchToolCall(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"type\\\":\\\"function_call\\\",\\\"call_id\\\":\\\"call_patch_1\\\",\\\"name\\\":\\\"apply_patch\\\",\\\"arguments\\\":{\\\"patch\\\":\\\"*** Begin Patch\\\\n*** End Patch\\\"}}\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Patch file",
+		"stream":true,
+		"tools":[{"type":"custom","name":"apply_patch","format":{"type":"grammar"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	for _, want := range []string{
+		`"type":"custom_tool_call"`,
+		`"name":"apply_patch"`,
+		`"input":"*** Begin Patch\n*** End Patch"`,
+	} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Fatalf("missing %q in stream: %s", want, body)
+		}
+	}
+}
+
+func TestResponsesStreamDowngradesInvalidApplyPatchToExecCommand(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"type\\\":\\\"function_call\\\",\\\"call_id\\\":\\\"call_patch_1\\\",\\\"name\\\":\\\"apply_patch\\\",\\\"arguments\\\":{\\\"cmd\\\":\\\"echo after > hello.txt\\\"}}\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Patch file",
+		"stream":true,
+		"tools":[
+			{"type":"custom","name":"apply_patch","format":{"type":"grammar"}},
+			{"type":"function","name":"exec_command","parameters":{"type":"object"}}
+		]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	for _, want := range []string{
+		`"type":"function_call"`,
+		`"name":"exec_command"`,
+		`echo after \\u003e hello.txt`,
+	} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Fatalf("missing %q in stream: %s", want, body)
+		}
+	}
+}
+
+func TestResponsesStreamAliasesWriteFileToExecCommand(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"type\\\":\\\"function_call\\\",\\\"call_id\\\":\\\"call_write_1\\\",\\\"name\\\":\\\"write_file\\\",\\\"arguments\\\":{\\\"path\\\":\\\"hello.txt\\\",\\\"content\\\":\\\"after\\\\n\\\"}}\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Write file",
+		"stream":true,
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	for _, want := range []string{
+		`"type":"function_call"`,
+		`"name":"exec_command"`,
+		`write_text`,
+	} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Fatalf("missing %q in stream: %s", want, body)
+		}
+	}
+}
+
+func TestResponsesStreamNormalizesJSONBlobExecCommandToFileWrite(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"type\\\":\\\"function_call\\\",\\\"call_id\\\":\\\"call_exec_1\\\",\\\"name\\\":\\\"exec_command\\\",\\\"arguments\\\":{\\\"cmd\\\":\\\"{\\\\\\\"file_path\\\\\\\":\\\\\\\"hello.txt\\\\\\\",\\\\\\\"patch_content\\\\\\\":\\\\\\\"after\\\\\\\\n\\\\\\\"}\\\"}}\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Write file",
+		"stream":true,
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	for _, want := range []string{
+		`"type":"function_call"`,
+		`"name":"exec_command"`,
+		`write_text`,
+		`hello.txt`,
+	} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Fatalf("missing %q in stream: %s", want, body)
+		}
+	}
+	if bytes.Contains(body, []byte(`file_path`)) || bytes.Contains(body, []byte(`patch_content`)) {
+		t.Fatalf("json blob command leaked through as shell input: %s", body)
+	}
+}
+
+func TestResponsesStreamMapsShellFenceToExecCommand(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"```sh\\necho \\\"after\\\" > hello.txt\\n```\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Write file",
+		"stream":true,
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	for _, want := range []string{
+		`"type":"function_call"`,
+		`"name":"exec_command"`,
+		`echo \\\"after\\\" \\u003e hello.txt`,
+	} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Fatalf("missing %q in stream: %s", want, body)
+		}
+	}
+	if bytes.Contains(body, []byte("response.output_text.delta")) {
+		t.Fatalf("shell fence must become a tool call, not text: %s", body)
+	}
+}
+
+func TestResponsesStreamMapsNarratedShellFenceToExecCommand(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"Use this command:\\n\\n```sh\\necho \\\"after\\\" > hello.txt\\n```\\n\\nThen stop.\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Write file",
+		"stream":true,
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	for _, want := range []string{
+		`"type":"function_call"`,
+		`"name":"exec_command"`,
+		`echo \\\"after\\\" \\u003e hello.txt`,
+	} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Fatalf("missing %q in stream: %s", want, body)
+		}
+	}
+	if bytes.Contains(body, []byte("response.output_text.delta")) {
+		t.Fatalf("narrated shell fence must become a tool call, not text: %s", body)
+	}
+}
+
+func TestResponsesStreamSuppressesRepeatedSuccessfulExecCommand(t *testing.T) {
+	var upstreamCalls int
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		if upstreamCalls == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"type\":\"function_call\",\"call_id\":\"call_exec_1\",\"name\":\"exec_command\",\"arguments\":{\"cmd\":\"echo after > hello.txt\"}}"}}]}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"```sh\\necho after > hello.txt\\n```\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	first, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Write file",
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Body.Close()
+	var firstOut responsesEnvelope
+	if err := json.NewDecoder(first.Body).Decode(&firstOut); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"previous_response_id":"`+firstOut.ID+`",
+		"input":[{"type":"function_call_output","call_id":"call_exec_1","output":{"exit_code":0,"status":"completed"}}],
+		"stream":true,
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Body.Close()
+	body, _ := io.ReadAll(second.Body)
+	if bytes.Contains(body, []byte(`"type":"function_call"`)) {
+		t.Fatalf("repeated successful exec_command should be text, not another tool call: %s", body)
+	}
+	if !bytes.Contains(body, []byte("already completed successfully")) {
+		t.Fatalf("expected duplicate command completion message, got: %s", body)
+	}
+}
+
+func TestFallbackToolInstructionStopsAfterSuccessfulExecCommand(t *testing.T) {
+	msg := fallbackToolInstruction(json.RawMessage(`[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]`), nil)
+
+	for _, want := range []string{"exit_code 0", "do not call exec_command again", "summarize"} {
+		if !strings.Contains(msg.Content, want) {
+			t.Fatalf("fallback instruction missing %q: %s", want, msg.Content)
+		}
+	}
+}
+
+func TestResponsesRequiredToolChoiceRejectsInvalidFallback(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"I edited the file."}}]}`))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Patch file",
+		"tools":[{"type":"function","function":{"name":"apply_patch","parameters":{"type":"object"}}}],
+		"tool_choice":{"type":"function","function":{"name":"apply_patch"}}
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusBadGateway {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("expected bad gateway, got %d: %s", res.StatusCode, body)
+	}
+	var out errorEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Error.Type != "tool_call_parse_error" {
+		t.Fatalf("unexpected error: %#v", out)
+	}
+}
+
+func TestResponsesCompactsPreviousTranscript(t *testing.T) {
+	cfg := testConfig("")
+	cfg.MaxPromptChars = 245
+	var upstreamRequests []map[string]any
+	gateway, _ := newTestServerWithConfig(t, cfg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var upstreamBody map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Fatal(err)
+		}
+		upstreamRequests = append(upstreamRequests, upstreamBody)
+		w.Header().Set("Content-Type", "application/json")
+		if len(upstreamRequests) == 1 {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"first"}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"second"}}]}`))
+	}))
+
+	longPrompt := strings.Repeat("context ", 30)
+	first, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{"model":"qwen-local-code","input":"`+longPrompt+`"} `)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Body.Close()
+	var firstOut responsesEnvelope
+	if err := json.NewDecoder(first.Body).Decode(&firstOut); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{"model":"qwen-local-code","previous_response_id":"`+firstOut.ID+`","input":"next"}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Body.Close()
+	if second.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(second.Body)
+		t.Fatalf("unexpected status %d: %s", second.StatusCode, body)
+	}
+	messages := upstreamRequests[1]["messages"].([]any)
+	if len(messages) == 0 || !strings.Contains(messages[0].(map[string]any)["content"].(string), "Compacted previous context") {
+		t.Fatalf("expected compacted transcript marker, got %#v", messages)
 	}
 }
 
@@ -168,14 +755,134 @@ func TestModelsAuthAndHealth(t *testing.T) {
 	}
 	var out struct {
 		Data []struct {
-			ID string `json:"id"`
+			ID                       string `json:"id"`
+			Slug                     string `json:"slug"`
+			DisplayName              string `json:"display_name"`
+			DefaultReasoningLevel    string `json:"default_reasoning_level"`
+			ContextWindow            int    `json:"context_window"`
+			AutoCompactTokenLimit    int    `json:"auto_compact_token_limit"`
+			SupportedReasoningLevels []struct {
+				Effort      string `json:"effort"`
+				Description string `json:"description"`
+			} `json:"supported_reasoning_levels"`
 		} `json:"data"`
+		Models []struct {
+			ID                       string `json:"id"`
+			Slug                     string `json:"slug"`
+			DisplayName              string `json:"display_name"`
+			DefaultReasoningLevel    string `json:"default_reasoning_level"`
+			ContextWindow            int    `json:"context_window"`
+			AutoCompactTokenLimit    int    `json:"auto_compact_token_limit"`
+			SupportedReasoningLevels []struct {
+				Effort      string `json:"effort"`
+				Description string `json:"description"`
+			} `json:"supported_reasoning_levels"`
+		} `json:"models"`
 	}
 	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
 		t.Fatal(err)
 	}
 	if len(out.Data) != 1 || out.Data[0].ID != "qwen-local-code" {
 		t.Fatalf("unexpected models response: %#v", out)
+	}
+	if out.Data[0].Slug != "qwen-local-code" {
+		t.Fatalf("expected OpenAI-compatible data slug, got %#v", out.Data[0])
+	}
+	if out.Data[0].DisplayName != "qwen-local-code" {
+		t.Fatalf("expected OpenAI-compatible display_name, got %#v", out.Data[0])
+	}
+	if out.Data[0].DefaultReasoningLevel != "low" || len(out.Data[0].SupportedReasoningLevels) == 0 || out.Data[0].SupportedReasoningLevels[0].Effort == "" {
+		t.Fatalf("expected OpenAI-compatible reasoning metadata, got %#v", out.Data[0])
+	}
+	if out.Data[0].ContextWindow != defaultContextWindow || out.Data[0].AutoCompactTokenLimit != defaultAutoCompact {
+		t.Fatalf("expected OpenAI-compatible context metadata, got %#v", out.Data[0])
+	}
+	if len(out.Models) != 1 || out.Models[0].ID != "qwen-local-code" {
+		t.Fatalf("unexpected Codex models response: %#v", out)
+	}
+	if out.Models[0].Slug != "qwen-local-code" {
+		t.Fatalf("expected Codex models slug, got %#v", out.Models[0])
+	}
+	if out.Models[0].DisplayName != "qwen-local-code" {
+		t.Fatalf("expected Codex models display_name, got %#v", out.Models[0])
+	}
+	if out.Models[0].DefaultReasoningLevel != "low" || len(out.Models[0].SupportedReasoningLevels) == 0 || out.Models[0].SupportedReasoningLevels[0].Effort == "" {
+		t.Fatalf("expected Codex models reasoning metadata, got %#v", out.Models[0])
+	}
+	if out.Models[0].ContextWindow != defaultContextWindow || out.Models[0].AutoCompactTokenLimit != defaultAutoCompact {
+		t.Fatalf("expected Codex context metadata, got %#v", out.Models[0])
+	}
+}
+
+func TestModelsUsesConfiguredContextMetadata(t *testing.T) {
+	cfg := testConfig("")
+	cfg.ContextWindow = 9000
+	cfg.AutoCompactTokenLimit = 6000
+	gateway, _ := newTestServerWithConfig(t, cfg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("models should not hit upstream")
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodGet, gateway.URL+"/v1/models", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out struct {
+		Models []struct {
+			ContextWindow         int `json:"context_window"`
+			AutoCompactTokenLimit int `json:"auto_compact_token_limit"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Models) != 1 || out.Models[0].ContextWindow != 9000 || out.Models[0].AutoCompactTokenLimit != 6000 {
+		t.Fatalf("unexpected context metadata: %#v", out)
+	}
+}
+
+func TestResponsesRejectsOversizedPromptBeforeUpstream(t *testing.T) {
+	cfg := testConfig("")
+	cfg.MaxPromptChars = 10
+	gateway, _ := newTestServerWithConfig(t, cfg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("oversized prompt should not hit upstream")
+	}))
+
+	payload := `{"model":"qwen-local-code","input":"this prompt is too long"}`
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(payload)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("expected bad request, got %d: %s", res.StatusCode, body)
+	}
+	var out errorEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Error.Type != "context_window_exceeded" {
+		t.Fatalf("unexpected error envelope: %#v", out)
+	}
+}
+
+func TestChatCompletionsRejectsOversizedPromptBeforeUpstream(t *testing.T) {
+	cfg := testConfig("")
+	cfg.MaxPromptChars = 10
+	gateway, _ := newTestServerWithConfig(t, cfg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("oversized prompt should not hit upstream")
+	}))
+
+	payload := `{"model":"qwen-local-code","messages":[{"role":"user","content":"this prompt is too long"}]}`
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/chat/completions", strings.NewReader(payload)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusBadRequest {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("expected bad request, got %d: %s", res.StatusCode, body)
 	}
 }
 
@@ -321,8 +1028,17 @@ func TestRateLimit(t *testing.T) {
 
 func TestResponsesStreamEmitsSSE(t *testing.T) {
 	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"streamed"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+		var upstreamBody map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Fatal(err)
+		}
+		if upstreamBody["stream"] != true {
+			t.Fatalf("expected upstream stream=true, got %#v", upstreamBody["stream"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"stream\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ed\"}}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 
 	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{"model":"qwen-local-code","input":"hi","stream":true}`)))
@@ -334,7 +1050,27 @@ func TestResponsesStreamEmitsSSE(t *testing.T) {
 		t.Fatalf("expected SSE content type, got %q", got)
 	}
 	body, _ := io.ReadAll(res.Body)
-	for _, want := range []string{"event: response.created", "event: response.output_text.delta", "event: response.completed", "streamed"} {
+	for _, want := range []string{"event: response.created", "event: response.output_text.delta", "event: response.completed", "streamed", `"output_text":"streamed"`} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Fatalf("missing %q in stream: %s", want, body)
+		}
+	}
+}
+
+func TestResponsesStreamAlwaysEmitsUsageFields(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{"model":"qwen-local-code","input":"hi","stream":true}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	for _, want := range []string{`"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0}`, `"output_text":"ok"`} {
 		if !bytes.Contains(body, []byte(want)) {
 			t.Fatalf("missing %q in stream: %s", want, body)
 		}
