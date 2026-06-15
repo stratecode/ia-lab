@@ -469,6 +469,9 @@ func (s *Server) chatToResponses(body []byte, req responsesRequest, chatReq chat
 				output = append(output, messageResponseItem(text))
 				break
 			}
+			if duplicateExecCommandItem(output, item) {
+				continue
+			}
 			output = append(output, item)
 			s.toolCalls.WithLabelValues("native", call.Function.Name).Inc()
 		}

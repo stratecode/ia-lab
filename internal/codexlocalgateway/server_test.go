@@ -283,6 +283,46 @@ func TestResponsesNormalizesNativeJSONBlobExecCommandToFileWrite(t *testing.T) {
 	}
 }
 
+func TestResponsesSuppressesDuplicateNativeExecCommandsInSameResponse(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices":[{
+				"message":{
+					"role":"assistant",
+					"tool_calls":[{
+						"id":"call_exec_1",
+						"type":"function",
+						"function":{"name":"exec_command","arguments":"{\"cmd\":\"echo \\\"after\\\" > hello.txt\"}"}
+					},{
+						"id":"call_exec_2",
+						"type":"function",
+						"function":{"name":"exec_command","arguments":"{\"cmd\":\"touch /tmp/codex-lab-native-e2e/hello.txt\necho 'after' > /tmp/codex-lab-native-e2e/hello.txt\"}"}
+					}]
+				},
+				"finish_reason":"tool_calls"
+			}]
+		}`))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Write file",
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out responsesEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Output) != 1 || out.Output[0].CallID != "call_exec_1" {
+		t.Fatalf("expected only first duplicate exec_command, got %#v", out.Output)
+	}
+}
+
 func TestResponsesPreviousResponseAddsFunctionCallOutput(t *testing.T) {
 	var upstreamRequests []map[string]any
 	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -635,6 +675,98 @@ func TestResponsesStreamSuppressesRepeatedSuccessfulExecCommand(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte("already completed successfully")) {
 		t.Fatalf("expected duplicate command completion message, got: %s", body)
+	}
+}
+
+func TestResponsesStreamSuppressesEquivalentRepeatedFileWrite(t *testing.T) {
+	var upstreamCalls int
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		if upstreamCalls == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"type\":\"function_call\",\"call_id\":\"call_exec_1\",\"name\":\"exec_command\",\"arguments\":{\"cmd\":\"echo \\\"after\\\" > hello.txt\"}}"}}]}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"```sh\\ntouch /tmp/codex-lab-native-e2e/hello.txt\\necho 'after' > /tmp/codex-lab-native-e2e/hello.txt\\n```\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	first, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Write file",
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Body.Close()
+	var firstOut responsesEnvelope
+	if err := json.NewDecoder(first.Body).Decode(&firstOut); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"previous_response_id":"`+firstOut.ID+`",
+		"input":[{"type":"function_call_output","call_id":"call_exec_1","output":{"exit_code":0,"status":"completed"}}],
+		"stream":true,
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Body.Close()
+	body, _ := io.ReadAll(second.Body)
+	if bytes.Contains(body, []byte(`"type":"function_call"`)) {
+		t.Fatalf("equivalent successful file write should be text, not another tool call: %s", body)
+	}
+	if !bytes.Contains(body, []byte("already completed successfully")) {
+		t.Fatalf("expected duplicate command completion message, got: %s", body)
+	}
+}
+
+func TestRepeatedSuccessfulExecCommandSuppressesEquivalentFileWrite(t *testing.T) {
+	messages := []chatMessage{
+		{
+			Role: "assistant",
+			ToolCalls: []chatToolCall{{
+				ID:   "call_exec_1",
+				Type: "function",
+				Function: chatToolFunction{
+					Name:      "exec_command",
+					Arguments: mustJSON(map[string]string{"cmd": `echo "after" > hello.txt`}),
+				},
+			}},
+		},
+		{
+			Role:       "tool",
+			ToolCallID: "call_exec_1",
+			Content:    `{"exit_code":0,"status":"completed"}`,
+		},
+	}
+	item := responseItem{
+		Type:      "function_call",
+		Name:      "exec_command",
+		Arguments: mustJSON(map[string]string{"cmd": "touch /tmp/codex-lab-native-e2e/hello.txt\necho 'after' > /tmp/codex-lab-native-e2e/hello.txt"}),
+	}
+
+	if !repeatedSuccessfulExecCommand(messages, item) {
+		t.Fatal("expected equivalent successful file write to be suppressed")
+	}
+}
+
+func TestFileWriteEffectNormalizesEscapedEchoCommands(t *testing.T) {
+	first, ok := fileWriteEffect(`echo \"after\" > hello.txt`)
+	if !ok {
+		t.Fatal("expected first echo write effect")
+	}
+	second, ok := fileWriteEffect("touch /tmp/codex-lab-native-e2e/hello.txt\necho 'after' > /tmp/codex-lab-native-e2e/hello.txt")
+	if !ok {
+		t.Fatal("expected second echo write effect")
+	}
+	if !first.equivalent(second) {
+		t.Fatalf("expected equivalent writes, first=%#v second=%#v", first, second)
 	}
 }
 

@@ -4,7 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"regexp"
 	"strings"
+)
+
+var (
+	echoWritePattern   = regexp.MustCompile(`(?m)(?:^|[;&\n]\s*)echo\s+(.+?)\s*>\s*([^\s;&]+)`)
+	pythonWritePattern = regexp.MustCompile(`Path\(["']([^"']+)["']\)\.write_text\(["']((?:\\.|[^"'])*)["']\)`)
 )
 
 func flattenInput(raw json.RawMessage) (string, error) {
@@ -339,6 +346,7 @@ func repeatedSuccessfulExecCommand(messages []chatMessage, item responseItem) bo
 	if !ok {
 		return false
 	}
+	targetWrite, targetWritesFile := fileWriteEffect(target)
 	seen := make(map[string]string)
 	for _, msg := range messages {
 		if msg.Role == "assistant" {
@@ -353,12 +361,82 @@ func repeatedSuccessfulExecCommand(messages []chatMessage, item responseItem) bo
 			continue
 		}
 		if msg.Role == "tool" && toolOutputSucceeded(msg.Content) {
-			if seen[msg.ToolCallID] == target {
+			previous := seen[msg.ToolCallID]
+			if previous == target {
+				return true
+			}
+			if targetWritesFile {
+				if previousWrite, ok := fileWriteEffect(previous); ok && previousWrite.equivalent(targetWrite) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func duplicateExecCommandItem(existing []responseItem, candidate responseItem) bool {
+	target, ok := execCommandFromResponseItem(candidate)
+	if !ok {
+		return false
+	}
+	targetWrite, targetWritesFile := fileWriteEffect(target)
+	for _, item := range existing {
+		previous, ok := execCommandFromResponseItem(item)
+		if !ok {
+			continue
+		}
+		if previous == target {
+			return true
+		}
+		if targetWritesFile {
+			if previousWrite, ok := fileWriteEffect(previous); ok && previousWrite.equivalent(targetWrite) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+type fileWrite struct {
+	Path    string
+	Content string
+}
+
+func (w fileWrite) equivalent(other fileWrite) bool {
+	if w.Content != other.Content {
+		return false
+	}
+	left := filepath.Clean(strings.TrimSpace(w.Path))
+	right := filepath.Clean(strings.TrimSpace(other.Path))
+	if left == right {
+		return true
+	}
+	return filepath.Base(left) == filepath.Base(right)
+}
+
+func fileWriteEffect(command string) (fileWrite, bool) {
+	trimmed := strings.TrimSpace(command)
+	if match := pythonWritePattern.FindStringSubmatch(trimmed); len(match) == 3 {
+		return fileWrite{Path: unescapeCommandString(match[1]), Content: unescapeCommandString(match[2])}, true
+	}
+	matches := echoWritePattern.FindAllStringSubmatch(trimmed, -1)
+	if len(matches) == 0 {
+		return fileWrite{}, false
+	}
+	last := matches[len(matches)-1]
+	path := strings.Trim(last[2], `"'`)
+	content := strings.TrimSpace(last[1])
+	content = strings.Trim(content, `"'`)
+	content = strings.TrimSpace(unescapeCommandString(content))
+	content = strings.Trim(content, `"'`)
+	content = strings.TrimSuffix(content, `\`)
+	return fileWrite{Path: path, Content: content + "\n"}, true
+}
+
+func unescapeCommandString(value string) string {
+	replacer := strings.NewReplacer(`\n`, "\n", `\"`, `"`, `\'`, `'`, `\\`, `\`)
+	return replacer.Replace(value)
 }
 
 func execCommandFromResponseItem(item responseItem) (string, bool) {
@@ -373,7 +451,10 @@ func execCommandFromArguments(arguments string) (string, bool) {
 		Cmd string `json:"cmd"`
 	}
 	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
-		return "", false
+		escapedNewlines := strings.ReplaceAll(arguments, "\n", "\\n")
+		if err := json.Unmarshal([]byte(escapedNewlines), &args); err != nil {
+			return "", false
+		}
 	}
 	command := strings.TrimSpace(args.Cmd)
 	return command, command != ""
