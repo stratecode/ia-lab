@@ -244,6 +244,151 @@ func TestResponsesCompactsToolsForUpstreamAndMapsNativeToolCall(t *testing.T) {
 	}
 }
 
+func TestResponsesForcesExecCommandForImmediateExecutionRequests(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"CREATED"}}]}`))
+	}))
+
+	payload := `{
+		"model":"qwen-local-code",
+		"input":"Approval policy is never. Execute this command immediately: touch /tmp/proof. Reply with CREATED.",
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(payload)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("expected successful synthesized tool call, got %d: %s", res.StatusCode, body)
+	}
+	var out responsesEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Output) != 1 || out.Output[0].Type != "function_call" || out.Output[0].Name != "exec_command" {
+		t.Fatalf("expected synthesized exec_command tool call, got %#v", out.Output)
+	}
+	if !strings.Contains(out.Output[0].Arguments, `touch /tmp/proof`) {
+		t.Fatalf("expected synthesized command arguments, got %q", out.Output[0].Arguments)
+	}
+}
+
+func TestEffectiveToolChoiceLeavesNonExecRequestsOnAuto(t *testing.T) {
+	req := responsesRequest{
+		Input: json.RawMessage(`"Explain whether this command is safe: rm -rf /tmp/demo"`),
+		Tools: json.RawMessage(`[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]`),
+	}
+	if got := effectiveToolChoice(req); got != nil {
+		t.Fatalf("expected no forced tool choice, got %#v", got)
+	}
+}
+
+func TestEffectiveToolChoiceClearsRequiredChoiceAfterFunctionCallOutput(t *testing.T) {
+	req := responsesRequest{
+		Input: json.RawMessage(`[{"type":"function_call_output","call_id":"call_exec_1","output":{"exit_code":0,"status":"completed"}}]`),
+		Tools: json.RawMessage(`[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]`),
+		ToolChoice: map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": "exec_command",
+			},
+		},
+	}
+	if got := effectiveToolChoice(req); got != nil {
+		t.Fatalf("expected tool choice to be cleared after tool output, got %#v", got)
+	}
+}
+
+func TestResponsesStreamAllowsTextAfterToolOutputEvenIfToolChoiceWasRequired(t *testing.T) {
+	var upstreamBodies []map[string]any
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		upstreamBodies = append(upstreamBodies, body)
+		if len(upstreamBodies) == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"type\":\"function_call\",\"call_id\":\"call_exec_1\",\"name\":\"exec_command\",\"arguments\":{\"cmd\":\"echo ok\"}}"}}]}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"PASSED\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	first, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Execute this command immediately: echo ok",
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Body.Close()
+	var firstOut responsesEnvelope
+	if err := json.NewDecoder(first.Body).Decode(&firstOut); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"previous_response_id":"`+firstOut.ID+`",
+		"input":[{"type":"function_call_output","call_id":"call_exec_1","output":{"exit_code":0,"status":"completed"}}],
+		"stream":true,
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}],
+		"tool_choice":{"type":"function","function":{"name":"exec_command"}}
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Body.Close()
+	body, _ := io.ReadAll(second.Body)
+	if bytes.Contains(body, []byte("response.failed")) {
+		t.Fatalf("expected successful text completion after tool output, got: %s", body)
+	}
+	if !bytes.Contains(body, []byte("PASSED")) {
+		t.Fatalf("expected PASSED text in stream, got: %s", body)
+	}
+	if len(upstreamBodies) < 2 {
+		t.Fatalf("expected two upstream calls, got %d", len(upstreamBodies))
+	}
+	if _, ok := upstreamBodies[1]["tool_choice"]; ok {
+		t.Fatalf("expected cleared tool_choice on post-tool turn, got %#v", upstreamBodies[1]["tool_choice"])
+	}
+}
+
+func TestResponsesStreamSynthesizesExecCommandForImmediateExecutionRequests(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"CREATED\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Approval policy is never. Execute this command immediately: touch /tmp/proof. Reply with CREATED.",
+		"stream":true,
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if bytes.Contains(body, []byte("response.failed")) {
+		t.Fatalf("expected synthesized stream tool call, got failure: %s", body)
+	}
+	for _, want := range []string{`"type":"function_call"`, `"name":"exec_command"`, `touch /tmp/proof`} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Fatalf("missing %q in synthesized stream body: %s", want, body)
+		}
+	}
+}
+
 func TestResponsesNormalizesNativeJSONBlobExecCommandToFileWrite(t *testing.T) {
 	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -675,6 +820,70 @@ func TestResponsesStreamSuppressesRepeatedSuccessfulExecCommand(t *testing.T) {
 	}
 	if !bytes.Contains(body, []byte("already completed successfully")) {
 		t.Fatalf("expected duplicate command completion message, got: %s", body)
+	}
+}
+
+func TestResponsesParsesPrefixedExecCommandFallback(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"exec_command {\"cmd\":\"echo after > hello.txt\"}"}}]}`))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Write file",
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("unexpected status %d: %s", res.StatusCode, body)
+	}
+
+	var out responsesEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Output) != 1 || out.Output[0].Type != "function_call" || out.Output[0].Name != "exec_command" {
+		t.Fatalf("expected parsed exec_command function_call, got %#v", out.Output)
+	}
+	if !strings.Contains(out.Output[0].Arguments, `echo after > hello.txt`) {
+		t.Fatalf("expected command to survive prefixed fallback parse, got %q", out.Output[0].Arguments)
+	}
+}
+
+func TestResponsesParsesPrefixedCustomToolFallback(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"apply_patch {\"patch\":\"*** Begin Patch\\n*** End Patch\"}"}}]}`))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Patch file",
+		"tools":[{"type":"custom","name":"apply_patch","format":{"type":"grammar"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("unexpected status %d: %s", res.StatusCode, body)
+	}
+
+	var out responsesEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Output) != 1 || out.Output[0].Type != "custom_tool_call" || out.Output[0].Name != "apply_patch" {
+		t.Fatalf("expected parsed apply_patch custom_tool_call, got %#v", out.Output)
+	}
+	if !strings.Contains(out.Output[0].Input, "*** Begin Patch") {
+		t.Fatalf("expected patch payload in custom tool input, got %q", out.Output[0].Input)
 	}
 }
 

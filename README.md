@@ -193,6 +193,7 @@ Sensitive variables in the vault:
 ## Additional documentation
 
 - [Master Plan](docs/architecture/master-plan.md) — canonical product direction, MVP boundaries, and roadmap
+- [Codex Agentic Workflow](docs/codex-agentic-workflow.md) — bootstrap Codex against the lab gateway and work on this repo with repo-local instructions
 - [Getting Started](docs/getting-started.md) — full setup guide from scratch (SSH keys, vault, first run)
 - [System Usage Guide](docs/system-usage.md) — Telegram, Open WebUI, and orchestrator API usage
 - [Orchestrator Go Runtime](docs/orchestrator-go-runtime.md) — Go runtime architecture, build flow, and deployment model

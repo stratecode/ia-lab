@@ -18,6 +18,8 @@ There are four practical ways to use the system:
    Best when you need web search, URL fetch, document parsing, or image analysis with traceable artifacts.
 5. `Local Bridge + TUI`
    Best when you want to manage initiatives and execute approved work inside a real workspace on the control machine.
+6. `Codex against the lab gateway`
+   Best when you want direct repository work in Codex while still using the lab-hosted local coding model.
 
 There is also a fourth entry point if you enjoy pain: editing production `site-packages`. Do not use that one.
 
@@ -30,6 +32,7 @@ There is also a fourth entry point if you enjoy pain: editing production `site-p
 | Orchestrator API | `https://<cockpit_domain>/orchestrator/` | HTTP control plane |
 | Capability Layer | API + Telegram + `orchestrator-tools` model | web, documents, images, traceable sources |
 | Local Bridge + TUI | `lab-agent`, `lab-agentd`, `lab-agent tui` | initiative governance, local execution, and project scaffolding |
+| Codex + lab gateway | `codex` + repo-local `CODEX_HOME` | direct coding workflow against the local lab model |
 | Direct health | `http://127.0.0.1:8100/health` | local health check on the host |
 | Metrics | `http://127.0.0.1:8100/metrics` | Prometheus scrape target |
 
@@ -45,6 +48,7 @@ Use this sequence if you want signal without ceremony:
 6. Use the capability endpoints or commands when you need context from the web, documents, or images.
 7. Use the local bridge and TUI when the work must touch a real workspace on your machine instead of the remote runtime workspace.
 8. Use initiatives when the work is larger than one task and needs requirements, design, plan, approvals, and selective execution.
+9. Use Codex against the lab gateway when you want direct repo editing with repository-local instructions and terminal-native iteration.
 
 ## Telegram
 
@@ -167,6 +171,25 @@ Important operational note:
 - when bridge behavior changes, rebuild the local macOS/Linux agent binaries before testing
 
 Full bridge install and TUI usage lives in [Local Bridge and CLI](./local-bridge.md).
+
+## Codex Against the Lab Gateway
+
+If you want Codex to work directly on this repository while using the lab-hosted local coding model:
+
+```bash
+./scripts/bootstrap-codex-home.sh
+export CODEX_HOME="$PWD/.codex-local"
+set -a && source "$CODEX_HOME/env" && set +a
+codex
+```
+
+This flow gives Codex:
+
+- a repo-local `CODEX_HOME`
+- authenticated access to the lab Codex gateway
+- repository instructions from `AGENTS.md`
+
+Full setup and failure handling lives in [Codex Agentic Workflow](./codex-agentic-workflow.md).
 
 ## Initiative API
 

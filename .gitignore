@@ -29,6 +29,7 @@ jetbrains-plugin/.gradle/
 jetbrains-plugin/build/
 jetbrains-plugin/.idea/
 .stratecode/
+.codex-local/
 
 # Local benchmark configuration and generated reports
 benchmarks/benchmark.local.json

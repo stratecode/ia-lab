@@ -12,6 +12,7 @@ import (
 var (
 	echoWritePattern   = regexp.MustCompile(`(?m)(?:^|[;&\n]\s*)echo\s+(.+?)\s*>\s*([^\s;&]+)`)
 	pythonWritePattern = regexp.MustCompile(`Path\(["']([^"']+)["']\)\.write_text\(["']((?:\\.|[^"'])*)["']\)`)
+	prefixedToolPattern = regexp.MustCompile(`(?s)^\s*([A-Za-z_][A-Za-z0-9_-]*)\s+(\{.*\})\s*$`)
 )
 
 func flattenInput(raw json.RawMessage) (string, error) {
@@ -169,6 +170,62 @@ func parseFallbackToolCall(text string, tools json.RawMessage) (responseItem, bo
 	if item, ok := shellFenceToolCall(strings.TrimSpace(text), tools); ok {
 		return item, true, nil
 	}
+	if call, ok, err := parsePrefixedToolCall(text); err != nil {
+		return responseItem{}, false, err
+	} else if ok {
+		if normalized, ok, err := normalizeFallbackAlias(call, tools); err != nil || ok {
+			return normalized, true, err
+		}
+		toolTypes := toolTypeByName(tools)
+		toolType, known := toolTypes[call.Name]
+		if len(toolTypes) == 0 {
+			known = true
+			toolType = "function"
+		}
+		if !known {
+			return responseItem{}, true, fmt.Errorf("fallback function_call references unknown tool %q", call.Name)
+		}
+		callID := call.CallID
+		if callID == "" {
+			callID = "call_" + sanitizeToolName(call.Name)
+		}
+		arguments := strings.TrimSpace(string(call.Arguments))
+		if arguments == "" || arguments == "null" {
+			arguments = "{}"
+		}
+		if toolType == "custom" {
+			input := arguments
+			var asObject map[string]any
+			if err := json.Unmarshal([]byte(arguments), &asObject); err == nil {
+				if patch, _ := asObject["patch"].(string); patch != "" {
+					input = patch
+				} else if command, _ := asObject["cmd"].(string); command != "" {
+					input = command
+				}
+			}
+			return responseItem{
+				ID:     "ctc_" + callID,
+				Type:   "custom_tool_call",
+				Status: "completed",
+				CallID: callID,
+				Name:   call.Name,
+				Input:  input,
+			}, true, nil
+		}
+		if call.Name == "exec_command" {
+			if item, ok, err := normalizeExecCommandFallback(callID, arguments); err != nil || ok {
+				return item, true, err
+			}
+		}
+		return responseItem{
+			ID:        "fc_" + callID,
+			Type:      "function_call",
+			Status:    "completed",
+			CallID:    callID,
+			Name:      call.Name,
+			Arguments: arguments,
+		}, true, nil
+	}
 	trimmed := stripJSONFence(strings.TrimSpace(text))
 	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
 		return responseItem{}, false, nil
@@ -254,6 +311,29 @@ func parseFallbackToolCall(text string, tools json.RawMessage) (responseItem, bo
 		CallID:    callID,
 		Name:      call.Name,
 		Arguments: arguments,
+	}, true, nil
+}
+
+func parsePrefixedToolCall(text string) (fallbackToolCall, bool, error) {
+	trimmed := strings.TrimSpace(text)
+	match := prefixedToolPattern.FindStringSubmatch(trimmed)
+	if len(match) != 3 {
+		return fallbackToolCall{}, false, nil
+	}
+	name := strings.TrimSpace(match[1])
+	rawArgs := strings.TrimSpace(match[2])
+	if name == "" || rawArgs == "" {
+		return fallbackToolCall{}, false, nil
+	}
+	var decoded json.RawMessage
+	if !json.Valid([]byte(rawArgs)) {
+		return fallbackToolCall{}, false, fmt.Errorf("prefixed tool call for %q does not contain valid JSON arguments", name)
+	}
+	decoded = json.RawMessage(rawArgs)
+	return fallbackToolCall{
+		Type:      "function_call",
+		Name:      name,
+		Arguments: decoded,
 	}, true, nil
 }
 

@@ -224,6 +224,7 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_json", "request body must be valid JSON")
 		return
 	}
+	req.ToolChoice = effectiveToolChoice(req)
 	chatReq, err := s.responsesToChat(req)
 	if err != nil {
 		if strings.Contains(err.Error(), "prompt text is too large") {
@@ -338,9 +339,153 @@ func fallbackToolInstruction(tools json.RawMessage, choice any) chatMessage {
 		Content: nameLine + " If you need to call a tool and native tool_calls are unavailable, return exactly one JSON object: " +
 			`{"type":"function_call","call_id":"call_<short_id>","name":"tool_name","arguments":{...}}. ` +
 			"For exec_command, arguments must be {\"cmd\":\"real shell command\"}; never put another JSON object inside cmd. " +
+			"If the user explicitly tells you to run or execute a command now, you must answer with the exec_command JSON function_call and no surrounding prose. " +
+			"If approval policy is never or sandbox is already danger-full-access, do not ask for confirmation and do not say you are about to run a command; call the tool immediately. " +
 			"If the latest exec_command tool result has exit_code 0, do not call exec_command again for the same task; summarize completion briefly. " +
 			"Do not use write_stdin unless a prior exec_command returned a session_id. Do not claim that you edited files or ran commands unless a tool result confirms it.",
 	}
+}
+
+func effectiveToolChoice(req responsesRequest) any {
+	if hasFunctionCallOutput(req.Input) {
+		return nil
+	}
+	if requiresToolCall(req.ToolChoice) {
+		return req.ToolChoice
+	}
+	if !toolNameAllowed("exec_command", req.Tools) {
+		return req.ToolChoice
+	}
+	input, err := flattenInput(req.Input)
+	if err != nil {
+		return req.ToolChoice
+	}
+	if !looksLikeImmediateExecRequest(input) {
+		return req.ToolChoice
+	}
+	return map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name": "exec_command",
+		},
+	}
+}
+
+func looksLikeImmediateExecRequest(input string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if normalized == "" {
+		return false
+	}
+	signals := []string{
+		"run exactly this command",
+		"execute this command",
+		"run this command",
+		"execute this shell command",
+		"execute the following command",
+		"do not suggest it",
+		"do not ask for confirmation",
+		"call the tool immediately",
+	}
+	for _, signal := range signals {
+		if strings.Contains(normalized, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasFunctionCallOutput(raw json.RawMessage) bool {
+	if len(raw) == 0 || string(raw) == "null" {
+		return false
+	}
+	var values []any
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return false
+	}
+	for _, value := range values {
+		if mapped, ok := value.(map[string]any); ok && mapped["type"] == "function_call_output" {
+			return true
+		}
+	}
+	return false
+}
+
+func synthesizeImmediateExecCommand(req responsesRequest) (responseItem, bool) {
+	if hasFunctionCallOutput(req.Input) || !toolNameAllowed("exec_command", req.Tools) {
+		return responseItem{}, false
+	}
+	input, err := flattenInput(req.Input)
+	if err != nil {
+		return responseItem{}, false
+	}
+	command, ok := immediateExecCommand(input)
+	if !ok {
+		return responseItem{}, false
+	}
+	return execCommandItem("call_exec_command", command), true
+}
+
+func immediateExecCommand(input string) (string, bool) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "", false
+	}
+	lower := strings.ToLower(trimmed)
+	markers := []string{
+		"run exactly this command now and do not suggest it:",
+		"run exactly this command now:",
+		"execute this command immediately:",
+		"execute this command now:",
+		"run exactly this command:",
+		"run this command immediately:",
+		"run this command now:",
+		"run this command:",
+		"execute this command:",
+	}
+	start := -1
+	for _, marker := range markers {
+		if idx := strings.Index(lower, marker); idx >= 0 {
+			start = idx + len(marker)
+			break
+		}
+	}
+	if start < 0 {
+		return "", false
+	}
+	command := strings.TrimSpace(trimmed[start:])
+	if command == "" {
+		return "", false
+	}
+	if strings.HasPrefix(command, "`") {
+		command = command[1:]
+		if idx := strings.Index(command, "`"); idx >= 0 {
+			command = command[:idx]
+		}
+	} else {
+		stoppers := []string{
+			". After ",
+			". after ",
+			". Then ",
+			". then ",
+			". Reply ",
+			". reply ",
+			"\nAfter ",
+			"\nafter ",
+			"\nThen ",
+			"\nthen ",
+		}
+		for _, stopper := range stoppers {
+			if idx := strings.Index(command, stopper); idx >= 0 {
+				command = command[:idx]
+				break
+			}
+		}
+	}
+	command = strings.TrimSpace(strings.Trim(command, "` "))
+	if command == "" {
+		return "", false
+	}
+	return command, true
 }
 
 func (s *Server) enforcePromptSize(body []byte) error {
@@ -500,6 +645,21 @@ func (s *Server) chatToResponses(body []byte, req responsesRequest, chatReq chat
 			}},
 		}
 		s.toolCalls.WithLabelValues("fallback_json", item.Name).Inc()
+		text = ""
+	} else if item, ok := synthesizeImmediateExecCommand(req); ok {
+		output = append(output, item)
+		assistant = chatMessage{
+			Role: "assistant",
+			ToolCalls: []chatToolCall{{
+				ID:   item.CallID,
+				Type: "function",
+				Function: chatToolFunction{
+					Name:      item.Name,
+					Arguments: item.Arguments,
+				},
+			}},
+		}
+		s.toolCalls.WithLabelValues("synthesized_request", item.Name).Inc()
 		text = ""
 	} else if requiresToolCall(req.ToolChoice) {
 		return responsesEnvelope{}, &toolCallParseError{message: "required tool_choice did not produce a valid native tool_call or fallback JSON function_call"}
@@ -749,6 +909,50 @@ func (s *Server) writeResponsesStreamFromUpstream(w http.ResponseWriter, ctx con
 			}
 			s.observeUsage(usage)
 			s.streams.WithLabelValues("completed").Inc()
+			s.store.set(responseID, append(cloneMessages(chatReq.Messages), chatMessage{
+				Role: "assistant",
+				ToolCalls: []chatToolCall{{
+					ID:   item.CallID,
+					Type: "function",
+					Function: chatToolFunction{
+						Name:      item.Name,
+						Arguments: item.Arguments,
+					},
+				}},
+			}))
+			writeSSE(w, "response.output_item.added", map[string]any{
+				"type":         "response.output_item.added",
+				"output_index": 0,
+				"item":         item,
+			})
+			writeSSE(w, "response.output_item.done", map[string]any{
+				"type":         "response.output_item.done",
+				"output_index": 0,
+				"item":         item,
+			})
+			writeSSE(w, "response.completed", map[string]any{
+				"type":     "response.completed",
+				"response": envelope,
+			})
+			_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			return nil
+		} else if item, ok := synthesizeImmediateExecCommand(req); ok {
+			envelope := responsesEnvelope{
+				ID:         responseID,
+				Object:     "response",
+				CreatedAt:  createdAt,
+				Model:      s.cfg.Model,
+				Status:     "completed",
+				Output:     []responseItem{item},
+				OutputText: "",
+				Usage:      usage,
+			}
+			s.observeUsage(usage)
+			s.streams.WithLabelValues("completed").Inc()
+			s.toolCalls.WithLabelValues("synthesized_request_stream", item.Name).Inc()
 			s.store.set(responseID, append(cloneMessages(chatReq.Messages), chatMessage{
 				Role: "assistant",
 				ToolCalls: []chatToolCall{{
