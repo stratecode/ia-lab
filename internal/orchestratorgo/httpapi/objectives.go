@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 	initiativesvc "github.com/stratecode/lab/internal/orchestratorgo/initiative"
+	"github.com/stratecode/lab/internal/orchestratorgo/memory"
 	"github.com/stratecode/lab/internal/orchestratorgo/store"
 )
 
@@ -108,11 +110,181 @@ func (s *Server) createObjective(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) buildObjectivePlanningContext(ctx context.Context, initiative *domain.InitiativeResponse, body domain.ObjectiveRequest) (*domain.ContextPackage, error) {
-	_ = s
 	_ = ctx
-	_ = initiative
-	_ = body
-	return nil, nil
+	workspaceRoot := strings.TrimSpace(body.WorkspaceRoot)
+	if workspaceRoot == "" && initiative != nil {
+		workspaceRoot = strings.TrimSpace(initiative.WorkspaceRoot)
+	}
+	if workspaceRoot == "" {
+		return nil, nil
+	}
+	if info, err := os.Stat(filepath.Join(workspaceRoot, ".git")); err != nil || !info.IsDir() {
+		return nil, nil
+	}
+	query := firstNonEmptyString(strings.TrimSpace(body.Objective), strings.TrimSpace(body.Title))
+	if query == "" {
+		return nil, nil
+	}
+	chunks := make([]domain.ContextChunk, 0, 4)
+	sourceRefs := make([]string, 0, 4)
+	if readmeSummary := compactObjectiveWorkspaceReadme(workspaceRoot); readmeSummary != "" {
+		chunks = append(chunks, domain.ContextChunk{
+			ID:          "workspace-readme",
+			SourceType:  "workspace_file",
+			SourceID:    "README.md",
+			ChunkIndex:  len(chunks),
+			ContentText: readmeSummary,
+			SourceRef:   "workspace:README.md",
+			MemoryClass: domain.MemoryClassRepoSpecific,
+			Metadata:    map[string]any{"memory_class": domain.MemoryClassRepoSpecific},
+		})
+		sourceRefs = append(sourceRefs, "workspace:README.md")
+	}
+	if candidateSummary := summarizeObjectiveCandidateFiles(workspaceRoot); candidateSummary != "" {
+		chunks = append(chunks, domain.ContextChunk{
+			ID:          "workspace-candidates",
+			SourceType:  "workspace_index",
+			SourceID:    "candidate_files",
+			ChunkIndex:  len(chunks),
+			ContentText: candidateSummary,
+			SourceRef:   "workspace:candidate_files",
+			MemoryClass: domain.MemoryClassRepoSpecific,
+			Metadata:    map[string]any{"memory_class": domain.MemoryClassRepoSpecific},
+		})
+		sourceRefs = append(sourceRefs, "workspace:candidate_files")
+	}
+	chunks = append(chunks, domain.ContextChunk{
+		ID:          "objective-brief",
+		SourceType:  "objective_request",
+		SourceID:    firstNonEmptyString(strings.TrimSpace(body.Title), "objective"),
+		ChunkIndex:  len(chunks),
+		ContentText: memory.CompactText(query, 220),
+		SourceRef:   "objective:request",
+		MemoryClass: domain.MemoryClassPlanningContext,
+		Metadata:    map[string]any{"memory_class": domain.MemoryClassPlanningContext},
+	})
+	sourceRefs = append(sourceRefs, "objective:request")
+
+	precedents, compactSummaries, why := memory.SelectRetrievalHits(chunks, memory.DefaultPrecedentLimit, memory.DefaultPerClassLimit)
+	if len(precedents) == 0 {
+		return nil, nil
+	}
+	constraints := []string{
+		"Prefer repo_specific evidence before transfer evidence.",
+		"Keep edits narrow and validation-driven.",
+	}
+	policies := []string{
+		"negative_guardrail memory acts as exclusion evidence, not as a positive edit target.",
+		"Compact retrieval before expanding raw context.",
+	}
+	promptSection := buildObjectivePromptSection(query, compactSummaries, why, constraints, policies)
+	totalChars := len(promptSection)
+	for _, hit := range precedents {
+		totalChars += len(hit.Summary)
+	}
+	if totalChars > memory.DefaultPacketBudgetChars {
+		promptSection = memory.CompactText(promptSection, memory.DefaultPacketBudgetChars/2)
+		totalChars = len(promptSection)
+		for _, hit := range precedents {
+			totalChars += len(hit.Summary)
+		}
+	}
+	return &domain.ContextPackage{
+		AgentType:          string(domain.AgentTypePlanner),
+		InitiativeID:       initiativeIDPtr(initiative),
+		WorkspaceRoot:      stringPtr(workspaceRoot),
+		Query:              query,
+		MemoryMode:         "auto",
+		MemoryStrategy:     "repo_specific_first",
+		Chunks:             chunks,
+		Precedents:         precedents,
+		SourceRefs:         sourceRefs,
+		Constraints:        constraints,
+		Policies:           policies,
+		PromptSection:      promptSection,
+		CompactSummaries:   compactSummaries,
+		WhyThesePrecedents: why,
+		OperationalIR: &domain.OperationalIR{
+			Version:     "v1",
+			Mode:        "objective_planning",
+			Confidence:  "medium",
+			Constraints: append([]string{}, constraints...),
+			Policies:    append([]string{}, policies...),
+			SourceRefs:  append([]string{}, sourceRefs...),
+		},
+		TotalChars:  totalChars,
+		GeneratedAt: time.Now().UTC(),
+	}, nil
+}
+
+func compactObjectiveWorkspaceReadme(workspaceRoot string) string {
+	raw, err := os.ReadFile(filepath.Join(workspaceRoot, "README.md"))
+	if err != nil {
+		return ""
+	}
+	return memory.CompactText(string(raw), 220)
+}
+
+func summarizeObjectiveCandidateFiles(workspaceRoot string) string {
+	candidates := make([]string, 0, 6)
+	_ = filepath.WalkDir(workspaceRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if name == ".git" || (strings.HasPrefix(name, ".") && name != ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, relErr := filepath.Rel(workspaceRoot, path)
+		if relErr != nil || rel == "README.md" {
+			return nil
+		}
+		switch strings.ToLower(filepath.Ext(rel)) {
+		case ".go", ".py", ".php", ".js", ".ts", ".tsx", ".jsx":
+			candidates = append(candidates, rel)
+		}
+		if len(candidates) >= 6 {
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if len(candidates) == 0 {
+		return ""
+	}
+	return memory.CompactText("Candidate repo paths: "+strings.Join(candidates, ", "), 220)
+}
+
+func buildObjectivePromptSection(query string, compactSummaries map[string]string, why, constraints, policies []string) string {
+	lines := []string{
+		"Objective planning context",
+		"Objective: " + strings.TrimSpace(query),
+	}
+	if summary := strings.TrimSpace(compactSummaries[domain.MemoryClassRepoSpecific]); summary != "" {
+		lines = append(lines, "Repo-specific memory: "+summary)
+	}
+	if summary := strings.TrimSpace(compactSummaries[domain.MemoryClassPlanningContext]); summary != "" {
+		lines = append(lines, "Planning context: "+summary)
+	}
+	if len(why) > 0 {
+		lines = append(lines, "Selection rationale: "+strings.Join(why, " | "))
+	}
+	if len(constraints) > 0 {
+		lines = append(lines, "Constraints: "+strings.Join(constraints, " | "))
+	}
+	if len(policies) > 0 {
+		lines = append(lines, "Policies: "+strings.Join(policies, " | "))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func initiativeIDPtr(item *domain.InitiativeResponse) *string {
+	if item == nil || strings.TrimSpace(item.ID) == "" {
+		return nil
+	}
+	return &item.ID
 }
 
 func (s *Server) persistObjectiveContractArtifact(ctx context.Context, initiativeID string, contract domain.ExecutionContract) (string, error) {

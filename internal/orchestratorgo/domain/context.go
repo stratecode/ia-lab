@@ -2,6 +2,16 @@ package domain
 
 import "time"
 
+const (
+	MemoryClassRepoSpecific      = "repo_specific"
+	MemoryClassTechnologySimilar = "technology_similar"
+	MemoryClassPatternSimilar    = "pattern_similar"
+	MemoryClassNegativeGuardrail = "negative_guardrail"
+	MemoryClassRecentExecution   = "recent_execution"
+	MemoryClassPlanningContext   = "planning_context"
+	MemoryClassLegacy            = "legacy_unclassified"
+)
+
 type ContextChunk struct {
 	ID           string         `json:"id"`
 	SourceType   string         `json:"source_type"`
@@ -11,52 +21,64 @@ type ContextChunk struct {
 	Metadata     map[string]any `json:"metadata"`
 	Score        *float64       `json:"score,omitempty"`
 	SourceRef    string         `json:"source_ref"`
+	MemoryClass  string         `json:"memory_class,omitempty"`
 	InitiativeID *string        `json:"initiative_id,omitempty"`
 	TaskID       *string        `json:"task_id,omitempty"`
 	ArtifactID   *string        `json:"artifact_id,omitempty"`
 }
 
 type ContextPackage struct {
-	AgentType      string         `json:"agent_type"`
-	TaskID         *string        `json:"task_id,omitempty"`
-	InitiativeID   *string        `json:"initiative_id,omitempty"`
-	WorkspaceRoot  *string        `json:"workspace_root,omitempty"`
-	Query          string         `json:"query"`
-	MemoryMode     string         `json:"memory_mode,omitempty"`
-	MemoryStrategy string         `json:"memory_strategy,omitempty"`
-	Chunks         []ContextChunk `json:"chunks"`
-	SourceRefs     []string       `json:"source_refs"`
-	Constraints    []string       `json:"constraints"`
-	Policies       []string       `json:"policies"`
-	PromptSection  string         `json:"prompt_section"`
-	OperationalIR  *OperationalIR `json:"operational_ir,omitempty"`
-	TotalChars     int            `json:"total_chars"`
-	GeneratedAt    time.Time      `json:"generated_at"`
+	AgentType          string            `json:"agent_type"`
+	TaskID             *string           `json:"task_id,omitempty"`
+	InitiativeID       *string           `json:"initiative_id,omitempty"`
+	WorkspaceRoot      *string           `json:"workspace_root,omitempty"`
+	Query              string            `json:"query"`
+	MemoryMode         string            `json:"memory_mode,omitempty"`
+	MemoryStrategy     string            `json:"memory_strategy,omitempty"`
+	Chunks             []ContextChunk    `json:"chunks"`
+	Precedents         []RetrievalHit    `json:"precedents,omitempty"`
+	SourceRefs         []string          `json:"source_refs"`
+	Constraints        []string          `json:"constraints"`
+	Policies           []string          `json:"policies"`
+	PromptSection      string            `json:"prompt_section"`
+	CompactSummaries   map[string]string `json:"compact_summaries,omitempty"`
+	WhyThesePrecedents []string          `json:"why_these_precedents,omitempty"`
+	OperationalIR      *OperationalIR    `json:"operational_ir,omitempty"`
+	TotalChars         int               `json:"total_chars"`
+	GeneratedAt        time.Time         `json:"generated_at"`
 }
 
 type RetrievalPacket struct {
-	AgentType      string         `json:"agent_type"`
-	TaskID         *string        `json:"task_id,omitempty"`
-	InitiativeID   *string        `json:"initiative_id,omitempty"`
-	WorkspaceRoot  *string        `json:"workspace_root,omitempty"`
-	Query          string         `json:"query"`
-	MemoryMode     string         `json:"memory_mode,omitempty"`
-	MemoryStrategy string         `json:"memory_strategy,omitempty"`
-	ChunkCount     int            `json:"chunk_count"`
-	SourceRefs     []string       `json:"source_refs"`
-	Precedents     []RetrievalHit `json:"precedents"`
-	GeneratedAt    time.Time      `json:"generated_at"`
+	AgentType          string            `json:"agent_type"`
+	TaskID             *string           `json:"task_id,omitempty"`
+	InitiativeID       *string           `json:"initiative_id,omitempty"`
+	WorkspaceRoot      *string           `json:"workspace_root,omitempty"`
+	Query              string            `json:"query"`
+	MemoryMode         string            `json:"memory_mode,omitempty"`
+	MemoryStrategy     string            `json:"memory_strategy,omitempty"`
+	ChunkCount         int               `json:"chunk_count"`
+	SourceRefs         []string          `json:"source_refs"`
+	Constraints        []string          `json:"constraints,omitempty"`
+	Policies           []string          `json:"policies,omitempty"`
+	CompactSummaries   map[string]string `json:"compact_summaries,omitempty"`
+	WhyThesePrecedents []string          `json:"why_these_precedents,omitempty"`
+	Precedents         []RetrievalHit    `json:"precedents"`
+	OperationalIR      *OperationalIR    `json:"operational_ir,omitempty"`
+	TotalChars         int               `json:"total_chars,omitempty"`
+	GeneratedAt        time.Time         `json:"generated_at"`
 }
 
 type RetrievalHit struct {
-	SourceRef    string   `json:"source_ref"`
-	SourceType   string   `json:"source_type"`
-	SourceID     string   `json:"source_id"`
-	Score        *float64 `json:"score,omitempty"`
-	InitiativeID *string  `json:"initiative_id,omitempty"`
-	TaskID       *string  `json:"task_id,omitempty"`
-	ArtifactID   *string  `json:"artifact_id,omitempty"`
-	Summary      string   `json:"summary,omitempty"`
+	SourceRef       string   `json:"source_ref"`
+	SourceType      string   `json:"source_type"`
+	SourceID        string   `json:"source_id"`
+	Score           *float64 `json:"score,omitempty"`
+	MemoryClass     string   `json:"memory_class,omitempty"`
+	InitiativeID    *string  `json:"initiative_id,omitempty"`
+	TaskID          *string  `json:"task_id,omitempty"`
+	ArtifactID      *string  `json:"artifact_id,omitempty"`
+	Summary         string   `json:"summary,omitempty"`
+	SelectionReason string   `json:"selection_reason,omitempty"`
 }
 
 type OperationalIR struct {

@@ -719,6 +719,15 @@ func TestWorkspaceExecutorReviewWorkspaceFlagsPlannerContradiction(t *testing.T)
 	if !strings.Contains(body, "\"retrieval_scope_alignment\":\"contradicted\"") {
 		t.Fatalf("expected contradicted retrieval scope alignment, got %s", body)
 	}
+	if !strings.Contains(body, "\"memory_utility\":") {
+		t.Fatalf("expected memory utility block in review packet, got %s", body)
+	}
+	if !strings.Contains(body, "\"precedents_contradicted\":[\"artifact:repair_plan:9\"]") {
+		t.Fatalf("expected contradicted precedent tracking in review packet, got %s", body)
+	}
+	if !strings.Contains(body, "\"recommendation\":\"demote\"") {
+		t.Fatalf("expected demote recommendation in review packet, got %s", body)
+	}
 	if len(result.Findings) == 0 {
 		t.Fatalf("expected structured review findings, got %#v", result.Findings)
 	}
@@ -1027,6 +1036,87 @@ func TestRecommendResearchScopePathsPrioritizesPlannerCorrections(t *testing.T) 
 	}
 	if containsString(scope, "internal/orchestratorgo/initiative/objectives.go") {
 		t.Fatalf("expected excluded contradicted shortlist path to be removed, got %#v", scope)
+	}
+}
+
+func TestRetrievalPrecedentsFromContextPackageSelectsDiverseCompactPrecedents(t *testing.T) {
+	longSummary := strings.Repeat("auth-service precedent detail ", 20)
+	input := map[string]any{
+		"chunks": []any{
+			map[string]any{
+				"source_ref":   "artifact:repo:1",
+				"source_type":  "artifact",
+				"source_id":    "repo-1",
+				"content_text": longSummary + "internal/auth_service.go",
+				"score":        0.99,
+				"memory_class": "repo_specific",
+			},
+			map[string]any{
+				"source_ref":   "artifact:repo:2",
+				"source_type":  "artifact",
+				"source_id":    "repo-2",
+				"content_text": "recent execution touched internal/session_store.go cleanly",
+				"score":        0.91,
+				"memory_class": "recent_execution",
+			},
+			map[string]any{
+				"source_ref":   "artifact:tech:1",
+				"source_type":  "artifact",
+				"source_id":    "tech-1",
+				"content_text": "technology transfer precedent for auth middleware validation",
+				"score":        0.83,
+				"memory_class": "technology_similar",
+			},
+			map[string]any{
+				"source_ref":   "artifact:pattern:1",
+				"source_type":  "artifact",
+				"source_id":    "pattern-1",
+				"content_text": "pattern precedent for regex forwarding in auth_service.go",
+				"score":        0.88,
+				"memory_class": "pattern_similar",
+			},
+			map[string]any{
+				"source_ref":   "artifact:guardrail:1",
+				"source_type":  "artifact",
+				"source_id":    "guardrail-1",
+				"content_text": "negative guardrail: avoid touching unrelated legacy_auth.go",
+				"score":        0.82,
+				"memory_class": "negative_guardrail",
+			},
+			map[string]any{
+				"source_ref":   "artifact:repo:3",
+				"source_type":  "artifact",
+				"source_id":    "repo-3",
+				"content_text": "third repo-specific candidate that should be dropped by class cap",
+				"score":        0.79,
+				"memory_class": "repo_specific",
+			},
+		},
+	}
+
+	precedents := retrievalPrecedentsFromContextPackage(input)
+	if len(precedents) == 0 {
+		t.Fatalf("expected precedents, got %#v", precedents)
+	}
+	if len(precedents) > 5 {
+		t.Fatalf("expected at most 5 precedents, got %#v", precedents)
+	}
+	perClass := map[string]int{}
+	for _, item := range precedents {
+		className := strings.TrimSpace(asString(item["memory_class"]))
+		perClass[className]++
+		if perClass[className] > 2 {
+			t.Fatalf("expected class cap of 2, got %#v", precedents)
+		}
+		if len(asString(item["summary"])) > 220 {
+			t.Fatalf("expected compact summary, got %q", asString(item["summary"]))
+		}
+		if strings.TrimSpace(asString(item["selection_reason"])) == "" {
+			t.Fatalf("expected selection reason, got %#v", item)
+		}
+	}
+	if perClass["repo_specific"] == 0 || perClass["pattern_similar"] == 0 {
+		t.Fatalf("expected diverse memory classes, got %#v", precedents)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
+	"github.com/stratecode/lab/internal/orchestratorgo/memory"
 )
 
 type ObjectiveInput struct {
@@ -693,33 +694,40 @@ func detectObjectiveDependencyWorkstream(workspaceRoot, objective string, suspec
 }
 
 func objectiveRetrievalPrecedentsFromContext(pkg *domain.ContextPackage) []map[string]any {
-	if pkg == nil || len(pkg.Chunks) == 0 {
+	if pkg == nil {
 		return nil
 	}
-	precedents := make([]map[string]any, 0, min(3, len(pkg.Chunks)))
-	for _, chunk := range pkg.Chunks {
+	hits := append([]domain.RetrievalHit{}, pkg.Precedents...)
+	if len(hits) == 0 && len(pkg.Chunks) > 0 {
+		selected, _, _ := memory.SelectRetrievalHits(pkg.Chunks, memory.DefaultPrecedentLimit, memory.DefaultPerClassLimit)
+		hits = selected
+	}
+	if len(hits) == 0 {
+		return nil
+	}
+	precedents := make([]map[string]any, 0, len(hits))
+	for _, hit := range hits {
 		item := map[string]any{
-			"source_ref":  strings.TrimSpace(chunk.SourceRef),
-			"source_type": strings.TrimSpace(chunk.SourceType),
-			"source_id":   strings.TrimSpace(chunk.SourceID),
-			"summary":     objectiveSummarizeContextChunk(chunk.ContentText),
+			"source_ref":       strings.TrimSpace(hit.SourceRef),
+			"source_type":      strings.TrimSpace(hit.SourceType),
+			"source_id":        strings.TrimSpace(hit.SourceID),
+			"summary":          objectiveSummarizeContextChunk(hit.Summary),
+			"memory_class":     strings.TrimSpace(hit.MemoryClass),
+			"selection_reason": strings.TrimSpace(hit.SelectionReason),
 		}
-		if chunk.Score != nil {
-			item["score"] = *chunk.Score
+		if hit.Score != nil {
+			item["score"] = *hit.Score
 		}
-		if chunk.InitiativeID != nil {
-			item["initiative_id"] = *chunk.InitiativeID
+		if hit.InitiativeID != nil {
+			item["initiative_id"] = *hit.InitiativeID
 		}
-		if chunk.TaskID != nil {
-			item["task_id"] = *chunk.TaskID
+		if hit.TaskID != nil {
+			item["task_id"] = *hit.TaskID
 		}
-		if chunk.ArtifactID != nil {
-			item["artifact_id"] = *chunk.ArtifactID
+		if hit.ArtifactID != nil {
+			item["artifact_id"] = *hit.ArtifactID
 		}
 		precedents = append(precedents, item)
-		if len(precedents) >= 3 {
-			break
-		}
 	}
 	if len(precedents) == 0 {
 		return nil

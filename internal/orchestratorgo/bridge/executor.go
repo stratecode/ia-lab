@@ -14,6 +14,7 @@ import (
 
 	"github.com/stratecode/lab/internal/orchestratorgo/codeanalysis"
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
+	"github.com/stratecode/lab/internal/orchestratorgo/memory"
 )
 
 var allowedCommands = []string{
@@ -530,7 +531,7 @@ func (e *WorkspaceExecutor) reviewWorkspace(ctx context.Context, request map[str
 			findings := append(buildValidationFailureFindings(testCommand, exitCode, message), buildReviewAlignmentFindings(plannerAlignment, rejectedPlannerAlignment, researchAlignment, anyHypothesisPaths(request["initial_scope_hypotheses"]), anyHypothesisPaths(request["rejected_scope_hypotheses"]), reviewResearchPaths(request), changedFiles)...)
 			retrievalAlignment, retrievalRefs := reviewRetrievalAlignment(anyMapSliceDefault(request["objective_retrieval_precedents"], []map[string]any{}), changedFiles)
 			findings = append(findings, buildReviewRetrievalFindings(retrievalAlignment, retrievalRefs, changedFiles)...)
-			report := buildReviewPacketReport(decision, changedFiles, testCommand, request["execution_contract"], plannerAlignment, rejectedPlannerAlignment, researchAlignment, retrievalAlignment, retrievalRefs, findings)
+			report := buildReviewPacketReport(decision, changedFiles, testCommand, request["execution_contract"], plannerAlignment, rejectedPlannerAlignment, researchAlignment, retrievalAlignment, retrievalRefs, findings, anyMapSliceDefault(request["objective_retrieval_precedents"], []map[string]any{}))
 			return domain.LocalBridgeResultRequest{
 				Status:         "error",
 				Summary:        &summary,
@@ -570,7 +571,7 @@ func (e *WorkspaceExecutor) reviewWorkspace(ctx context.Context, request map[str
 		}}
 		retrievalAlignment, retrievalRefs := reviewRetrievalAlignment(anyMapSliceDefault(request["objective_retrieval_precedents"], []map[string]any{}), changedFiles)
 		findings = append(findings, buildReviewRetrievalFindings(retrievalAlignment, retrievalRefs, changedFiles)...)
-		report := buildReviewPacketReport(decision, changedFiles, testCommand, request["execution_contract"], "unknown", "unknown", "unknown", retrievalAlignment, retrievalRefs, findings)
+		report := buildReviewPacketReport(decision, changedFiles, testCommand, request["execution_contract"], "unknown", "unknown", "unknown", retrievalAlignment, retrievalRefs, findings, anyMapSliceDefault(request["objective_retrieval_precedents"], []map[string]any{}))
 		return domain.LocalBridgeResultRequest{
 			Status:         "error",
 			Summary:        &summary,
@@ -606,7 +607,7 @@ func (e *WorkspaceExecutor) reviewWorkspace(ctx context.Context, request map[str
 	findings := buildReviewAlignmentFindings(plannerAlignment, rejectedPlannerAlignment, researchAlignment, anyHypothesisPaths(request["initial_scope_hypotheses"]), anyHypothesisPaths(request["rejected_scope_hypotheses"]), reviewResearchPaths(request), changedFiles)
 	retrievalAlignment, retrievalRefs := reviewRetrievalAlignment(anyMapSliceDefault(request["objective_retrieval_precedents"], []map[string]any{}), changedFiles)
 	findings = append(findings, buildReviewRetrievalFindings(retrievalAlignment, retrievalRefs, changedFiles)...)
-	report := buildReviewPacketReport(decision, changedFiles, testCommand, request["execution_contract"], plannerAlignment, rejectedPlannerAlignment, researchAlignment, retrievalAlignment, retrievalRefs, findings)
+	report := buildReviewPacketReport(decision, changedFiles, testCommand, request["execution_contract"], plannerAlignment, rejectedPlannerAlignment, researchAlignment, retrievalAlignment, retrievalRefs, findings, anyMapSliceDefault(request["objective_retrieval_precedents"], []map[string]any{}))
 	return domain.LocalBridgeResultRequest{
 		Status:         "success",
 		Summary:        &summary,
@@ -667,7 +668,7 @@ func reviewResearchPaths(request map[string]any) []string {
 	return uniqueNonEmptyStrings(out)
 }
 
-func buildReviewPacketReport(decision string, changedFiles, testCommand []string, executionContract any, plannerAlignment, rejectedPlannerAlignment, researchAlignment, retrievalAlignment string, retrievalRefs []string, findings []map[string]any) string {
+func buildReviewPacketReport(decision string, changedFiles, testCommand []string, executionContract any, plannerAlignment, rejectedPlannerAlignment, researchAlignment, retrievalAlignment string, retrievalRefs []string, findings []map[string]any, precedents []map[string]any) string {
 	return mustJSON(map[string]any{
 		"decision":                         decision,
 		"changed_files":                    changedFiles,
@@ -678,8 +679,67 @@ func buildReviewPacketReport(decision string, changedFiles, testCommand []string
 		"research_scope_alignment":         researchAlignment,
 		"retrieval_scope_alignment":        retrievalAlignment,
 		"retrieval_precedent_refs":         retrievalRefs,
+		"memory_utility":                   buildReviewMemoryUtility(precedents, retrievalAlignment, changedFiles, decision),
 		"findings":                         findings,
 	})
+}
+
+func buildReviewMemoryUtility(precedents []map[string]any, retrievalAlignment string, changedFiles []string, decision string) map[string]any {
+	used := make([]string, 0, len(precedents))
+	contradicted := make([]string, 0, len(precedents))
+	neutral := make([]string, 0, len(precedents))
+	for _, item := range precedents {
+		sourceRef := strings.TrimSpace(asString(item["source_ref"]))
+		if sourceRef == "" {
+			continue
+		}
+		switch precedentAlignment(item, changedFiles) {
+		case "confirmed":
+			used = append(used, sourceRef)
+		case "contradicted":
+			contradicted = append(contradicted, sourceRef)
+		default:
+			neutral = append(neutral, sourceRef)
+		}
+	}
+	used = uniqueNonEmptyStrings(used)
+	contradicted = uniqueNonEmptyStrings(contradicted)
+	neutral = uniqueNonEmptyStrings(neutral)
+	recommendation := "observe"
+	switch {
+	case retrievalAlignment == "confirmed" && strings.EqualFold(strings.TrimSpace(decision), "approved"):
+		recommendation = "reuse"
+	case retrievalAlignment == "contradicted":
+		recommendation = "demote"
+	case len(used) > 0:
+		recommendation = "retain"
+	}
+	return map[string]any{
+		"precedents_used":         used,
+		"precedents_contradicted": contradicted,
+		"precedents_neutral":      neutral,
+		"changed_files":           changedFiles,
+		"outcome":                 strings.TrimSpace(decision),
+		"recommendation":          recommendation,
+	}
+}
+
+func precedentAlignment(precedent map[string]any, changedFiles []string) string {
+	summary := strings.ToLower(strings.TrimSpace(asString(precedent["summary"])))
+	if summary == "" || len(changedFiles) == 0 {
+		return "unknown"
+	}
+	for _, changed := range changedFiles {
+		changed = strings.ToLower(strings.TrimSpace(changed))
+		if changed == "" {
+			continue
+		}
+		base := strings.ToLower(filepath.Base(changed))
+		if strings.Contains(summary, changed) || strings.Contains(summary, base) {
+			return "confirmed"
+		}
+	}
+	return "contradicted"
 }
 
 func buildReviewAlignmentFindings(plannerAlignment, rejectedPlannerAlignment, researchAlignment string, plannerPaths, rejectedPlannerPaths, researchPaths, changedFiles []string) []map[string]any {
@@ -1964,24 +2024,72 @@ func retrievalPrecedentsFromContextPackage(value any) []map[string]any {
 	if len(contextPackage) == 0 {
 		return nil
 	}
+	rawPrecedents, _ := contextPackage["precedents"].([]any)
+	if len(rawPrecedents) > 0 {
+		precedents := make([]map[string]any, 0, min(memory.DefaultPrecedentLimit, len(rawPrecedents)))
+		for _, raw := range rawPrecedents {
+			item, _ := raw.(map[string]any)
+			if len(item) == 0 {
+				continue
+			}
+			precedent := map[string]any{
+				"source_ref":       strings.TrimSpace(asString(item["source_ref"])),
+				"source_type":      strings.TrimSpace(asString(item["source_type"])),
+				"source_id":        strings.TrimSpace(asString(item["source_id"])),
+				"summary":          memory.CompactText(strings.TrimSpace(asString(item["summary"])), 220),
+				"memory_class":     memory.NormalizeMemoryClass(asString(item["memory_class"])),
+				"selection_reason": strings.TrimSpace(asString(item["selection_reason"])),
+			}
+			if score, ok := item["score"].(float64); ok {
+				precedent["score"] = score
+			}
+			if initiativeID := strings.TrimSpace(asString(item["initiative_id"])); initiativeID != "" {
+				precedent["initiative_id"] = initiativeID
+			}
+			if taskID := strings.TrimSpace(asString(item["task_id"])); taskID != "" {
+				precedent["task_id"] = taskID
+			}
+			if artifactID := strings.TrimSpace(asString(item["artifact_id"])); artifactID != "" {
+				precedent["artifact_id"] = artifactID
+			}
+			if strings.TrimSpace(asString(precedent["selection_reason"])) == "" {
+				precedent["selection_reason"] = memory.BuildSelectionReason(asString(precedent["memory_class"]), nil)
+			}
+			precedents = append(precedents, precedent)
+			if len(precedents) >= memory.DefaultPrecedentLimit {
+				break
+			}
+		}
+		if len(precedents) > 0 {
+			return precedents
+		}
+	}
 	rawChunks, _ := contextPackage["chunks"].([]any)
 	if len(rawChunks) == 0 {
 		return nil
 	}
-	precedents := make([]map[string]any, 0, min(3, len(rawChunks)))
+	precedents := make([]map[string]any, 0, min(memory.DefaultPrecedentLimit, len(rawChunks)))
+	perClass := map[string]int{}
 	for _, raw := range rawChunks {
 		chunk, _ := raw.(map[string]any)
 		if len(chunk) == 0 {
 			continue
 		}
+		className := memory.NormalizeMemoryClass(asString(chunk["memory_class"]))
+		if perClass[className] >= memory.DefaultPerClassLimit {
+			continue
+		}
 		precedent := map[string]any{
-			"source_ref":  strings.TrimSpace(asString(chunk["source_ref"])),
-			"source_type": strings.TrimSpace(asString(chunk["source_type"])),
-			"source_id":   strings.TrimSpace(asString(chunk["source_id"])),
-			"summary":     summarizeBridgeRetrievalChunk(strings.TrimSpace(asString(chunk["content_text"]))),
+			"source_ref":       strings.TrimSpace(asString(chunk["source_ref"])),
+			"source_type":      strings.TrimSpace(asString(chunk["source_type"])),
+			"source_id":        strings.TrimSpace(asString(chunk["source_id"])),
+			"summary":          summarizeBridgeRetrievalChunk(strings.TrimSpace(asString(chunk["content_text"]))),
+			"memory_class":     className,
+			"selection_reason": memory.BuildSelectionReason(className, nil),
 		}
 		if score, ok := chunk["score"].(float64); ok {
 			precedent["score"] = score
+			precedent["selection_reason"] = memory.BuildSelectionReason(className, &score)
 		}
 		if initiativeID := strings.TrimSpace(asString(chunk["initiative_id"])); initiativeID != "" {
 			precedent["initiative_id"] = initiativeID
@@ -1993,7 +2101,8 @@ func retrievalPrecedentsFromContextPackage(value any) []map[string]any {
 			precedent["artifact_id"] = artifactID
 		}
 		precedents = append(precedents, precedent)
-		if len(precedents) >= 3 {
+		perClass[className]++
+		if len(precedents) >= memory.DefaultPrecedentLimit {
 			break
 		}
 	}
@@ -2004,15 +2113,7 @@ func retrievalPrecedentsFromContextPackage(value any) []map[string]any {
 }
 
 func summarizeBridgeRetrievalChunk(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return ""
-	}
-	runes := []rune(text)
-	if len(runes) <= 180 {
-		return text
-	}
-	return strings.TrimSpace(string(runes[:180])) + "..."
+	return memory.CompactText(text, 220)
 }
 
 func buildAiderTaskMetadata(metadata map[string]any) map[string]any {

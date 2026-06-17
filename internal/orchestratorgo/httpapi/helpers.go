@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
+	"github.com/stratecode/lab/internal/orchestratorgo/memory"
 	"github.com/stratecode/lab/internal/orchestratorgo/store"
 )
 
@@ -91,6 +92,8 @@ func (s *Server) persistRetrievalPacketArtifact(ctx context.Context, task *domai
 			"memory_strategy": contextPackage.MemoryStrategy,
 			"query":           contextPackage.Query,
 			"chunk_count":     len(contextPackage.Chunks),
+			"precedent_count": len(packet.Precedents),
+			"total_chars":     packet.TotalChars,
 			"source_refs":     contextPackage.SourceRefs,
 		},
 	})
@@ -106,28 +109,32 @@ func (s *Server) persistInitiativeRetrievalPacketArtifact(ctx context.Context, i
 		return "", nil
 	}
 	packet := domain.RetrievalPacket{
-		AgentType:      strings.TrimSpace(agentType),
-		InitiativeID:   &initiative.ID,
-		WorkspaceRoot:  contextPackage.WorkspaceRoot,
-		Query:          contextPackage.Query,
-		MemoryMode:     contextPackage.MemoryMode,
-		MemoryStrategy: contextPackage.MemoryStrategy,
-		ChunkCount:     len(contextPackage.Chunks),
-		SourceRefs:     append([]string{}, contextPackage.SourceRefs...),
-		Precedents:     make([]domain.RetrievalHit, 0, len(contextPackage.Chunks)),
-		GeneratedAt:    contextPackage.GeneratedAt,
+		AgentType:          strings.TrimSpace(agentType),
+		InitiativeID:       &initiative.ID,
+		WorkspaceRoot:      contextPackage.WorkspaceRoot,
+		Query:              contextPackage.Query,
+		MemoryMode:         contextPackage.MemoryMode,
+		MemoryStrategy:     contextPackage.MemoryStrategy,
+		ChunkCount:         len(contextPackage.Chunks),
+		SourceRefs:         append([]string{}, contextPackage.SourceRefs...),
+		Constraints:        append([]string{}, contextPackage.Constraints...),
+		Policies:           append([]string{}, contextPackage.Policies...),
+		CompactSummaries:   cloneStringMap(contextPackage.CompactSummaries),
+		WhyThesePrecedents: append([]string{}, contextPackage.WhyThesePrecedents...),
+		Precedents:         append([]domain.RetrievalHit{}, contextPackage.Precedents...),
+		OperationalIR:      contextPackage.OperationalIR,
+		TotalChars:         contextPackage.TotalChars,
+		GeneratedAt:        contextPackage.GeneratedAt,
 	}
-	for _, chunk := range contextPackage.Chunks {
-		packet.Precedents = append(packet.Precedents, domain.RetrievalHit{
-			SourceRef:    chunk.SourceRef,
-			SourceType:   chunk.SourceType,
-			SourceID:     chunk.SourceID,
-			Score:        chunk.Score,
-			InitiativeID: chunk.InitiativeID,
-			TaskID:       chunk.TaskID,
-			ArtifactID:   chunk.ArtifactID,
-			Summary:      summarizeRetrievalChunk(chunk.ContentText),
-		})
+	if len(packet.Precedents) == 0 {
+		selected, compactSummaries, why := memory.SelectRetrievalHits(contextPackage.Chunks, memory.DefaultPrecedentLimit, memory.DefaultPerClassLimit)
+		packet.Precedents = selected
+		if len(packet.CompactSummaries) == 0 {
+			packet.CompactSummaries = compactSummaries
+		}
+		if len(packet.WhyThesePrecedents) == 0 {
+			packet.WhyThesePrecedents = why
+		}
 	}
 	raw, err := json.MarshalIndent(packet, "", "  ")
 	if err != nil {
@@ -146,6 +153,8 @@ func (s *Server) persistInitiativeRetrievalPacketArtifact(ctx context.Context, i
 			"memory_strategy": contextPackage.MemoryStrategy,
 			"query":           contextPackage.Query,
 			"chunk_count":     len(contextPackage.Chunks),
+			"precedent_count": len(packet.Precedents),
+			"total_chars":     packet.TotalChars,
 			"source_refs":     contextPackage.SourceRefs,
 			"workspace_root":  strings.TrimSpace(initiative.WorkspaceRoot),
 		},
@@ -159,43 +168,39 @@ func (s *Server) persistInitiativeRetrievalPacketArtifact(ctx context.Context, i
 
 func buildRetrievalPacket(task *domain.TaskResponse, contextPackage *domain.ContextPackage) domain.RetrievalPacket {
 	packet := domain.RetrievalPacket{
-		AgentType:      derefAgentType(task.AssignedAgent),
-		TaskID:         stringPtr(task.ID),
-		InitiativeID:   task.InitiativeID,
-		WorkspaceRoot:  contextPackage.WorkspaceRoot,
-		Query:          contextPackage.Query,
-		MemoryMode:     contextPackage.MemoryMode,
-		MemoryStrategy: contextPackage.MemoryStrategy,
-		ChunkCount:     len(contextPackage.Chunks),
-		SourceRefs:     append([]string{}, contextPackage.SourceRefs...),
-		Precedents:     make([]domain.RetrievalHit, 0, len(contextPackage.Chunks)),
-		GeneratedAt:    contextPackage.GeneratedAt,
+		AgentType:          derefAgentType(task.AssignedAgent),
+		TaskID:             stringPtr(task.ID),
+		InitiativeID:       task.InitiativeID,
+		WorkspaceRoot:      contextPackage.WorkspaceRoot,
+		Query:              contextPackage.Query,
+		MemoryMode:         contextPackage.MemoryMode,
+		MemoryStrategy:     contextPackage.MemoryStrategy,
+		ChunkCount:         len(contextPackage.Chunks),
+		SourceRefs:         append([]string{}, contextPackage.SourceRefs...),
+		Constraints:        append([]string{}, contextPackage.Constraints...),
+		Policies:           append([]string{}, contextPackage.Policies...),
+		CompactSummaries:   cloneStringMap(contextPackage.CompactSummaries),
+		WhyThesePrecedents: append([]string{}, contextPackage.WhyThesePrecedents...),
+		Precedents:         append([]domain.RetrievalHit{}, contextPackage.Precedents...),
+		OperationalIR:      contextPackage.OperationalIR,
+		TotalChars:         contextPackage.TotalChars,
+		GeneratedAt:        contextPackage.GeneratedAt,
 	}
-	for _, chunk := range contextPackage.Chunks {
-		packet.Precedents = append(packet.Precedents, domain.RetrievalHit{
-			SourceRef:    chunk.SourceRef,
-			SourceType:   chunk.SourceType,
-			SourceID:     chunk.SourceID,
-			Score:        chunk.Score,
-			InitiativeID: chunk.InitiativeID,
-			TaskID:       chunk.TaskID,
-			ArtifactID:   chunk.ArtifactID,
-			Summary:      summarizeRetrievalChunk(chunk.ContentText),
-		})
+	if len(packet.Precedents) == 0 {
+		selected, compactSummaries, why := memory.SelectRetrievalHits(contextPackage.Chunks, memory.DefaultPrecedentLimit, memory.DefaultPerClassLimit)
+		packet.Precedents = selected
+		if len(packet.CompactSummaries) == 0 {
+			packet.CompactSummaries = compactSummaries
+		}
+		if len(packet.WhyThesePrecedents) == 0 {
+			packet.WhyThesePrecedents = why
+		}
 	}
 	return packet
 }
 
 func summarizeRetrievalChunk(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return ""
-	}
-	runes := []rune(text)
-	if len(runes) <= 180 {
-		return text
-	}
-	return strings.TrimSpace(string(runes[:180])) + "..."
+	return memory.CompactText(text, memory.DefaultChunkSummaryChars)
 }
 
 func derefAgentType(value *domain.AgentType) string {
@@ -203,4 +208,15 @@ func derefAgentType(value *domain.AgentType) string {
 		return ""
 	}
 	return strings.TrimSpace(string(*value))
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
 }

@@ -1,6 +1,9 @@
 package httpapi
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +30,78 @@ func TestShouldStartObjectiveRepairCycleForReviewChangesRequested(t *testing.T) 
 	}
 	if !shouldStartObjectiveRepairCycle(task, result) {
 		t.Fatalf("expected review changes_requested to trigger repair cycle")
+	}
+}
+
+func TestBuildObjectivePlanningContextCreatesCompactContextPackage(t *testing.T) {
+	server := &Server{}
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	readme := "# smartfm api\n\nThis repo fixes auth regressions and validates CLI/API behavior through focused tests.\n"
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte(readme), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "internal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "internal", "auth_service.go"), []byte("package internal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	initiative := &domain.InitiativeResponse{
+		ID:            "initiative-ctx-1",
+		Title:         "Fix auth regression",
+		WorkspaceRoot: root,
+		Goal:          "Fix the auth regression with minimal scope.",
+	}
+	body := domain.ObjectiveRequest{
+		Title:         "Fix auth regression",
+		Objective:     "Fix the auth regression and prove it with tests.",
+		WorkspaceRoot: root,
+		CreatedBy:     "test",
+	}
+
+	pkg, err := server.buildObjectivePlanningContext(context.Background(), initiative, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkg == nil {
+		t.Fatal("expected context package")
+	}
+	if pkg.MemoryMode != "auto" {
+		t.Fatalf("expected auto memory mode, got %q", pkg.MemoryMode)
+	}
+	if pkg.MemoryStrategy != "repo_specific_first" {
+		t.Fatalf("expected repo_specific_first strategy, got %q", pkg.MemoryStrategy)
+	}
+	if pkg.TotalChars <= 0 {
+		t.Fatalf("expected compact context chars, got %d", pkg.TotalChars)
+	}
+	if pkg.TotalChars > 2400 {
+		t.Fatalf("expected planning context budget <= 2400 chars, got %d", pkg.TotalChars)
+	}
+	if len(pkg.Chunks) == 0 {
+		t.Fatalf("expected compact retrieval chunks, got %#v", pkg)
+	}
+	if len(pkg.PromptSection) == 0 {
+		t.Fatalf("expected prompt section, got %#v", pkg)
+	}
+	if len(pkg.WhyThesePrecedents) == 0 {
+		t.Fatalf("expected why-these-precedents trace, got %#v", pkg)
+	}
+	foundRepoSpecific := false
+	for _, chunk := range pkg.Chunks {
+		if strings.TrimSpace(chunk.MemoryClass) == "repo_specific" {
+			foundRepoSpecific = true
+		}
+		if len(chunk.ContentText) > 220 {
+			t.Fatalf("expected compact chunk summary, got %d chars", len(chunk.ContentText))
+		}
+	}
+	if !foundRepoSpecific {
+		t.Fatalf("expected at least one repo_specific chunk, got %#v", pkg.Chunks)
 	}
 }
 
@@ -544,10 +619,10 @@ func TestObjectiveQueueMetadataPatchPreservesDocumentationWorkstreamPriority(t *
 	editTask := &domain.TaskResponse{
 		ID: "task-edit-docs-1",
 		Metadata: map[string]any{
-			"work_item_kind":      string(domain.WorkItemKindEdit),
+			"work_item_kind":       string(domain.WorkItemKindEdit),
 			"objective_workstream": "documentation_sync",
-			"depends_on":          []string{"research", "edit"},
-			"suspected_paths":     []string{"README.md"},
+			"depends_on":           []string{"research", "edit"},
+			"suspected_paths":      []string{"README.md"},
 			"project_request": map[string]any{
 				"project_name":   "demo-repo",
 				"expected_files": []string{"README.md"},
@@ -594,10 +669,10 @@ func TestObjectiveQueueMetadataPatchPreservesDependencyWorkstreamPriority(t *tes
 	editTask := &domain.TaskResponse{
 		ID: "task-edit-deps-1",
 		Metadata: map[string]any{
-			"work_item_kind":      string(domain.WorkItemKindEdit),
+			"work_item_kind":       string(domain.WorkItemKindEdit),
 			"objective_workstream": "dependency_sync",
-			"depends_on":          []string{"research", "edit"},
-			"suspected_paths":     []string{"package.json", "package-lock.json"},
+			"depends_on":           []string{"research", "edit"},
+			"suspected_paths":      []string{"package.json", "package-lock.json"},
 			"project_request": map[string]any{
 				"project_name":   "demo-repo",
 				"expected_files": []string{"package.json", "package-lock.json"},
