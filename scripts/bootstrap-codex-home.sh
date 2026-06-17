@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${CODEX_BOOTSTRAP_ENV_FILE:-$ROOT_DIR/.env}"
-OUTPUT_DIR="${CODEX_BOOTSTRAP_OUTPUT_DIR:-$ROOT_DIR/.codex-local}"
+OUTPUT_DIR="${CODEX_BOOTSTRAP_OUTPUT_DIR:-$HOME/.codex-lab}"
 CONFIG_FILE="$OUTPUT_DIR/config.toml"
 RUNTIME_ENV_FILE="$OUTPUT_DIR/env"
 DEFAULT_KEY_FILE="${HOME}/.config/stratecode-lab/codex_gateway_api_key"
@@ -12,7 +12,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/bootstrap-codex-home.sh [--env-file PATH] [--output-dir PATH]
 
-Creates a repo-local CODEX_HOME configured to use the lab Codex gateway.
+Creates a dedicated CODEX_HOME configured to use the lab Codex gateway.
 
 Environment override precedence:
 1. Existing shell environment

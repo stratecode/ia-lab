@@ -32,7 +32,7 @@ There is also a fourth entry point if you enjoy pain: editing production `site-p
 | Orchestrator API | `https://<cockpit_domain>/orchestrator/` | HTTP control plane |
 | Capability Layer | API + Telegram + `orchestrator-tools` model | web, documents, images, traceable sources |
 | Local Bridge + TUI | `lab-agent`, `lab-agentd`, `lab-agent tui` | initiative governance, local execution, and project scaffolding |
-| Codex + lab gateway | `codex` + repo-local `CODEX_HOME` | direct coding workflow against the local lab model |
+| Codex + lab gateway | `codex` + dedicated `~/.codex-lab` | direct coding workflow against the local lab model |
 | Direct health | `http://127.0.0.1:8100/health` | local health check on the host |
 | Metrics | `http://127.0.0.1:8100/metrics` | Prometheus scrape target |
 
@@ -49,6 +49,152 @@ Use this sequence if you want signal without ceremony:
 7. Use the local bridge and TUI when the work must touch a real workspace on your machine instead of the remote runtime workspace.
 8. Use initiatives when the work is larger than one task and needs requirements, design, plan, approvals, and selective execution.
 9. Use Codex against the lab gateway when you want direct repo editing with repository-local instructions and terminal-native iteration.
+
+## Three Working Modes
+
+If the goal is to extract maximum value from the local server without turning your workstation into a shrine to YAML, use these three modes:
+
+### 1. Interactive local coding with Codex against the server gateway
+
+Use this when:
+
+- you want an interactive Codex session in your terminal
+- the repo lives on your machine
+- the model should run on the lab server
+
+Commands:
+
+```bash
+cd /path/to/lab
+./scripts/codex-lab-tui --project-dir /absolute/path/to/project
+```
+
+Desktop app instead of the terminal TUI:
+
+```bash
+cd /path/to/lab
+./scripts/codex-lab-app --project-dir /absolute/path/to/project
+```
+
+Quick verification:
+
+```bash
+curl -sk \
+  -H "Authorization: Bearer $CODEX_GATEWAY_API_KEY" \
+  "${CODEX_GATEWAY_BASE_URL:-https://$LAB_CODEX_GATEWAY_DOMAIN/v1}/models"
+```
+
+Expected result:
+
+- Codex starts locally
+- requests are served by the lab gateway over HTTP
+- edits and shell commands run in the local workspace
+- the session uses the dedicated `~/.codex-lab` home instead of the OpenAI/ChatGPT profile
+- the app opens a fresh `Local` thread for the exact project path instead of relying on a recycled workspace
+
+Important mode distinction:
+
+- `Local` edits your real checkout
+- `Worktree` edits a separate checkout under `$CODEX_HOME/worktrees`
+
+If you choose `Worktree`, you are looking at the wrong folder if you expect immediate changes in the original repo.
+
+### 2. Local agent execution without opening the Codex UI
+
+Use this when:
+
+- you want one-shot automation from the terminal
+- you want agentic execution in a real local repo
+- you need a reproducible command for scripts or benchmarks
+
+Commands:
+
+```bash
+cd /path/to/lab
+./scripts/codex-lab-exec \
+  --project-dir /absolute/path/to/project \
+  --prompt 'Implement the smallest fix that makes the failing test pass and verify it.'
+```
+
+Expected result:
+
+- the model still runs on the lab server
+- the agent executes locally in the target workspace
+- terminal output is available immediately for verification
+- the wrapper runs a reversible write smoke test first
+- the wrapper fails explicitly if the run ends without a repository change
+
+Exhaustive remote-local verification:
+
+```bash
+cd /path/to/lab
+./scripts/verify-codex-lab-remote.sh --real-repo /absolute/path/to/project
+```
+
+What this proves:
+
+- repeated remote execution against the lab gateway
+- real writes in temporary local repos
+- a real write in the exact local repo path you pass
+- a tracked-file edit in a detached worktree created from that real repo
+- transcript evidence tying the run to `lab-codex-gateway` and the exact workspace path
+
+Stability soak test:
+
+```bash
+cd /path/to/lab
+./scripts/verify-codex-lab-remote-soak.sh --real-repo /absolute/path/to/project --runs 10
+```
+
+What this adds:
+
+- repeated end-to-end cycles instead of a single happy-path run
+- aggregated pass/fail rate with per-run artifacts
+- a sharper view of timeout frequency and transient transport instability
+
+### 3. Remote HTTP use of the server-hosted model
+
+Use this when:
+
+- you are on another machine
+- you want direct programmatic access
+- you do not need local file execution on the caller machine
+
+Commands:
+
+```bash
+cd /path/to/lab
+./scripts/codex-mode.sh remote-http models
+```
+
+You can use the same base URL from:
+
+- shell scripts
+- remote machines on the network
+- external tools that speak an OpenAI-compatible API
+
+Expected result:
+
+- model metadata is returned over HTTP
+- no local bridge is required
+- execution happens only where the client explicitly performs it
+
+## Governed Local Bridge Mode
+
+The `lab-agent` / `lab-agentd` bridge is still the right tool when you need:
+
+- initiative governance
+- selective approvals
+- orchestrator-owned local execution
+- the TUI cockpit
+
+But treat it as a separate deployment slice, not as part of the default Codex path.
+
+Important current reality:
+
+- `playbooks/bootstrap.yml` currently disables the orchestrator runtime by default (`orchestrator_enabled: false`)
+- if you want bridge mode, first redeploy the orchestrator runtime using the runbook in [Orchestrator Redeploy](./orchestrator-redeploy.md)
+- after that, follow [Local Bridge and CLI](./local-bridge.md)
 
 ## Telegram
 
@@ -178,16 +324,17 @@ If you want Codex to work directly on this repository while using the lab-hosted
 
 ```bash
 ./scripts/bootstrap-codex-home.sh
-export CODEX_HOME="$PWD/.codex-local"
+export CODEX_HOME="$HOME/.codex-lab"
 set -a && source "$CODEX_HOME/env" && set +a
-codex
+./scripts/codex-lab-tui --project-dir /absolute/path/to/project
 ```
 
 This flow gives Codex:
 
-- a repo-local `CODEX_HOME`
+- a dedicated `CODEX_HOME` isolated from `~/.codex`
 - authenticated access to the lab Codex gateway
 - repository instructions from `AGENTS.md`
+- a safer default route for real local edits
 
 Full setup and failure handling lives in [Codex Agentic Workflow](./codex-agentic-workflow.md).
 

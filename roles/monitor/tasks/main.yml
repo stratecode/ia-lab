@@ -312,6 +312,7 @@
           listen [::]:443 ssl;
           http2 on;
           server_name {{ codex_gateway_domain }};
+          client_max_body_size {{ codex_gateway_client_max_body_size }};
 
           ssl_certificate {{ monitor_codex_gateway_ssl_certificate }};
           ssl_certificate_key {{ monitor_codex_gateway_ssl_certificate_key }};

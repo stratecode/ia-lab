@@ -226,6 +226,7 @@ codex_gateway_log_dir: /var/log/codex-local-gateway
 codex_gateway_binary_path: "{{ lookup('env', 'LAB_CODEX_GATEWAY_BINARY_PATH') | default(inventory_dir ~ '/dist/codex-local-gateway-linux-amd64', true) }}"
 codex_gateway_addr: "{{ lookup('env', 'LAB_CODEX_GATEWAY_ADDR') | default('127.0.0.1:8180', true) }}"
 codex_gateway_public_base_url: "https://{{ codex_gateway_domain }}/v1"
+codex_gateway_client_max_body_size: "{{ lookup('env', 'LAB_CODEX_GATEWAY_CLIENT_MAX_BODY_SIZE') | default('8m', true) }}"
 codex_gateway_api_key: "{{ lookup('env', 'LAB_CODEX_GATEWAY_API_KEY') | default(vault_codex_gateway_api_key | default(lookup('password', lookup('env', 'HOME') ~ '/.config/stratecode-lab/codex_gateway_api_key length=48 chars=ascii_letters,digits'), true), true) }}"
 codex_gateway_upstream_base_url: "http://127.0.0.1:{{ (llama_cpp_instances | first).port }}/v1"
 codex_gateway_upstream_api_key: "{{ (llama_cpp_instances | first).api_key }}"

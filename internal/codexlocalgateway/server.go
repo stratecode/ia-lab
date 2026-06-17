@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -164,7 +165,7 @@ func (s *Server) models(w http.ResponseWriter, r *http.Request) {
 		"service_tiers":                    []map[string]any{},
 		"availability_nux":                 nil,
 		"upgrade":                          nil,
-		"base_instructions":                "You are Codex running against a small local coding model through the StrateCode lab gateway. Keep responses concise and use this route for low-stakes tasks.",
+		"base_instructions":                labBaseInstructions(),
 		"model_messages":                   nil,
 		"default_reasoning_summary":        "none",
 		"support_verbosity":                false,
@@ -341,7 +342,7 @@ func fallbackToolInstruction(tools json.RawMessage, choice any) chatMessage {
 			"For exec_command, arguments must be {\"cmd\":\"real shell command\"}; never put another JSON object inside cmd. " +
 			"If the user explicitly tells you to run or execute a command now, you must answer with the exec_command JSON function_call and no surrounding prose. " +
 			"If approval policy is never or sandbox is already danger-full-access, do not ask for confirmation and do not say you are about to run a command; call the tool immediately. " +
-			"If the latest exec_command tool result has exit_code 0, do not call exec_command again for the same task; summarize completion briefly. " +
+			"If an exec_command already succeeded for the exact same cmd, do not repeat that same cmd again for the same task; otherwise continue calling exec_command as needed to finish the task. " +
 			"Do not use write_stdin unless a prior exec_command returned a session_id. Do not claim that you edited files or ran commands unless a tool result confirms it.",
 	}
 }
@@ -507,7 +508,7 @@ func (s *Server) enforceChatPromptSize(req chatCompletionRequest) error {
 	if total <= s.cfg.MaxPromptChars {
 		return nil
 	}
-	return fmt.Errorf("prompt text is too large for the local lab model: %d chars exceeds limit %d; compact or use native GPT for this task", total, s.cfg.MaxPromptChars)
+	return promptTooLargeError(total, s.cfg.MaxPromptChars, false)
 }
 
 func (s *Server) compactChatPrompt(req *chatCompletionRequest) error {
@@ -519,13 +520,20 @@ func (s *Server) compactChatPrompt(req *chatCompletionRequest) error {
 		return nil
 	}
 	if len(req.Messages) < 3 {
-		return fmt.Errorf("prompt text is too large for the local lab model: %d chars exceeds limit %d; compact or use native GPT for this task", total, s.cfg.MaxPromptChars)
+		return promptTooLargeError(total, s.cfg.MaxPromptChars, false)
 	}
+	before := total
 	req.Messages = compactMessages(req.Messages, s.cfg.MaxPromptChars)
-	if chatPromptChars(req.Messages) > s.cfg.MaxPromptChars {
-		return fmt.Errorf("prompt text is too large for the local lab model after compaction; compact or use native GPT for this task")
+	after := chatPromptChars(req.Messages)
+	if after > s.cfg.MaxPromptChars {
+		return promptTooLargeError(after, s.cfg.MaxPromptChars, true)
 	}
 	s.compactions.Inc()
+	s.logger.Warn().
+		Int("chars_before", before).
+		Int("chars_after", after).
+		Int("limit", s.cfg.MaxPromptChars).
+		Msg("compacted prompt for local lab model")
 	return nil
 }
 
@@ -545,12 +553,8 @@ func compactMessages(messages []chatMessage, limit int) []chatMessage {
 		return messages
 	}
 	first := messages[0]
+	summary := buildCompactionSummary(messages)
 	tail := append([]chatMessage(nil), messages[len(messages)-2:]...)
-	summary := chatMessage{
-		Role: "system",
-		Content: "Compacted previous context for local lab model. Preserved only the latest actionable messages, " +
-			"recent tool outputs, test failures, and the current objective. Older transcript was discarded to stay within context.",
-	}
 	compacted := []chatMessage{summary}
 	if first.Role == "system" && !strings.Contains(first.Content, "Compacted previous context") {
 		compacted = append(compacted, first)
@@ -560,6 +564,253 @@ func compactMessages(messages []chatMessage, limit int) []chatMessage {
 		compacted = append(compacted[:1], compacted[2:]...)
 	}
 	return compacted
+}
+
+func labBaseInstructions() string {
+	return strings.Join([]string{
+		"You are Codex running against a small local coding model through the StrateCode lab gateway.",
+		"Execute before narrating.",
+		"Always verify the repository by running pwd, git rev-parse --show-toplevel, and listing a few anchor files before editing.",
+		"If the task requires code changes, modify real project files and run validation commands.",
+		"Do not return a plan unless the user explicitly asked for a plan.",
+		"If you are in the wrong repository, inside an unexpected worktree, or cannot write, say so and stop.",
+		"Keep tasks narrow. If the prompt is too broad for the local model, say so and stop instead of hallucinating.",
+		"Before finishing, run git status --short and report exact files changed plus validation results.",
+	}, " ")
+}
+
+func promptTooLargeError(total, limit int, afterCompaction bool) error {
+	if afterCompaction {
+		return fmt.Errorf(
+			"prompt text is too large for the local lab model after compaction: %d chars exceeds limit %d; split the task, start a fresh local thread, or use native GPT for this task",
+			total,
+			limit,
+		)
+	}
+	return fmt.Errorf(
+		"prompt text is too large for the local lab model: %d chars exceeds limit %d; split the task, reduce attached context, or use native GPT for this task",
+		total,
+		limit,
+	)
+}
+
+func buildCompactionSummary(messages []chatMessage) chatMessage {
+	objective := firstNonEmptyString(latestObjective(messages), "unknown")
+	workspace := firstNonEmptyString(latestWorkspace(messages), "unknown")
+	constraints := collectSignals(messages, isConstraintLine, 4)
+	changes := collectSignals(messages, isChangeLine, 3)
+	errors := collectSignals(messages, isFailureLine, 3)
+
+	lines := []string{
+		"Compacted previous context for local lab model.",
+		"Preserve these facts as authoritative:",
+		"- Objective: " + truncateInline(objective, 280),
+		"- Workspace: " + truncateInline(workspace, 180),
+	}
+	if len(constraints) > 0 {
+		lines = append(lines, "- Constraints: "+strings.Join(constraints, " | "))
+	}
+	if len(changes) > 0 {
+		lines = append(lines, "- Recent changes: "+strings.Join(changes, " | "))
+	}
+	if len(errors) > 0 {
+		lines = append(lines, "- Recent validation errors: "+strings.Join(errors, " | "))
+	}
+	lines = append(lines, "Older transcript was discarded to stay within context. Keep the same repo, objective, and constraints.")
+	return chatMessage{
+		Role:    "system",
+		Content: strings.Join(lines, "\n"),
+	}
+}
+
+func latestObjective(messages []chatMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role != "user" && msg.Role != "system" {
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if content == "" || strings.Contains(content, "Compacted previous context") {
+			continue
+		}
+		lines := strings.Split(content, "\n")
+		for idx, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			lower := strings.ToLower(line)
+			if strings.HasPrefix(lower, "user task:") {
+				value := strings.TrimSpace(strings.TrimPrefix(line, "User task:"))
+				if value != "" {
+					return value
+				}
+				for _, follow := range lines[idx+1:] {
+					follow = strings.TrimSpace(follow)
+					if follow != "" {
+						return follow
+					}
+				}
+			}
+		}
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role != "user" && msg.Role != "system" {
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if content == "" || strings.Contains(content, "Compacted previous context") {
+			continue
+		}
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			lower := strings.ToLower(line)
+			if strings.Contains(lower, "user task:") {
+				return strings.TrimSpace(strings.TrimPrefix(line, "User task:"))
+			}
+		}
+		return content
+	}
+	return ""
+}
+
+func latestWorkspace(messages []chatMessage) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		content := strings.TrimSpace(messages[i].Content)
+		if content == "" {
+			continue
+		}
+		for _, line := range strings.Split(content, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if path := extractWorkspacePath(line); path != "" {
+				return path
+			}
+		}
+	}
+	return ""
+}
+
+func extractWorkspacePath(line string) string {
+	fields := strings.Fields(line)
+	for _, field := range fields {
+		token := strings.Trim(field, "`'\",()[]")
+		if strings.HasPrefix(token, "/Users/") || strings.HasPrefix(token, "/workspace/") || token == "/workspace" {
+			return filepath.Clean(token)
+		}
+	}
+	return ""
+}
+
+func collectSignals(messages []chatMessage, keep func(string) bool, limit int) []string {
+	seen := map[string]struct{}{}
+	items := make([]string, 0, limit)
+	for i := len(messages) - 1; i >= 0 && len(items) < limit; i-- {
+		for _, line := range strings.Split(messages[i].Content, "\n") {
+			line = truncateInline(strings.TrimSpace(line), 180)
+			if line == "" || !keep(line) {
+				continue
+			}
+			if _, ok := seen[line]; ok {
+				continue
+			}
+			seen[line] = struct{}{}
+			items = append(items, line)
+			if len(items) == limit {
+				break
+			}
+		}
+	}
+	return items
+}
+
+func isConstraintLine(line string) bool {
+	lower := strings.ToLower(line)
+	signals := []string{
+		"must",
+		"do not",
+		"don't",
+		"without touching",
+		"keep ",
+		"verify",
+		"without ",
+		"only ",
+		"mandatory",
+		"abort",
+	}
+	for _, signal := range signals {
+		if strings.Contains(lower, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func isChangeLine(line string) bool {
+	lower := strings.ToLower(line)
+	signals := []string{
+		"changed",
+		"modified",
+		"updated",
+		"files changed",
+		"git status",
+		"composer.lock",
+		"package-lock",
+		"artisan",
+		"phpunit",
+	}
+	for _, signal := range signals {
+		if strings.Contains(lower, signal) {
+			return true
+		}
+	}
+	if strings.HasPrefix(line, "M ") || strings.HasPrefix(line, "A ") || strings.HasPrefix(line, "D ") {
+		return true
+	}
+	return false
+}
+
+func isFailureLine(line string) bool {
+	lower := strings.ToLower(line)
+	signals := []string{
+		"error",
+		"failed",
+		"fatal",
+		"exception",
+		"traceback",
+		"non-zero",
+		"exit code",
+		"status 4",
+		"status 5",
+	}
+	for _, signal := range signals {
+		if strings.Contains(lower, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func truncateInline(value string, max int) string {
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	return strings.TrimSpace(value[:max]) + "..."
 }
 
 type toolCallParseError struct {

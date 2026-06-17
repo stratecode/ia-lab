@@ -47,10 +47,11 @@ Run:
 
 This creates:
 
-- `.codex-local/config.toml`
-- `.codex-local/env`
+- `~/.codex-lab/config.toml`
+- `~/.codex-lab/env`
 
-Both are ignored by git. That is intentional. Secrets committed to git are not “agentic”; they are evidence.
+This is intentionally separate from the normal `~/.codex` profile used for OpenAI or ChatGPT-backed Codex.
+Mixing both worlds in one home is how you get a local-model session with cloud-flavored amnesia.
 
 If you want a different env file or output directory:
 
@@ -61,7 +62,7 @@ If you want a different env file or output directory:
 ## 3. Start Codex Against the Lab Gateway
 
 ```bash
-export CODEX_HOME="$PWD/.codex-local"
+export CODEX_HOME="$HOME/.codex-lab"
 set -a && source "$CODEX_HOME/env" && set +a
 codex
 ```
@@ -71,6 +72,30 @@ Expected outcome:
 - Codex uses the `lab-codex-gateway` provider
 - requests go to the lab gateway `.../v1`
 - repo-local `AGENTS.md` instructions are available automatically in this repository
+
+Recommended launchers:
+
+```bash
+./scripts/codex-openai
+./scripts/codex-lab-tui --project-dir /absolute/path/to/project
+./scripts/codex-lab-app --project-dir /absolute/path/to/project
+./scripts/codex-lab-exec --project-dir /absolute/path/to/project --prompt 'Implement the smallest fix that makes the failing test pass.'
+./scripts/codex-lab-safe-path --project-dir /absolute/path/to/project
+```
+
+What they do:
+
+- `codex-openai`
+  Uses the default `~/.codex` home. This is the normal OpenAI-backed path.
+- `codex-lab-tui`
+  Uses `~/.codex-lab` and starts terminal Codex against the lab gateway.
+- `codex-lab-app`
+  Uses `~/.codex-lab`, launches the desktop app, and opens a new local thread for the exact project path.
+  The deep link reliably targets the right local workspace, but prompt submission still depends on current Codex app behavior; treat it as "open the right local thread" rather than "headless full execution".
+- `codex-lab-exec`
+  Uses `~/.codex-lab`, runs a smoke write test, then runs a guarded `codex exec`. If the run ends without repository changes, it fails explicitly.
+- `codex-lab-safe-path`
+  Opens the app with a local-thread bootstrap prompt that forces repo verification before real work.
 
 ## 4. Verify the Gateway Before Blaming Codex
 
@@ -116,6 +141,27 @@ When you change local bridge workflow and the required services are available:
 ./scripts/smoke-golden-path-bridge.sh
 ```
 
+When you need hard evidence that Codex is operating remotely on a local repo through the lab gateway:
+
+```bash
+./scripts/verify-codex-lab-remote.sh --real-repo /absolute/path/to/project
+```
+
+That harness verifies:
+
+- repeated temp-repo writes through `lab-codex-gateway`
+- transcript `cwd` and `model_provider` for each run
+- a marker write in the exact real repo path you passed
+- a tracked-file edit in a detached worktree created from that same repo, without leaving the main checkout dirty
+
+If you need stability evidence instead of one strong sample:
+
+```bash
+./scripts/verify-codex-lab-remote-soak.sh --real-repo /absolute/path/to/project --runs 10
+```
+
+That soak harness repeats the full verification cycle, stores per-run artifacts, and emits an aggregate success rate.
+
 ## 6. When To Use Codex vs `lab-agent`
 
 Use Codex when:
@@ -133,6 +179,33 @@ Use `lab-agent tui` plus `lab-agentd` when:
 Those surfaces are complementary. Replacing one with the other would be a category error with better branding.
 
 ## 7. Failure Modes
+
+### Codex edits the wrong place or "does nothing"
+
+The Codex app has three relevant modes:
+
+- `Local`
+  Edits your real checkout.
+- `Worktree`
+  Edits a separate checkout under `$CODEX_HOME/worktrees`.
+- `Cloud`
+  Runs remotely and is not the default path we want here.
+
+If you choose `Worktree`, do not stare at your original repo waiting for changes to appear by telepathy.
+Use `codex-lab-app` or `codex-lab-safe-path` to force a fresh local thread on the exact project path.
+
+### The model writes a plan instead of changing code
+
+Use a narrower prompt or `./scripts/codex-lab-exec`.
+
+That wrapper forces:
+
+- repo verification
+- a reversible write smoke test
+- final `git status --short`
+- an explicit failure if the run finishes without a repository change
+
+If even that fails, the task is probably too broad for the local model and should move to native GPT.
 
 ### `Missing Codex gateway API key`
 

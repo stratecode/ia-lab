@@ -982,7 +982,7 @@ func TestFileWriteEffectNormalizesEscapedEchoCommands(t *testing.T) {
 func TestFallbackToolInstructionStopsAfterSuccessfulExecCommand(t *testing.T) {
 	msg := fallbackToolInstruction(json.RawMessage(`[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]`), nil)
 
-	for _, want := range []string{"exit_code 0", "do not call exec_command again", "summarize"} {
+	for _, want := range []string{"exact same cmd", "continue calling exec_command as needed", "tool result confirms it"} {
 		if !strings.Contains(msg.Content, want) {
 			t.Fatalf("fallback instruction missing %q: %s", want, msg.Content)
 		}
@@ -1206,6 +1206,9 @@ func TestResponsesRejectsOversizedPromptBeforeUpstream(t *testing.T) {
 	if out.Error.Type != "context_window_exceeded" {
 		t.Fatalf("unexpected error envelope: %#v", out)
 	}
+	if !strings.Contains(out.Error.Message, "split the task") || !strings.Contains(out.Error.Message, "limit 10") {
+		t.Fatalf("expected actionable size error, got %#v", out)
+	}
 }
 
 func TestChatCompletionsRejectsOversizedPromptBeforeUpstream(t *testing.T) {
@@ -1224,6 +1227,36 @@ func TestChatCompletionsRejectsOversizedPromptBeforeUpstream(t *testing.T) {
 	if res.StatusCode != http.StatusBadRequest {
 		body, _ := io.ReadAll(res.Body)
 		t.Fatalf("expected bad request, got %d: %s", res.StatusCode, body)
+	}
+}
+
+func TestCompactMessagesPreservesObjectiveWorkspaceAndErrors(t *testing.T) {
+	messages := []chatMessage{
+		{Role: "system", Content: "Initial system instruction."},
+		{Role: "user", Content: "User task:\nUpgrade Laravel without touching .env.local.\nProject path: /Users/fran.lopez/Development/smartfm/api"},
+		{Role: "assistant", Content: "Modified composer.json and composer.lock"},
+		{Role: "tool", Content: "PHP Fatal error: test failed with exit code 1"},
+		{Role: "user", Content: "Keep docker compose as the validation path."},
+		{Role: "assistant", Content: "latest"},
+		{Role: "user", Content: "continue"},
+	}
+
+	compacted := compactMessages(messages, 700)
+	if len(compacted) < 3 {
+		t.Fatalf("expected compacted transcript, got %#v", compacted)
+	}
+	summary := compacted[0].Content
+	if !strings.Contains(summary, "Objective:") || !strings.Contains(summary, "Upgrade Laravel") {
+		t.Fatalf("expected summary to preserve objective, got %q", summary)
+	}
+	if !strings.Contains(summary, "/Users/fran.lopez/Development/smartfm/api") {
+		t.Fatalf("expected summary to preserve workspace, got %q", summary)
+	}
+	if !strings.Contains(summary, "without touching .env.local") || !strings.Contains(summary, "docker compose") {
+		t.Fatalf("expected summary to preserve constraints, got %q", summary)
+	}
+	if !strings.Contains(summary, "Fatal error") {
+		t.Fatalf("expected summary to preserve recent validation error, got %q", summary)
 	}
 }
 
