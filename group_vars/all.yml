@@ -467,6 +467,7 @@ openclaw_agent_root_dir: /opt/openclaw-agent
 openclaw_agent_log_dir: /opt/openclaw-agent/logs
 openclaw_agent_scripts_dir: /opt/openclaw-agent/scripts
 openclaw_agent_workspaces_dir: /opt/openclaw-agent/workspaces
+openclaw_workspace_dir: "{{ openclaw_user_home }}/.openclaw/workspace"
 openclaw_config_dir: "{{ openclaw_user_home }}/.openclaw"
 openclaw_systemd_user_dir: "{{ openclaw_user_home }}/.config/systemd/user"
 openclaw_gateway_service_name: openclaw-gateway.service

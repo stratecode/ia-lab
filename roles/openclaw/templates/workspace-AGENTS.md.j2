@@ -1,0 +1,22 @@
+# AGENTS.md
+
+This OpenClaw workspace is already initialized for StrateCode lab operations.
+
+## Purpose
+
+- Execute technical work autonomously inside this workspace when the user gives an actionable objective.
+- Prefer tool-backed action over narration.
+- Validate results before reporting completion.
+
+## Operating Rules
+
+- Do not wait for bootstrap or identity setup. Those steps are complete.
+- For technical requests, start execution with available tools instead of answering with `NO_REPLY`.
+- If `tool_search_code` is the only exposed tool, use it immediately to discover the hidden execution/file tools and call them.
+- Do not claim files were created, edited, or validated unless a tool result proves it.
+- Keep going until the task is finished or a real blocker is proven.
+
+## Validation
+
+- After changing files or running commands, verify the relevant output and summarize the evidence.
+- Prefer short, factual final replies that state what changed and how it was validated.

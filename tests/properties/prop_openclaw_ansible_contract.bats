@@ -46,3 +46,40 @@ if '- openclaw' not in deploy and '- role: openclaw' not in deploy:
 PY"
   [ "$status" -eq 0 ]
 }
+
+@test "openclaw role pins operator CLI shim to managed runtime" {
+  run bash -lc "cd '$repo_root' && python3 - <<'PY'
+from pathlib import Path
+text = Path('roles/openclaw/tasks/main.yml').read_text()
+checks = [
+    'Ensure operator npm-global bin directory exists',
+    'Pin operator OpenClaw CLI shim to managed Node runtime',
+    '.npm-global/bin/openclaw',
+    '{{ openclaw_cli_bin }}',
+]
+missing = [item for item in checks if item not in text]
+if missing:
+    raise SystemExit('missing: ' + ', '.join(missing))
+PY"
+  [ "$status" -eq 0 ]
+}
+
+@test "openclaw role installs operational workspace files and removes bootstrap" {
+  run bash -lc "cd '$repo_root' && python3 - <<'PY'
+from pathlib import Path
+text = Path('roles/openclaw/tasks/main.yml').read_text()
+checks = [
+    'Install operational OpenClaw workspace files',
+    'workspace-AGENTS.md.j2',
+    'workspace-IDENTITY.md.j2',
+    'workspace-USER.md.j2',
+    'workspace-TOOLS.md.j2',
+    'Remove bootstrap-only OpenClaw workspace file',
+    'BOOTSTRAP.md',
+]
+missing = [item for item in checks if item not in text]
+if missing:
+    raise SystemExit('missing: ' + ', '.join(missing))
+PY"
+  [ "$status" -eq 0 ]
+}

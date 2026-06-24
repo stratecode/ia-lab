@@ -223,6 +223,11 @@ func parseFallbackToolCall(text string, tools json.RawMessage) (responseItem, bo
 				return item, true, err
 			}
 		}
+		if call.Name == "tool_search_code" {
+			if item, ok := normalizeToolSearchCodeFallback(callID, arguments); ok {
+				return item, true, nil
+			}
+		}
 		return responseItem{
 			ID:        "fc_" + callID,
 			Type:      "function_call",
@@ -308,6 +313,11 @@ func parseFallbackToolCall(text string, tools json.RawMessage) (responseItem, bo
 	if call.Name == "exec_command" {
 		if item, ok, err := normalizeExecCommandFallback(callID, arguments); err != nil || ok {
 			return item, true, err
+		}
+	}
+	if call.Name == "tool_search_code" {
+		if item, ok := normalizeToolSearchCodeFallback(callID, arguments); ok {
+			return item, true, nil
 		}
 	}
 	return responseItem{
@@ -511,14 +521,22 @@ func unwrapNestedExecCommandString(value string) (string, bool) {
 }
 
 func normalizeResponseToolItem(item responseItem) responseItem {
-	if item.Type != "function_call" || item.Name != "exec_command" {
+	if item.Type != "function_call" {
 		return item
 	}
-	normalized, ok, err := normalizeExecCommandFallback(item.CallID, item.Arguments)
-	if err != nil || !ok {
-		return item
+	if item.Name == "exec_command" {
+		normalized, ok, err := normalizeExecCommandFallback(item.CallID, item.Arguments)
+		if err != nil || !ok {
+			return item
+		}
+		return normalized
 	}
-	return normalized
+	if item.Name == "tool_search_code" {
+		if normalized, ok := normalizeToolSearchCodeFallback(item.CallID, item.Arguments); ok {
+			return normalized
+		}
+	}
+	return item
 }
 
 func repeatedSuccessfulExecCommand(messages []chatMessage, item responseItem) bool {
@@ -638,6 +656,22 @@ func execCommandFromArguments(arguments string) (string, bool) {
 	}
 	command := strings.TrimSpace(args.Cmd)
 	return command, command != ""
+}
+
+func normalizeToolSearchCodeFallback(callID, arguments string) (responseItem, bool) {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(arguments), &args); err != nil {
+		return responseItem{}, false
+	}
+	if code, _ := args["code"].(string); strings.TrimSpace(code) != "" {
+		return responseItem{}, false
+	}
+	for _, key := range []string{"cmd", "command"} {
+		if command, _ := args[key].(string); strings.TrimSpace(command) != "" {
+			return toolSearchCodeExecItem(callID, command), true
+		}
+	}
+	return responseItem{}, false
 }
 
 func toolOutputSucceeded(content string) bool {

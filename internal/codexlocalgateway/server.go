@@ -529,6 +529,12 @@ func fallbackToolInstruction(tools json.RawMessage, choice any) chatMessage {
 	if len(names) == 0 {
 		nameLine = "Use only a tool name from the provided tools list."
 	}
+	toolSearchInstruction := ""
+	if toolNameAllowed("tool_search_code", tools) {
+		toolSearchInstruction = " For tool_search_code, arguments must be {\"code\":\"...\"}. " +
+			"When execution, editing, testing, or file changes are required and tool_search_code is available, call it immediately with JavaScript that searches the hidden tool catalog, describes the chosen tool, and calls it. " +
+			"Do not answer with NO_REPLY or prose before that tool-backed execution starts."
+	}
 	return chatMessage{
 		Role: "system",
 		Content: nameLine + " If you need to call a tool and native tool_calls are unavailable, return exactly one JSON object: " +
@@ -538,7 +544,8 @@ func fallbackToolInstruction(tools json.RawMessage, choice any) chatMessage {
 			"If approval policy is never or sandbox is already danger-full-access, do not ask for confirmation and do not say you are about to run a command; call the tool immediately. " +
 			"If an exec_command already succeeded for the exact same cmd, do not repeat that same cmd again for the same task; otherwise continue calling exec_command as needed to finish the task. " +
 			"After a successful exec_command, either issue the next necessary tool call or finish with a verified result that includes git status and validation output. " +
-			"Do not use write_stdin unless a prior exec_command returned a session_id. Do not claim that you edited files or ran commands unless a tool result confirms it.",
+			"Do not use write_stdin unless a prior exec_command returned a session_id. Do not claim that you edited files or ran commands unless a tool result confirms it." +
+			toolSearchInstruction,
 	}
 }
 
@@ -618,6 +625,8 @@ func looksLikeAgenticExecutionRequest(input string) bool {
 	actionSignals := []string{
 		"execute",
 		"run ",
+		"create",
+		"write",
 		"edit",
 		"modify",
 		"change",
@@ -1455,16 +1464,7 @@ func (s *Server) writeResponsesStreamFromUpstream(w http.ResponseWriter, ctx con
 					},
 				}},
 			}))
-			writeSSE(w, "response.output_item.added", map[string]any{
-				"type":         "response.output_item.added",
-				"output_index": 0,
-				"item":         item,
-			})
-			writeSSE(w, "response.output_item.done", map[string]any{
-				"type":         "response.output_item.done",
-				"output_index": 0,
-				"item":         item,
-			})
+			writeSSEFunctionCall(w, 0, item)
 			writeSSE(w, "response.completed", map[string]any{
 				"type":     "response.completed",
 				"response": envelope,
@@ -1499,16 +1499,7 @@ func (s *Server) writeResponsesStreamFromUpstream(w http.ResponseWriter, ctx con
 					},
 				}},
 			}))
-			writeSSE(w, "response.output_item.added", map[string]any{
-				"type":         "response.output_item.added",
-				"output_index": 0,
-				"item":         item,
-			})
-			writeSSE(w, "response.output_item.done", map[string]any{
-				"type":         "response.output_item.done",
-				"output_index": 0,
-				"item":         item,
-			})
+			writeSSEFunctionCall(w, 0, item)
 			writeSSE(w, "response.completed", map[string]any{
 				"type":     "response.completed",
 				"response": envelope,
@@ -1687,6 +1678,33 @@ func writeSSETextStart(w http.ResponseWriter, messageID string) {
 			"type": "output_text",
 			"text": "",
 		},
+	})
+}
+
+func writeSSEFunctionCall(w http.ResponseWriter, outputIndex int, item responseItem) {
+	writeSSE(w, "response.output_item.added", map[string]any{
+		"type":         "response.output_item.added",
+		"output_index": outputIndex,
+		"item":         item,
+	})
+	if strings.TrimSpace(item.Arguments) != "" {
+		writeSSE(w, "response.function_call_arguments.delta", map[string]any{
+			"type":         "response.function_call_arguments.delta",
+			"item_id":      item.ID,
+			"output_index": outputIndex,
+			"delta":        item.Arguments,
+		})
+		writeSSE(w, "response.function_call_arguments.done", map[string]any{
+			"type":         "response.function_call_arguments.done",
+			"item_id":      item.ID,
+			"output_index": outputIndex,
+			"arguments":    item.Arguments,
+		})
+	}
+	writeSSE(w, "response.output_item.done", map[string]any{
+		"type":         "response.output_item.done",
+		"output_index": outputIndex,
+		"item":         item,
 	})
 }
 

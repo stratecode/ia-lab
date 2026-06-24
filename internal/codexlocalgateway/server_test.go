@@ -850,7 +850,15 @@ func TestResponsesStreamMapsShellFenceToToolSearchCodeWhenExecUnavailable(t *tes
 	}
 	defer res.Body.Close()
 	body, _ := io.ReadAll(res.Body)
-	for _, want := range []string{`"type":"function_call"`, `"name":"tool_search_code"`, `openclaw.tools.call`, `hello.txt`} {
+	for _, want := range []string{
+		`"type":"function_call"`,
+		`"name":"tool_search_code"`,
+		`openclaw.tools.call`,
+		`hello.txt`,
+		`"type":"response.function_call_arguments.delta"`,
+		`"type":"response.function_call_arguments.done"`,
+		`"arguments":"{\"code\":`,
+	} {
 		if !bytes.Contains(body, []byte(want)) {
 			t.Fatalf("expected stream body to contain %q, got: %s", want, body)
 		}
@@ -911,13 +919,73 @@ func TestResponsesStreamMapsNarratedShellFenceToToolSearchCodeWhenExecUnavailabl
 	}
 	defer res.Body.Close()
 	body, _ := io.ReadAll(res.Body)
-	for _, want := range []string{`"type":"function_call"`, `"name":"tool_search_code"`, `cat hello.txt`} {
+	for _, want := range []string{
+		`"type":"function_call"`,
+		`"name":"tool_search_code"`,
+		`cat hello.txt`,
+		`"type":"response.function_call_arguments.delta"`,
+		`"type":"response.function_call_arguments.done"`,
+		`"arguments":"{\"code\":`,
+	} {
 		if !bytes.Contains(body, []byte(want)) {
 			t.Fatalf("expected stream body to contain %q, got: %s", want, body)
 		}
 	}
 	if bytes.Contains(body, []byte(`"type":"message"`)) {
 		t.Fatalf("narrated shell fence must become a tool_search_code call, not text: %s", body)
+	}
+}
+
+func TestResponsesNormalizesNativeToolSearchCodeCmdArguments(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl_tool_search_code",
+			"choices":[{
+				"message":{
+					"role":"assistant",
+					"tool_calls":[{
+						"id":"call_12345",
+						"type":"function",
+						"function":{"name":"tool_search_code","arguments":"{\"cmd\":\"echo after > hello.txt && cat hello.txt\"}"}
+					}]
+				},
+				"finish_reason":"tool_calls"
+			}],
+			"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}
+		}`))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Create hello.txt with exactly after, read it back, and reply with one short validation sentence.",
+		"tools":[{"type":"function","name":"tool_search_code","parameters":{"type":"object"}}],
+		"tool_choice":"required",
+		"parallel_tool_calls":false
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("unexpected status %d: %s", res.StatusCode, body)
+	}
+
+	var out responsesEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Output) != 1 || out.Output[0].Type != "function_call" || out.Output[0].Name != "tool_search_code" {
+		t.Fatalf("expected normalized tool_search_code function call, got %#v", out.Output)
+	}
+	for _, want := range []string{`"code":"`, `openclaw.tools.call`, `hello.txt`} {
+		if !strings.Contains(out.Output[0].Arguments, want) {
+			t.Fatalf("expected normalized arguments to contain %q, got %q", want, out.Output[0].Arguments)
+		}
+	}
+	if strings.Contains(out.Output[0].Arguments, `"cmd":`) {
+		t.Fatalf("expected cmd arguments to be rewritten into code bridge, got %q", out.Output[0].Arguments)
 	}
 }
 
@@ -1167,6 +1235,48 @@ func TestFallbackToolInstructionStopsAfterSuccessfulExecCommand(t *testing.T) {
 		if !strings.Contains(msg.Content, want) {
 			t.Fatalf("fallback instruction missing %q: %s", want, msg.Content)
 		}
+	}
+}
+
+func TestFallbackToolInstructionGuidesToolSearchCodeExecution(t *testing.T) {
+	msg := fallbackToolInstruction(json.RawMessage(`[{"type":"function","name":"tool_search_code","parameters":{"type":"object"}}]`), nil)
+
+	for _, want := range []string{
+		`"code":"..."`,
+		"searches the hidden tool catalog",
+		"Do not answer with NO_REPLY or prose before that tool-backed execution starts",
+	} {
+		if !strings.Contains(msg.Content, want) {
+			t.Fatalf("fallback instruction missing %q: %s", want, msg.Content)
+		}
+	}
+}
+
+func TestResponsesRejectsProseOnlyCreateReplyInStrictExecutionMode(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"NO_REPLY"}}]}`))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Create hello.txt with exactly hello, read it back, and reply with one short validation sentence.",
+		"tools":[{"type":"function","name":"tool_search_code","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("expected execution_not_started conflict, got %d: %s", res.StatusCode, body)
+	}
+	var out errorEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Error.Type != "execution_not_started" {
+		t.Fatalf("expected execution_not_started error, got %#v", out.Error)
 	}
 }
 
