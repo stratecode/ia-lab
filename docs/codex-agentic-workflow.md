@@ -176,7 +176,7 @@ Use `lab-agent tui` plus `lab-agentd` when:
 - you need approvals, selective execution, and initiative reconciliation
 - you want the orchestrator to remain the system of record
 
-Those surfaces are complementary. Replacing one with the other would be a category error with better branding.
+Those surfaces are complementary. In this repo, the orchestrator path is the primary operating model again; Codex through the gateway is the faster side lane, not the traffic law.
 
 ## 7. Failure Modes
 

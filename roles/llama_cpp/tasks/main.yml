@@ -80,7 +80,7 @@
     dest: "{{ llama_cpp_src_dir }}"
     depth: 1
     single_branch: true
-    version: master
+    version: "{{ llama_cpp_git_version }}"
     force: true
     recursive: true
     track_submodules: true

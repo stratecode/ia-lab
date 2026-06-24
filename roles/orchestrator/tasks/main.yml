@@ -21,6 +21,7 @@
           - python3
           - python3-venv
           - python3-pip
+          - redis-server
           - tesseract-ocr
         state: present
 
@@ -135,6 +136,7 @@
       args:
         chdir: "{{ orchestrator_compose_dir }}"
       changed_when: false
+      when: not ansible_check_mode
 
     - name: Wait for PostgreSQL to accept connections
       ansible.builtin.command:
@@ -152,6 +154,14 @@
       retries: 20
       delay: 3
       until: orchestrator_pg_isready.rc == 0
+      when: not ansible_check_mode
+
+    - name: Ensure redis-server is enabled and started
+      ansible.builtin.systemd:
+        name: redis-server
+        state: started
+        enabled: true
+      when: not ansible_check_mode
 
     - name: Apply orchestrator task schema compatibility patch
       ansible.builtin.command:
@@ -171,16 +181,177 @@
           - |
             CREATE EXTENSION IF NOT EXISTS vector;
 
-            ALTER TABLE tasks
+            DO $$
+            BEGIN
+              CREATE TYPE taskstate AS ENUM ('created','queued','assigned','in_progress','waiting_approval','review','retrying','completed','failed','cancelled');
+            EXCEPTION
+              WHEN duplicate_object THEN NULL;
+            END
+            $$;
+
+            DO $$
+            BEGIN
+              CREATE TYPE approvalstatus AS ENUM ('pending','approved','rejected','expired');
+            EXCEPTION
+              WHEN duplicate_object THEN NULL;
+            END
+            $$;
+
+            CREATE TABLE IF NOT EXISTS initiatives (
+              id UUID PRIMARY KEY,
+              title TEXT NOT NULL,
+              workspace_root TEXT NOT NULL,
+              goal TEXT NOT NULL,
+              status TEXT NOT NULL,
+              current_phase TEXT NOT NULL,
+              active_requirements_artifact_id UUID NULL,
+              active_design_artifact_id UUID NULL,
+              active_plan_artifact_id UUID NULL,
+              created_by TEXT NOT NULL,
+              execution_mode TEXT NOT NULL,
+              archived_at TIMESTAMPTZ NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            CREATE INDEX IF NOT EXISTS ix_initiatives_workspace_root ON initiatives (workspace_root);
+            CREATE INDEX IF NOT EXISTS ix_initiatives_status_phase ON initiatives (status, current_phase);
+
+            CREATE TABLE IF NOT EXISTS tasks (
+              id UUID PRIMARY KEY,
+              state taskstate NOT NULL,
+              description TEXT NOT NULL,
+              metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+              assigned_agent TEXT NULL,
+              priority TEXT NOT NULL,
+              execution_target TEXT NOT NULL,
+              workspace_path TEXT NULL,
+              retry_count INTEGER NOT NULL DEFAULT 0,
+              max_retries INTEGER NOT NULL DEFAULT 3,
+              idempotency_key TEXT NULL,
+              correlation_id UUID NOT NULL,
+              results JSONB NULL,
+              error_message TEXT NULL,
+              created_at TIMESTAMPTZ NOT NULL,
+              updated_at TIMESTAMPTZ NOT NULL,
+              started_at TIMESTAMPTZ NULL,
+              completed_at TIMESTAMPTZ NULL,
+              queued_at TIMESTAMPTZ NULL,
+              parent_task_id UUID NULL,
+              root_task_id UUID NOT NULL,
+              task_kind TEXT NOT NULL,
+              initiative_id UUID NULL,
+              planned_agent TEXT NULL,
+              archived_at TIMESTAMPTZ NULL
+            );
+            ALTER TABLE IF EXISTS tasks
               ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ NULL;
-            ALTER TABLE tasks
+            ALTER TABLE IF EXISTS tasks
               ADD COLUMN IF NOT EXISTS initiative_id UUID NULL;
-            ALTER TABLE tasks
-              ADD COLUMN IF NOT EXISTS planned_agent agenttype NULL;
-            ALTER TABLE tool_invocations
-              ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+            ALTER TABLE IF EXISTS tasks
+              ADD COLUMN IF NOT EXISTS planned_agent TEXT NULL;
             CREATE INDEX IF NOT EXISTS ix_tasks_archived_at ON tasks (archived_at);
             CREATE INDEX IF NOT EXISTS ix_tasks_initiative_id ON tasks (initiative_id);
+
+            DO $$
+            BEGIN
+              IF EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'tasks'
+              ) AND EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'initiatives'
+              ) AND NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'fk_tasks_initiative'
+              ) THEN
+                ALTER TABLE tasks
+                  ADD CONSTRAINT fk_tasks_initiative
+                  FOREIGN KEY (initiative_id) REFERENCES initiatives(id) ON DELETE SET NULL;
+              END IF;
+            END
+            $$;
+
+            CREATE TABLE IF NOT EXISTS state_transitions (
+              id UUID PRIMARY KEY,
+              task_id UUID NOT NULL,
+              from_state TEXT NOT NULL,
+              to_state TEXT NOT NULL,
+              actor TEXT NOT NULL,
+              reason TEXT NOT NULL,
+              timestamp TIMESTAMPTZ NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS approvals (
+              id UUID PRIMARY KEY,
+              task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+              action_type TEXT NOT NULL,
+              target_resource TEXT NOT NULL,
+              status approvalstatus NOT NULL,
+              operator TEXT NULL,
+              timeout_seconds INTEGER NOT NULL,
+              escalation_level INTEGER NOT NULL DEFAULT 1,
+              requested_at TIMESTAMPTZ NOT NULL,
+              resolved_at TIMESTAMPTZ NULL,
+              timeout_at TIMESTAMPTZ NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS local_bridges (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              hostname TEXT NOT NULL,
+              workspace_root TEXT NOT NULL,
+              status TEXT NOT NULL,
+              capabilities JSONB NOT NULL DEFAULT '{}'::jsonb,
+              api_key_name TEXT NULL,
+              last_heartbeat TIMESTAMPTZ NULL,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS tool_invocations (
+              id UUID PRIMARY KEY,
+              task_id UUID NULL REFERENCES tasks(id) ON DELETE SET NULL,
+              agent_type TEXT NULL,
+              entrypoint TEXT NOT NULL,
+              capability TEXT NOT NULL,
+              input_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+              output_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+              status TEXT NOT NULL,
+              duration_ms INTEGER NOT NULL DEFAULT 0,
+              source_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+              artifact_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+              error_message TEXT NULL,
+              metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            ALTER TABLE IF EXISTS tool_invocations
+              ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+            CREATE TABLE IF NOT EXISTS artifacts (
+              id UUID PRIMARY KEY,
+              task_id UUID NULL REFERENCES tasks(id) ON DELETE SET NULL,
+              invocation_id UUID NULL REFERENCES tool_invocations(id) ON DELETE SET NULL,
+              artifact_type TEXT NOT NULL,
+              title TEXT NULL,
+              uri TEXT NULL,
+              media_type TEXT NULL,
+              content_text TEXT NULL,
+              metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS api_keys (
+              id UUID PRIMARY KEY,
+              key_hash TEXT NOT NULL,
+              name TEXT NOT NULL UNIQUE,
+              scope TEXT NOT NULL,
+              is_active BOOLEAN NOT NULL DEFAULT true,
+              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              revoked_at TIMESTAMPTZ NULL
+            );
 
             CREATE TABLE IF NOT EXISTS capability_definitions (
               name TEXT PRIMARY KEY,
@@ -213,25 +384,6 @@
               updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             );
 
-            CREATE TABLE IF NOT EXISTS initiatives (
-              id UUID PRIMARY KEY,
-              title TEXT NOT NULL,
-              workspace_root TEXT NOT NULL,
-              goal TEXT NOT NULL,
-              status TEXT NOT NULL,
-              current_phase TEXT NOT NULL,
-              active_requirements_artifact_id UUID NULL,
-              active_design_artifact_id UUID NULL,
-              active_plan_artifact_id UUID NULL,
-              created_by TEXT NOT NULL,
-              execution_mode TEXT NOT NULL,
-              archived_at TIMESTAMPTZ NULL,
-              created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            );
-            CREATE INDEX IF NOT EXISTS ix_initiatives_workspace_root ON initiatives (workspace_root);
-            CREATE INDEX IF NOT EXISTS ix_initiatives_status_phase ON initiatives (status, current_phase);
-
             CREATE TABLE IF NOT EXISTS initiative_phase_reviews (
               id UUID PRIMARY KEY,
               initiative_id UUID NOT NULL REFERENCES initiatives(id) ON DELETE CASCADE,
@@ -261,6 +413,7 @@
 
       register: orchestrator_schema_patch
       changed_when: false
+      when: not ansible_check_mode
 
     - name: Install orchestrator environment file
       ansible.builtin.copy:
@@ -348,6 +501,7 @@
       notify:
         - Restart orchestrator docs sidecar service
         - Restart orchestrator images sidecar service
+      when: not ansible_check_mode
 
     - name: Install capability docs sidecar service unit
       ansible.builtin.copy:
@@ -594,6 +748,7 @@
       retries: 20
       delay: 3
       until: orchestrator_docs_sidecar_health.status == 200
+      when: not ansible_check_mode
 
     - name: Wait for capability images sidecar
       ansible.builtin.uri:
@@ -603,6 +758,7 @@
       retries: 20
       delay: 3
       until: orchestrator_images_sidecar_health.status == 200
+      when: not ansible_check_mode
 
     - name: Wait for orchestrator health endpoint
       ansible.builtin.uri:
@@ -612,9 +768,12 @@
       retries: 20
       delay: 3
       until: orchestrator_health.status == 200
+      when: not ansible_check_mode
 
     - name: Ensure cleanup API key exists in orchestrator database
-      when: orchestrator_cleanup_api_key | length > 0
+      when:
+        - orchestrator_cleanup_api_key | length > 0
+        - not ansible_check_mode
       ansible.builtin.shell: |
         set -euo pipefail
         export RAW_KEY="{{ orchestrator_cleanup_api_key }}"
@@ -653,7 +812,9 @@
       changed_when: false
 
     - name: Ensure benchmark API key exists in orchestrator database
-      when: orchestrator_benchmark_api_key | length > 0
+      when:
+        - orchestrator_benchmark_api_key | length > 0
+        - not ansible_check_mode
       ansible.builtin.shell: |
         set -euo pipefail
         export RAW_KEY="{{ orchestrator_benchmark_api_key }}"
@@ -692,7 +853,9 @@
       changed_when: false
 
     - name: Ensure Open WebUI orchestrator API key exists in orchestrator database
-      when: orchestrator_open_webui_api_key | length > 0
+      when:
+        - orchestrator_open_webui_api_key | length > 0
+        - not ansible_check_mode
       ansible.builtin.shell: |
         set -euo pipefail
         export RAW_KEY="{{ orchestrator_open_webui_api_key }}"
@@ -736,6 +899,7 @@
         state: started
         enabled: true
         daemon_reload: true
+      when: not ansible_check_mode
 
     - name: Ensure orchestrator cleanup timer is enabled and started
       ansible.builtin.systemd:
@@ -743,6 +907,7 @@
         state: started
         enabled: true
         daemon_reload: true
+      when: not ansible_check_mode
 
     - name: Ensure orchestrator service is enabled and started
       ansible.builtin.systemd:
@@ -750,6 +915,7 @@
         state: started
         enabled: true
         daemon_reload: true
+      when: not ansible_check_mode
 
     - name: Ensure orchestrator docs sidecar service is enabled and started
       ansible.builtin.systemd:
@@ -757,6 +923,7 @@
         state: started
         enabled: true
         daemon_reload: true
+      when: not ansible_check_mode
 
     - name: Ensure orchestrator images sidecar service is enabled and started
       ansible.builtin.systemd:
@@ -764,3 +931,4 @@
         state: started
         enabled: true
         daemon_reload: true
+      when: not ansible_check_mode

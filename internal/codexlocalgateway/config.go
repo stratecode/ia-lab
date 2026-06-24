@@ -11,14 +11,14 @@ const (
 	defaultAddr                    = "127.0.0.1:8180"
 	defaultUpstreamBase            = "http://127.0.0.1:8080/v1"
 	defaultModel                   = "qwen-local-code"
-	defaultUpstreamModel           = "codex-local"
+	defaultUpstreamModel           = "coder"
 	defaultTimeoutSeconds          = 180
 	defaultMaxBodyBytes            = 2 * 1024 * 1024
 	defaultRateLimitRPM            = 30
 	defaultRateLimitBurst          = 3
 	defaultMaxOutputTokens         = 1024
-	defaultContextWindow           = 12000
-	defaultAutoCompact             = 8000
+	defaultContextWindow           = 24000
+	defaultAutoCompact             = 16000
 	defaultMaxPromptChars          = 30000
 	defaultResponseStoreTTLMinutes = 30
 	defaultResponseStoreMaxEntries = 256

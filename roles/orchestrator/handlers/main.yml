@@ -1,29 +1,34 @@
 - name: Reload systemd for orchestrator
   ansible.builtin.systemd:
     daemon_reload: true
+  when: not ansible_check_mode
 
 - name: Restart orchestrator postgres stack
   ansible.builtin.command: docker compose up -d
   args:
     chdir: "{{ orchestrator_compose_dir }}"
+  when: not ansible_check_mode
 
 - name: Restart orchestrator service
   ansible.builtin.systemd:
     name: orchestrator.service
     state: restarted
     daemon_reload: true
+  when: not ansible_check_mode
 
 - name: Restart orchestrator docs sidecar service
   ansible.builtin.systemd:
     name: orchestrator-cap-docs.service
     state: restarted
     daemon_reload: true
+  when: not ansible_check_mode
 
 - name: Restart orchestrator images sidecar service
   ansible.builtin.systemd:
     name: orchestrator-cap-images.service
     state: restarted
     daemon_reload: true
+  when: not ansible_check_mode
 
 - name: Restart orchestrator backup timer
   ansible.builtin.systemd:
@@ -31,6 +36,7 @@
     state: restarted
     enabled: true
     daemon_reload: true
+  when: not ansible_check_mode
 
 - name: Restart orchestrator cleanup timer
   ansible.builtin.systemd:
@@ -38,8 +44,10 @@
     state: restarted
     enabled: true
     daemon_reload: true
+  when: not ansible_check_mode
 
 - name: Restart prometheus
   ansible.builtin.systemd:
     name: snap.prometheus.prometheus.service
     state: restarted
+  when: not ansible_check_mode

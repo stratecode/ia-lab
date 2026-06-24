@@ -1,5 +1,5 @@
 ---
-- name: Deploy orchestrator platform slice
+- name: Deploy OpenClaw slice
   hosts: all
   become: true
 
@@ -8,6 +8,4 @@
 
   roles:
     - llama_cpp
-    - aider
-    - orchestrator
     - openclaw

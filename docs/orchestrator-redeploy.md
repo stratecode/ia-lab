@@ -38,15 +38,14 @@ ansible-playbook playbooks/bootstrap.yml
 For the Phase 4 slice only:
 
 ```bash
-ansible-playbook /tmp/deploy-orchestrator-phase4.yml
+ansible-playbook playbooks/deploy-orchestrator.yml
 ```
 
-That subset playbook should import:
+That subset playbook now imports the minimum runtime dependencies required for real orchestrator operation:
 
+- `llama_cpp`
+- `aider`
 - `orchestrator`
-- `open_webui`
-- `monitor`
-- `observability`
 
 ## Llama.cpp rebuild warning
 

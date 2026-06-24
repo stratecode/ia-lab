@@ -1,0 +1,379 @@
+---
+- name: Configure OpenClaw runtime
+  when: openclaw_enabled
+  block:
+    - name: Install OpenClaw runtime packages
+      ansible.builtin.apt:
+        name:
+          - nginx
+          - openssl
+        state: present
+
+    - name: Ensure OpenClaw agent group exists
+      ansible.builtin.group:
+        name: "{{ openclaw_agent_group }}"
+        state: present
+
+    - name: Ensure OpenClaw agent user exists
+      ansible.builtin.user:
+        name: "{{ openclaw_agent_user }}"
+        group: "{{ openclaw_agent_group }}"
+        home: "{{ openclaw_agent_root_dir }}"
+        shell: /usr/sbin/nologin
+        create_home: false
+        state: present
+
+    - name: Ensure OpenClaw operator user exists
+      ansible.builtin.user:
+        name: "{{ openclaw_user }}"
+        shell: /bin/bash
+        state: present
+
+    - name: Ensure OpenClaw directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: "{{ openclaw_root_dir }}", owner: "{{ openclaw_agent_user }}", group: "{{ openclaw_agent_group }}", mode: "0755" }
+        - { path: "{{ openclaw_agent_root_dir }}", owner: "{{ openclaw_agent_user }}", group: "{{ openclaw_agent_group }}", mode: "0755" }
+        - { path: "{{ openclaw_agent_log_dir }}", owner: "{{ openclaw_agent_user }}", group: "{{ openclaw_agent_group }}", mode: "0755" }
+        - { path: "{{ openclaw_agent_scripts_dir }}", owner: "{{ openclaw_agent_user }}", group: "{{ openclaw_agent_group }}", mode: "0755" }
+        - { path: "{{ openclaw_agent_workspaces_dir }}", owner: "{{ openclaw_agent_user }}", group: "{{ openclaw_agent_group }}", mode: "0755" }
+        - { path: "{{ openclaw_config_dir }}", owner: "{{ openclaw_user }}", group: "{{ openclaw_group }}", mode: "0700" }
+        - { path: "{{ openclaw_systemd_user_dir }}", owner: "{{ openclaw_user }}", group: "{{ openclaw_group }}", mode: "0755" }
+
+    - name: Enable linger for OpenClaw user
+      ansible.builtin.command:
+        argv:
+          - loginctl
+          - enable-linger
+          - "{{ openclaw_user }}"
+      changed_when: false
+
+    - name: Verify OpenClaw Node runtime exists
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ openclaw_node_bin }}"
+        - "{{ openclaw_npm_bin }}"
+      register: openclaw_node_stats
+
+    - name: Assert OpenClaw Node runtime is installed
+      ansible.builtin.assert:
+        that:
+          - openclaw_node_stats.results | map(attribute='stat.exists') | min
+        fail_msg: >-
+          OpenClaw expects Node/NPM in {{ openclaw_node_bin_dir }}. Install the
+          pinned runtime there before running this role.
+
+    - name: Read existing OpenClaw configuration when present
+      ansible.builtin.slurp:
+        src: "{{ openclaw_config_dir }}/openclaw.json"
+      register: openclaw_existing_config_raw
+      failed_when: false
+
+    - name: Derive effective OpenClaw gateway token
+      ansible.builtin.set_fact:
+        openclaw_effective_gateway_token: >-
+          {{
+            (
+              openclaw_gateway_token
+              if (openclaw_gateway_token | default('', true) | trim | length) > 0
+              else (
+                (
+                  (openclaw_existing_config_raw.content | b64decode | from_json).gateway.auth.token
+                )
+                if (
+                  (openclaw_existing_config_raw is defined)
+                  and not (openclaw_existing_config_raw.failed | default(false))
+                  and (openclaw_existing_config_raw.content | default('') | length) > 0
+                )
+                else ''
+              )
+            )
+          }}
+
+    - name: Install pinned OpenClaw package for operator user
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u {{ openclaw_user }} env PATH={{ openclaw_node_bin_dir }}:/usr/local/bin:/usr/bin:/bin \
+          {{ openclaw_npm_bin }} install -g openclaw@{{ openclaw_version }}
+      args:
+        executable: /bin/bash
+      register: openclaw_npm_install
+      changed_when: "'up to date' not in (openclaw_npm_install.stdout | lower)"
+      when: not ansible_check_mode
+
+    - name: Install OpenClaw configuration
+      ansible.builtin.template:
+        src: openclaw.json.j2
+        dest: "{{ openclaw_config_dir }}/openclaw.json"
+        owner: "{{ openclaw_user }}"
+        group: "{{ openclaw_group }}"
+        mode: "0600"
+      notify: Restart openclaw gateway
+
+    - name: Install OpenClaw user systemd unit
+      ansible.builtin.template:
+        src: openclaw-gateway.service.j2
+        dest: "{{ openclaw_systemd_user_dir }}/{{ openclaw_gateway_service_name }}"
+        owner: "{{ openclaw_user }}"
+        group: "{{ openclaw_group }}"
+        mode: "0644"
+      notify:
+        - Reload openclaw user systemd
+        - Restart openclaw gateway
+
+    - name: Generate self-signed certificate for OpenClaw local subdomain
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -nodes
+          - -newkey
+          - rsa:4096
+          - -days
+          - "365"
+          - -keyout
+          - "{{ openclaw_local_ssl_certificate_key }}"
+          - -out
+          - "{{ openclaw_local_ssl_certificate }}"
+          - -subj
+          - "/CN={{ openclaw_local_domain }}"
+          - -addext
+          - "subjectAltName=DNS:{{ openclaw_local_domain }}"
+      args:
+        creates: "{{ openclaw_local_ssl_certificate }}"
+
+    - name: Generate self-signed certificate for OpenClaw local root domain
+      ansible.builtin.command:
+        argv:
+          - openssl
+          - req
+          - -x509
+          - -nodes
+          - -newkey
+          - rsa:4096
+          - -days
+          - "365"
+          - -keyout
+          - "{{ openclaw_local_root_ssl_certificate_key }}"
+          - -out
+          - "{{ openclaw_local_root_ssl_certificate }}"
+          - -subj
+          - "/CN={{ openclaw_local_root_domain }}"
+      args:
+        creates: "{{ openclaw_local_root_ssl_certificate }}"
+
+    - name: Install OpenClaw public nginx site
+      ansible.builtin.copy:
+        dest: /etc/nginx/sites-available/openclaw-public.conf
+        mode: "0644"
+        content: |
+          server {
+              listen 80;
+              listen [::]:80;
+              server_name {{ openclaw_public_domain }};
+
+              location /.well-known/acme-challenge/ {
+                  root /var/www/html;
+              }
+
+              location / {
+                  return 301 https://$host$request_uri;
+              }
+          }
+
+          server {
+              listen 443 ssl;
+              listen [::]:443 ssl;
+              http2 on;
+              server_name {{ openclaw_public_domain }};
+
+              ssl_certificate {{ openclaw_public_ssl_certificate }};
+              ssl_certificate_key {{ openclaw_public_ssl_certificate_key }};
+
+              allow 127.0.0.1;
+              allow ::1;
+              allow {{ server_lan_cidr }};
+              allow {{ docker_internal_cidr }};
+          {% if wireguard_enabled %}
+              allow {{ wireguard_subnet }};
+          {% endif %}
+              deny all;
+
+              location / {
+                  proxy_pass http://127.0.0.1:{{ openclaw_gateway_port }}/;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Forwarded-Host $host;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_http_version 1.1;
+                  proxy_buffering off;
+                  proxy_read_timeout 300s;
+                  proxy_send_timeout 300s;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection "upgrade";
+                  gzip off;
+                  add_header X-Accel-Buffering no always;
+              }
+          }
+      notify: Reload nginx for openclaw
+
+    - name: Install OpenClaw local subdomain nginx site
+      ansible.builtin.copy:
+        dest: /etc/nginx/sites-available/openclaw-subdomain.conf
+        mode: "0644"
+        content: |
+          server {
+              listen 80;
+              listen [::]:80;
+              server_name {{ openclaw_local_domain }};
+
+              location / {
+                  return 301 https://$host$request_uri;
+              }
+          }
+
+          server {
+              listen 443 ssl;
+              listen [::]:443 ssl;
+              http2 on;
+              server_name {{ openclaw_local_domain }};
+
+              ssl_certificate {{ openclaw_local_ssl_certificate }};
+              ssl_certificate_key {{ openclaw_local_ssl_certificate_key }};
+
+              allow 127.0.0.1;
+              allow ::1;
+              allow {{ server_lan_cidr }};
+              allow {{ docker_internal_cidr }};
+          {% if wireguard_enabled %}
+              allow {{ wireguard_subnet }};
+          {% endif %}
+              deny all;
+
+              location / {
+                  proxy_pass http://127.0.0.1:{{ openclaw_gateway_port }}/;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Forwarded-Host $host;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_http_version 1.1;
+                  proxy_buffering off;
+                  proxy_read_timeout 300s;
+                  proxy_send_timeout 300s;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection "upgrade";
+                  gzip off;
+                  add_header X-Accel-Buffering no always;
+              }
+          }
+      notify: Reload nginx for openclaw
+
+    - name: Install OpenClaw local root nginx site
+      ansible.builtin.copy:
+        dest: /etc/nginx/sites-available/openclaw-local.conf
+        mode: "0644"
+        content: |
+          server {
+              listen 80;
+              listen [::]:80;
+              server_name {{ openclaw_local_root_domain }};
+
+              location / {
+                  return 301 https://$host$request_uri;
+              }
+          }
+
+          server {
+              listen 443 ssl;
+              listen [::]:443 ssl;
+              http2 on;
+              server_name {{ openclaw_local_root_domain }};
+
+              ssl_certificate {{ openclaw_local_root_ssl_certificate }};
+              ssl_certificate_key {{ openclaw_local_root_ssl_certificate_key }};
+
+              allow 127.0.0.1;
+              allow ::1;
+              allow {{ server_lan_cidr }};
+              allow {{ docker_internal_cidr }};
+          {% if wireguard_enabled %}
+              allow {{ wireguard_subnet }};
+          {% endif %}
+              deny all;
+
+              location / {
+                  proxy_pass http://127.0.0.1:{{ openclaw_gateway_port }}/;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Forwarded-Host $host;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_http_version 1.1;
+                  proxy_buffering off;
+                  proxy_read_timeout 300s;
+                  proxy_send_timeout 300s;
+                  proxy_set_header Upgrade $http_upgrade;
+                  proxy_set_header Connection "upgrade";
+                  gzip off;
+                  add_header X-Accel-Buffering no always;
+              }
+          }
+      notify: Reload nginx for openclaw
+
+    - name: Enable OpenClaw nginx sites
+      ansible.builtin.file:
+        src: "/etc/nginx/sites-available/{{ item }}"
+        dest: "/etc/nginx/sites-enabled/{{ item }}"
+        state: link
+      loop:
+        - openclaw-public.conf
+        - openclaw-subdomain.conf
+        - openclaw-local.conf
+      notify: Reload nginx for openclaw
+
+    - name: Flush OpenClaw handlers before verification
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start OpenClaw gateway service
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - --user
+          - --machine={{ openclaw_user }}@
+          - enable
+          - --now
+          - "{{ openclaw_gateway_service_name }}"
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Wait for OpenClaw gateway port
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ openclaw_gateway_port }}"
+        timeout: 60
+      when: not ansible_check_mode
+
+    - name: Verify OpenClaw model status against llama.cpp
+      ansible.builtin.shell: |
+        set -euo pipefail
+        sudo -u {{ openclaw_user }} sh -lc '
+          export PATH={{ openclaw_node_bin_dir }}:$PATH
+          openclaw models status --json
+        '
+      args:
+        executable: /bin/bash
+      register: openclaw_models_status
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Assert OpenClaw default model resolves to local llama.cpp provider
+      ansible.builtin.assert:
+        that:
+          - "(openclaw_models_status.stdout | from_json).resolvedDefault == openclaw_model_provider_key ~ '/' ~ openclaw_model_id"
+      when: not ansible_check_mode

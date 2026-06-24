@@ -31,7 +31,7 @@ func testConfig(upstreamBaseURL string) Config {
 		UpstreamBaseURL: upstreamBaseURL,
 		UpstreamAPIKey:  "upstream-key",
 		Model:           "qwen-local-code",
-		UpstreamModel:   "codex-local",
+		UpstreamModel:   "coder",
 		RequestTimeout:  2 * time.Second,
 		MaxBodyBytes:    1 << 20,
 		RateLimitRPM:    60,
@@ -73,7 +73,7 @@ func TestResponsesMapsStringInputAndInstructionsToChatCompletion(t *testing.T) {
 			t.Fatal(err)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"chatcmpl_1","object":"chat.completion","created":1,"model":"codex-local","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}`))
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_1","object":"chat.completion","created":1,"model":"coder","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}`))
 	}))
 
 	payload := `{"model":"qwen-local-code","instructions":"Be brief.","input":"Write a Go test.","max_output_tokens":32,"temperature":0.2,"top_p":0.8}`
@@ -87,7 +87,7 @@ func TestResponsesMapsStringInputAndInstructionsToChatCompletion(t *testing.T) {
 		t.Fatalf("unexpected status %d: %s", res.StatusCode, body)
 	}
 
-	if upstreamBody["model"] != "codex-local" {
+	if upstreamBody["model"] != "coder" {
 		t.Fatalf("expected upstream model remap, got %#v", upstreamBody["model"])
 	}
 	if upstreamBody["max_tokens"] != float64(32) {
@@ -286,6 +286,16 @@ func TestEffectiveToolChoiceLeavesNonExecRequestsOnAuto(t *testing.T) {
 	}
 }
 
+func TestEffectiveToolChoiceRequiresAnyToolForAgenticExecutionRequests(t *testing.T) {
+	req := responsesRequest{
+		Input: json.RawMessage(`"Update Laravel to the latest version, validate the app, and modify the code if needed."`),
+		Tools: json.RawMessage(`[{"type":"function","name":"read_file","parameters":{"type":"object"}}]`),
+	}
+	if got := effectiveToolChoice(req); got != "required" {
+		t.Fatalf("expected required tool choice for agentic execution request, got %#v", got)
+	}
+}
+
 func TestEffectiveToolChoiceClearsRequiredChoiceAfterFunctionCallOutput(t *testing.T) {
 	req := responsesRequest{
 		Input: json.RawMessage(`[{"type":"function_call_output","call_id":"call_exec_1","output":{"exit_code":0,"status":"completed"}}]`),
@@ -358,6 +368,57 @@ func TestResponsesStreamAllowsTextAfterToolOutputEvenIfToolChoiceWasRequired(t *
 	}
 	if _, ok := upstreamBodies[1]["tool_choice"]; ok {
 		t.Fatalf("expected cleared tool_choice on post-tool turn, got %#v", upstreamBodies[1]["tool_choice"])
+	}
+}
+
+func TestResponsesRejectsProseOnlyReplyInStrictExecutionMode(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"I would first inspect the repository and then decide what to change."}}]}`))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Update the project dependencies and validate the result.",
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("expected execution_not_started conflict, got %d: %s", res.StatusCode, body)
+	}
+	var out errorEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Error.Type != "execution_not_started" {
+		t.Fatalf("expected execution_not_started error, got %#v", out.Error)
+	}
+}
+
+func TestResponsesStreamRejectsProseOnlyReplyInStrictExecutionMode(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"I would inspect the repo and outline the changes.\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Fix the app and validate it.",
+		"stream":true,
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	if !bytes.Contains(body, []byte(`"error_type":"execution_not_started"`)) {
+		t.Fatalf("expected execution_not_started stream failure, got: %s", body)
 	}
 }
 
@@ -548,6 +609,33 @@ func TestResponsesFallbackJSONToolCall(t *testing.T) {
 	}
 	if out.Output[0].Arguments != `{"patch":"*** Begin Patch\n*** End Patch"}` {
 		t.Fatalf("unexpected fallback arguments: %q", out.Output[0].Arguments)
+	}
+}
+
+func TestResponsesParsesEmbeddedMarkdownFunctionCall(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"I will check the latest Laravel release first.\\n\\n**Action:** exec_command\\n\\n```json\\n{\\\"type\\\":\\\"function_call\\\",\\\"call_id\\\":\\\"call_exec_1\\\",\\\"name\\\":\\\"exec_command\\\",\\\"arguments\\\":{\\\"cmd\\\":\\\"curl -s https://api.laravel.com/docs/v1/releases/stable\\\"}}\\n```\"}}]}"))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Check latest Laravel release",
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out responsesEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Output) != 1 || out.Output[0].Type != "function_call" || out.Output[0].Name != "exec_command" {
+		t.Fatalf("expected parsed embedded exec_command function_call, got %#v", out.Output)
+	}
+	if !strings.Contains(out.Output[0].Arguments, "api.laravel.com/docs/v1/releases/stable") {
+		t.Fatalf("unexpected embedded function_call arguments: %q", out.Output[0].Arguments)
 	}
 }
 
@@ -855,6 +943,41 @@ func TestResponsesParsesPrefixedExecCommandFallback(t *testing.T) {
 	}
 }
 
+func TestResponsesUnwrapsNestedPrefixedExecCommandInNativeToolCall(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"call_exec_1","type":"function","function":{"name":"exec_command","arguments":"{\"cmd\":\"exec_command {\\\"cmd\\\":\\\"docker --version\\\"}\"}"}}]}}]}`))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"input":"Start docker",
+		"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object"}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("unexpected status %d: %s", res.StatusCode, body)
+	}
+
+	var out responsesEnvelope
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Output) != 1 || out.Output[0].Type != "function_call" || out.Output[0].Name != "exec_command" {
+		t.Fatalf("expected normalized exec_command function_call, got %#v", out.Output)
+	}
+	if !strings.Contains(out.Output[0].Arguments, `docker --version`) {
+		t.Fatalf("expected nested prefixed command to unwrap, got %q", out.Output[0].Arguments)
+	}
+	if strings.Contains(out.Output[0].Arguments, `exec_command {`) {
+		t.Fatalf("expected wrapper exec_command prefix to be removed, got %q", out.Output[0].Arguments)
+	}
+}
+
 func TestResponsesParsesPrefixedCustomToolFallback(t *testing.T) {
 	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1005,15 +1128,15 @@ func TestResponsesRequiredToolChoiceRejectsInvalidFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	if res.StatusCode != http.StatusBadGateway {
+	if res.StatusCode != http.StatusConflict {
 		body, _ := io.ReadAll(res.Body)
-		t.Fatalf("expected bad gateway, got %d: %s", res.StatusCode, body)
+		t.Fatalf("expected execution_not_started conflict, got %d: %s", res.StatusCode, body)
 	}
 	var out errorEnvelope
 	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
 		t.Fatal(err)
 	}
-	if out.Error.Type != "tool_call_parse_error" {
+	if out.Error.Type != "execution_not_started" {
 		t.Fatalf("unexpected error: %#v", out)
 	}
 }
@@ -1278,12 +1401,148 @@ func TestChatCompletionsPassthroughRemapsModel(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected status %d", res.StatusCode)
 	}
-	if upstreamBody["model"] != "codex-local" {
+	if upstreamBody["model"] != "coder" {
 		t.Fatalf("expected model remap, got %#v", upstreamBody["model"])
 	}
 	body, _ := io.ReadAll(res.Body)
 	if !bytes.Contains(body, []byte(`"chat"`)) {
 		t.Fatalf("unexpected passthrough body: %s", body)
+	}
+}
+
+func TestChatCompletionsNormalizesEmbeddedMarkdownFunctionCall(t *testing.T) {
+	var upstreamBody map[string]any
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&upstreamBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{\"id\":\"chatcmpl_1\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"To determine the latest stable Laravel version available today, I will first search for the latest version on the official Laravel website.\\n\\n**Action:** exec_command\\n\\n```json\\n{\\\"type\\\":\\\"function_call\\\",\\\"call_id\\\":\\\"call_12345\\\",\\\"name\\\":\\\"exec_command\\\",\\\"arguments\\\":{\\\"cmd\\\":\\\"curl -s https://api.laravel.com/docs/v1/releases/stable\\\"}}\\n```\"}}]}"))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/chat/completions", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"messages":[{"role":"user","content":"Check latest Laravel release"}],
+		"tools":[{"type":"function","function":{"name":"exec_command","parameters":{"type":"object"}}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("unexpected status %d: %s", res.StatusCode, body)
+	}
+	if upstreamBody["model"] != "coder" {
+		t.Fatalf("expected model remap, got %#v", upstreamBody["model"])
+	}
+	var out chatCompletionResponse
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Choices) != 1 || len(out.Choices[0].Message.ToolCalls) != 1 {
+		t.Fatalf("expected normalized native tool_calls, got %#v", out.Choices)
+	}
+	call := out.Choices[0].Message.ToolCalls[0]
+	if call.Function.Name != "exec_command" || !strings.Contains(call.Function.Arguments, "api.laravel.com/docs/v1/releases/stable") {
+		t.Fatalf("unexpected normalized tool call: %#v", call)
+	}
+	if out.Choices[0].FinishReason != "tool_calls" {
+		t.Fatalf("expected tool_calls finish reason, got %#v", out.Choices[0].FinishReason)
+	}
+}
+
+func TestChatCompletionsNormalizesColonPrefixedExecCommand(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_1","choices":[{"message":{"role":"assistant","content":"Let me determine the latest stable Laravel version available today.\n\nexec_command: {\"cmd\":\"curl -s https://api.github.com/repos/laravel/framework/releases/latest | grep tag_name | cut -d '\\\"' -f 4\"}"}}]}`))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/chat/completions", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"messages":[{"role":"user","content":"Check latest Laravel release"}],
+		"tools":[{"type":"function","function":{"name":"exec_command","parameters":{"type":"object"}}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("unexpected status %d: %s", res.StatusCode, body)
+	}
+	var out chatCompletionResponse
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Choices) != 1 || len(out.Choices[0].Message.ToolCalls) != 1 {
+		t.Fatalf("expected normalized tool_calls, got %#v", out.Choices)
+	}
+	call := out.Choices[0].Message.ToolCalls[0]
+	if call.Function.Name != "exec_command" || !strings.Contains(call.Function.Arguments, "api.github.com/repos/laravel/framework/releases/latest") {
+		t.Fatalf("unexpected colon-prefixed normalized tool call: %#v", call)
+	}
+}
+
+func TestChatCompletionsSynthesizesExecCommandFromBrowserProseURL(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_1","choices":[{"message":{"role":"assistant","content":"To determine the latest stable Laravel version available today, I will first check the official Laravel website.\n\n**Action:** Open a web browser and navigate to https://laravel.com/docs and find the upgrading section."}}]}`))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/chat/completions", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"messages":[{"role":"user","content":"Determine the latest stable Laravel version and migrate the project."}],
+		"tools":[{"type":"function","function":{"name":"exec_command","parameters":{"type":"object"}}}]
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out chatCompletionResponse
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Choices) != 1 || len(out.Choices[0].Message.ToolCalls) != 1 {
+		t.Fatalf("expected synthesized tool_calls, got %#v", out.Choices)
+	}
+	call := out.Choices[0].Message.ToolCalls[0]
+	if call.Function.Name != "exec_command" || !strings.Contains(call.Function.Arguments, "curl -fsSL https://laravel.com/docs") {
+		t.Fatalf("unexpected synthesized browser-prose tool call: %#v", call)
+	}
+}
+
+func TestChatCompletionsRepairsStrictExecutionNarrationToToolCall(t *testing.T) {
+	var upstreamCalls int
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		w.Header().Set("Content-Type", "application/json")
+		if upstreamCalls == 1 {
+			_, _ = w.Write([]byte(`{"id":"chatcmpl_1","choices":[{"message":{"role":"assistant","content":"I will inspect the Laravel release source first."}}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"chatcmpl_2","choices":[{"message":{"role":"assistant","content":"exec_command: {\"cmd\":\"curl -fsSL https://api.github.com/repos/laravel/framework/releases/latest\"}"}}]}`))
+	}))
+
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/chat/completions", strings.NewReader(`{
+		"model":"qwen-local-code",
+		"messages":[{"role":"user","content":"Determine the latest stable Laravel version and migrate the project."}],
+		"tools":[{"type":"function","function":{"name":"exec_command","parameters":{"type":"object"}}}],
+		"tool_choice":"required"
+	}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var out chatCompletionResponse
+	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	if upstreamCalls != 2 {
+		t.Fatalf("expected repair second upstream call, got %d", upstreamCalls)
+	}
+	if len(out.Choices) != 1 || len(out.Choices[0].Message.ToolCalls) != 1 {
+		t.Fatalf("expected repaired tool_calls, got %#v", out.Choices)
 	}
 }
 
@@ -1370,7 +1629,7 @@ func TestRateLimit(t *testing.T) {
 		APIKey:          "test-key",
 		UpstreamBaseURL: upstreamServer.URL + "/v1",
 		Model:           "qwen-local-code",
-		UpstreamModel:   "codex-local",
+		UpstreamModel:   "coder",
 		RequestTimeout:  time.Second,
 		MaxBodyBytes:    1 << 20,
 		RateLimitRPM:    1,

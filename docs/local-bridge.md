@@ -4,6 +4,8 @@ This document explains how to install, run, and troubleshoot the local execution
 
 This document is operational. It describes how the bridge works and how to run it. For product direction, validated scope, and roadmap, use the [Master Plan](architecture/master-plan.md).
 
+This bridge is part of the primary operating model again. Codex through the lab gateway is still useful, but it is not the system of record for governed initiative execution.
+
 The bridge is intentionally narrow:
 
 - it owns one workspace root

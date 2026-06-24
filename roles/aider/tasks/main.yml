@@ -120,7 +120,9 @@
     enabled: true
     state: started
     daemon_reload: true
-  when: aider_enabled
+  when:
+    - aider_enabled
+    - not ansible_check_mode
 
 # ─── Logrotate ───────────────────────────────────────────────────────────────
 # Validates: Requirements 12.5
@@ -288,7 +290,9 @@
     creates: /root/.local/bin/uv
   environment:
     UV_INSTALL_DIR: /usr/local/bin
-  when: aider_enabled
+  when:
+    - aider_enabled
+    - not ansible_check_mode
 
 - name: Ensure pipx path is available for aider user
   ansible.builtin.command:
@@ -298,7 +302,9 @@
       - install
       - "3.12"
   changed_when: false
-  when: aider_enabled
+  when:
+    - aider_enabled
+    - not ansible_check_mode
 
 - name: Install Aider via uv tool for aider user
   ansible.builtin.command:
@@ -320,7 +326,9 @@
   failed_when:
     - aider_uv_install.rc != 0
     - "'already installed' not in aider_uv_install.stderr"
-  when: aider_enabled
+  when:
+    - aider_enabled
+    - not ansible_check_mode
 
 - name: Set ownership of aider local directory
   ansible.builtin.file:
@@ -378,7 +386,9 @@
   register: aider_version_check
   changed_when: false
   failed_when: aider_version_check.rc != 0
-  when: aider_enabled
+  when:
+    - aider_enabled
+    - not ansible_check_mode
 
 - name: Display Aider version
   ansible.builtin.debug:
@@ -491,6 +501,7 @@
   when:
     - aider_enabled
     - aider_iptables_rules.changed
+    - not ansible_check_mode
   register: aider_iptables_apply
   failed_when: aider_iptables_apply.rc != 0
 
@@ -505,7 +516,9 @@
   register: aider_iptables_verify
   changed_when: false
   failed_when: "'owner UID match' not in aider_iptables_verify.stdout"
-  when: aider_enabled
+  when:
+    - aider_enabled
+    - not ansible_check_mode
 
 - name: Verify network isolation — test external connection as aider user
   ansible.builtin.command:
@@ -518,7 +531,9 @@
   register: aider_net_isolation_test
   changed_when: false
   failed_when: aider_net_isolation_test.rc != 0
-  when: aider_enabled
+  when:
+    - aider_enabled
+    - not ansible_check_mode
 
 - name: Fail if network isolation cannot be verified
   ansible.builtin.fail:

@@ -1,12 +1,12 @@
 # System Usage Guide
 
-This guide explains how to use the platform as it actually exists today: through Telegram, Open WebUI, the orchestrator HTTP API, and the capability layer exposed behind them.
+This guide explains how to use the platform through its primary operating model: the orchestrator HTTP API, `lab-agent`, `lab-agentd`, Telegram, and the capability layer exposed behind them. Codex through the lab gateway remains supported as a complementary slice.
 
 This document describes operational usage. For the canonical product definition, MVP boundaries, and roadmap, use the [Master Plan](architecture/master-plan.md).
 
 ## Entry points
 
-There are four practical ways to use the system:
+There are six practical ways to use the system:
 
 1. `Telegram`
    Best for quick checks, approvals, and direct chat with the local `coder` and `planner` models.
@@ -19,9 +19,9 @@ There are four practical ways to use the system:
 5. `Local Bridge + TUI`
    Best when you want to manage initiatives and execute approved work inside a real workspace on the control machine.
 6. `Codex against the lab gateway`
-   Best when you want direct repository work in Codex while still using the lab-hosted local coding model.
+   Best when you want direct repository work in Codex while still using the lab-hosted local coding model, without replacing the orchestrator as system of record.
 
-There is also a fourth entry point if you enjoy pain: editing production `site-packages`. Do not use that one.
+There is also an unofficial entry point if you enjoy pain: editing production `site-packages`. Do not use that one.
 
 ## Access map
 
@@ -48,11 +48,11 @@ Use this sequence if you want signal without ceremony:
 6. Use the capability endpoints or commands when you need context from the web, documents, or images.
 7. Use the local bridge and TUI when the work must touch a real workspace on your machine instead of the remote runtime workspace.
 8. Use initiatives when the work is larger than one task and needs requirements, design, plan, approvals, and selective execution.
-9. Use Codex against the lab gateway when you want direct repo editing with repository-local instructions and terminal-native iteration.
+9. Use Codex against the lab gateway when you want direct repo editing with repository-local instructions and terminal-native iteration, but not when you need the orchestrator to own the lifecycle.
 
 ## Three Working Modes
 
-If the goal is to extract maximum value from the local server without turning your workstation into a shrine to YAML, use these three modes:
+If the goal is to extract maximum value from the local server without turning your workstation into a shrine to YAML, use these three modes.
 
 ### 1. Interactive local coding with Codex against the server gateway
 
@@ -181,20 +181,22 @@ Expected result:
 
 ## Governed Local Bridge Mode
 
-The `lab-agent` / `lab-agentd` bridge is still the right tool when you need:
+The `lab-agent` / `lab-agentd` bridge is the primary governed tool when you need:
 
 - initiative governance
 - selective approvals
 - orchestrator-owned local execution
 - the TUI cockpit
 
-But treat it as a separate deployment slice, not as part of the default Codex path.
+This is the default operating model restored by `playbooks/bootstrap.yml`.
 
-Important current reality:
+Observed host reality before this reconciliation on June 24, 2026:
 
-- `playbooks/bootstrap.yml` currently disables the orchestrator runtime by default (`orchestrator_enabled: false`)
-- if you want bridge mode, first redeploy the orchestrator runtime using the runbook in [Orchestrator Redeploy](./orchestrator-redeploy.md)
-- after that, follow [Local Bridge and CLI](./local-bridge.md)
+- the live host was still running the Codex slice
+- `orchestrator`, `aider`, and `open-webui` were absent
+- the purpose of this repo cleanup is to make bootstrap, docs, and runtime truth converge again
+
+After bootstrap restores the stack, follow [Local Bridge and CLI](./local-bridge.md).
 
 ## Telegram
 
@@ -231,6 +233,7 @@ The bot is access-restricted to the Telegram user IDs configured in `LAB_TELEGRA
 | `/initiatives` | List recent initiatives |
 | `/initiative <initiative_id>` | Show initiative summary |
 | `/idea <workspace_alias> <texto>` | Create initiative from an idea |
+| `/autonomous <workspace_alias> <objetivo>` | Run full initiative flow and auto-launch allowed tasks |
 | `/approve_phase <initiative_id> <requirements\|design\|plan>` | Approve one initiative phase |
 | `/reject_phase <initiative_id> <requirements\|design\|plan>` | Reject one initiative phase |
 | `/launch_tasks <initiative_id>` | Launch initiative tasks that are not manual |
@@ -253,6 +256,7 @@ The bot is access-restricted to the Telegram user IDs configured in `LAB_TELEGRA
 /approvals
 /run prepara un plan e implementa una mejora de logs en el orquestador
 /plan diseña el trabajo para migrar el servicio a systemd separado
+/autonomous remote implementa un fix mínimo en el gateway y verifícalo con tests
 /coder resume este traceback y dime la causa raíz
 /planner diseña un plan de despliegue para el runtime Go del orquestador con Redis y PostgreSQL
 /web últimas novedades de PostgreSQL logical replication
@@ -351,6 +355,7 @@ Use initiatives when one task is too small a unit and you need governed progress
 Main endpoints:
 
 - `POST /initiatives`
+- `POST /initiatives/autonomous`
 - `GET /initiatives`
 - `GET /initiatives/{id}`
 - `GET /initiatives/{id}/artifacts`
@@ -361,6 +366,13 @@ Main endpoints:
 - `GET /initiatives/{id}/tasks`
 - `POST /initiatives/{id}/tasks/{task_id}/mode`
 - `POST /initiatives/{id}/tasks/launch`
+
+Autonomous shortcut:
+
+- `POST /initiatives/autonomous` accepts `workspace_alias`, `workspace_root`, `goal`, and optional `operator_id`.
+- If `surface` is omitted it defaults to `openclaw.http`.
+- The server auto-approves requirements, design, and plan, materializes the backlog, then launches every task allowed by execution policy.
+- For orchestrator-owned workspaces that means `agent_remote`; for bridge workspaces that means `agent_local`.
 
 ## Orchestrator HTTP API
 

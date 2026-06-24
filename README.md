@@ -1,6 +1,15 @@
 # StrateCode Lab
 
-Ansible-managed homelab infrastructure. Provisions and configures an Ubuntu server as a self-hosted platform for local AI inference, orchestrated task execution, VPN access, observability, Open WebUI, and basic hardening.
+Ansible-managed homelab infrastructure. Provisions and configures an Ubuntu server as a self-hosted platform for local AI inference, orchestrated task execution, VPN access, observability, optional Codex gateway access, and basic hardening.
+
+## Operating summary
+
+- Observed host state on June 24, 2026 before reconciliation: `codex-local-gateway`, `llama-cpp-code`, `nginx`, `wg-quick`, `prometheus`, `alertmanager`, and `grafana` were active; `orchestrator`, `aider`, and `open-webui` were absent.
+- Repo target after this cleanup: `orchestrator + lab-agent + lab-agentd` return as the primary operating model.
+- `Codex gateway` remains supported as a complementary slice for direct repo work, not the primary source of operational truth.
+- `OpenClaw` is also treated as a complementary surface. Its local model provider
+  is pinned to the `llama.cpp` `coder` instance through Ansible, while the
+  orchestrator remains the governing runtime.
 
 ## Prerequisites
 
@@ -113,7 +122,7 @@ Roles are applied in dependency order:
 | `https://<cockpit_domain>/orchestrator/health` | Orchestrator API | LAN + VPN |
 | `https://<observability_domain>` | Grafana | LAN + VPN |
 | `https://<observability_domain>/prometheus/` | Prometheus | LAN + VPN |
-| `https://<chat_domain>` | Open WebUI | LAN + VPN |
+| `https://<chat_domain>` | Open WebUI | LAN + VPN when `open_webui_enabled=true` |
 | `http://127.0.0.1:8080/v1` | llama.cpp (code) | localhost |
 | `http://127.0.0.1:8082/v1` | llama.cpp (planner) | localhost |
 | `http://127.0.0.1:8083/v1` | llama.cpp (utility) | localhost |
@@ -137,7 +146,7 @@ Four instances with Vulkan backend (AMD GPU/CPU mix depending on model):
 
 | Instance | Port | Model | Purpose |
 |----------|------|-------|---------|
-| `llama-cpp-code` | 8080 | Qwen2.5-Coder-7B-Instruct (GGUF) | Code assistance |
+| `llama-cpp-code` | 8080 | Qwen2.5-Coder-7B-Instruct (GGUF) | Code assistance (`coder`) |
 | `llama-cpp-planner` | 8082 | Qwen2.5-3B-Instruct (GGUF) | Planning / reasoning |
 | `llama-cpp-utility` | 8083 | Qwen2.5-1.5B-Instruct (GGUF) | Lightweight utility tasks |
 | `llama-cpp-embeddings` | 8084 | nomic-embed-text-v1.5 (GGUF) | Embeddings |
@@ -160,6 +169,8 @@ The platform now runs a Go orchestrator on `127.0.0.1:8100` with:
 Deployment now includes the minimum PostgreSQL compatibility patch required by the current Go runtime, including task archiving support. Bootstrap is expected to be reproducible without manual SQL after `ansible-playbook playbooks/bootstrap.yml`.
 
 The canonical deployment path is the `orchestrator` role plus the Go binary built from `cmd/orchestrator-go`. The remaining Python runtime is intentionally narrow and limited to `src/cap_sidecars/` because PDF/DOCX/OCR tooling is still better there than in a performative rewrite.
+
+The default bootstrap path now restores the orchestrator stack instead of purging it. Destructive cleanup of retired slices is available only behind `retired_stack_cleanup_enabled=true`.
 
 For the official product direction, validated workflow, and next implementation priorities, use the [Master Plan](docs/architecture/master-plan.md). This README summarizes the repository and deployment shape; it is not the roadmap authority.
 

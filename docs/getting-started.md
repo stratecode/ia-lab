@@ -112,6 +112,7 @@ Edit `.env` with your actual values:
 - Domains for Cockpit and Grafana
 - Route53 zone and record names
 - llama.cpp model configuration
+- deployment mode flags (`LAB_ORCHESTRATOR_ENABLED`, `LAB_AIDER_ENABLED`, `LAB_OPEN_WEBUI_ENABLED`, `LAB_RETIRED_STACK_CLEANUP_ENABLED`)
 - WireGuard subnet (if changing defaults)
 - `ANSIBLE_VAULT_PASSWORD_FILE` path
 
@@ -169,6 +170,7 @@ ansible-playbook playbooks/bootstrap.yml --check --diff
 The first execution takes longer because:
 - llama.cpp is compiled from source (~5 minutes)
 - AI models are downloaded from HuggingFace (~4GB for Code, ~2GB for Planner, ~1GB for Utility, ~140MB for Embeddings)
+- `aider`, Redis, PostgreSQL, and the orchestrator runtime are installed and wired together again by default
 - The healthcheck waits up to 7.5 minutes per instance for model loading
 
 Subsequent runs are idempotent and complete in under a minute.

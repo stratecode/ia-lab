@@ -69,6 +69,7 @@
       args:
         executable: /bin/bash
       changed_when: false
+      when: retired_stack_cleanup_enabled
 
     - name: Stop and disable retired cognitive gateway units
       ansible.builtin.systemd:
@@ -81,6 +82,7 @@
         - cognitive-gateway-planner.service
         - cognitive-gateway-utility.service
       failed_when: false
+      when: retired_stack_cleanup_enabled
 
     - name: Remove retired cognitive gateway unit files
       ansible.builtin.file:
@@ -91,6 +93,7 @@
         - cognitive-gateway-code.service
         - cognitive-gateway-planner.service
         - cognitive-gateway-utility.service
+      when: retired_stack_cleanup_enabled
 
     - name: Remove retired cognitive gateway artifacts
       ansible.builtin.file:
@@ -99,6 +102,7 @@
       loop:
         - /etc/cognitive-gateway
         - /srv/ai-lab/cognitive-gateway
+      when: retired_stack_cleanup_enabled
 
     - name: Stop retired AI stack compose projects
       ansible.builtin.shell: |
@@ -111,6 +115,7 @@
       args:
         executable: /bin/bash
       changed_when: false
+      when: retired_stack_cleanup_enabled
 
     - name: Stop and disable retired AI stack units
       ansible.builtin.systemd:
@@ -128,6 +133,7 @@
         - orchestrator-pg-backup.timer
         - orchestrator-pg-backup.service
       failed_when: false
+      when: retired_stack_cleanup_enabled
 
     - name: Remove retired AI stack unit files
       ansible.builtin.file:
@@ -143,6 +149,7 @@
         - orchestrator-workspace-cleanup.service
         - orchestrator-pg-backup.timer
         - orchestrator-pg-backup.service
+      when: retired_stack_cleanup_enabled
 
     - name: Remove retired AI stack runtime and data
       ansible.builtin.file:
@@ -161,14 +168,24 @@
         - /usr/local/bin/aider-task
         - /usr/local/bin/aider-cleanup
         - /var/snap/prometheus/common/file_sd/orchestrator-targets.yml
+      when: retired_stack_cleanup_enabled
 
     - name: Reload systemd after retired AI stack cleanup
       ansible.builtin.systemd:
         daemon_reload: true
+      when: retired_stack_cleanup_enabled
 
     - name: Install llama.cpp with Vulkan
       ansible.builtin.import_role:
         name: llama_cpp
+
+    - name: Install aider runtime
+      ansible.builtin.import_role:
+        name: aider
+
+    - name: Install orchestrator platform
+      ansible.builtin.import_role:
+        name: orchestrator
 
     - name: Configure Codex host runtime
       ansible.builtin.import_role:
@@ -177,6 +194,14 @@
     - name: Install Codex local gateway
       ansible.builtin.import_role:
         name: codex_local_gateway
+
+    - name: Install Open WebUI
+      ansible.builtin.import_role:
+        name: open_webui
+
+    - name: Install OpenClaw gateway
+      ansible.builtin.import_role:
+        name: openclaw
 
     - name: Install monitoring web console
       ansible.builtin.import_role:

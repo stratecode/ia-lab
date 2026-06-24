@@ -1,0 +1,25 @@
+---
+- name: Reload nginx for openclaw
+  ansible.builtin.systemd:
+    name: nginx
+    state: restarted
+  when: not ansible_check_mode
+
+- name: Reload openclaw user systemd
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - --user
+      - --machine={{ openclaw_user }}@
+      - daemon-reload
+  when: not ansible_check_mode
+
+- name: Restart openclaw gateway
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - --user
+      - --machine={{ openclaw_user }}@
+      - restart
+      - "{{ openclaw_gateway_service_name }}"
+  when: not ansible_check_mode

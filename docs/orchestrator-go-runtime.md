@@ -4,6 +4,12 @@ This document defines the production-oriented Go runtime that now owns `orchestr
 
 This is a runtime scope document, not the product roadmap. For validated workflow, MVP boundaries, and next implementation priorities, use the [Master Plan](architecture/master-plan.md).
 
+Operational note:
+
+- as observed on June 24, 2026, the live host had drifted into a Codex-first slice and was missing the orchestrator stack entirely
+- this repo now restores `orchestrator + lab-agent + lab-agentd` as the primary deployment target again
+- the Codex gateway remains supported as a complementary consumer of the local coding model
+
 ## Current scope
 
 The Go runtime covers the compatibility base and the first write-oriented lifecycle wave:
