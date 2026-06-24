@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stratecode/lab/internal/orchestratorgo/browserverify"
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilitybroker"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
@@ -150,7 +152,7 @@ func TestListCapabilitiesIncludesDocumentAndImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	items, _ := payload["capabilities"].([]any)
-	if len(items) != 9 {
+	if len(items) != 26 {
 		t.Fatalf("unexpected capabilities payload: %#v", payload)
 	}
 }
@@ -267,6 +269,244 @@ func TestToggleSafeModeUpdatesState(t *testing.T) {
 	}
 	if payload["safe_mode_enabled"] != false {
 		t.Fatalf("unexpected payload: %#v", payload)
+	}
+}
+
+type fakeBrowserVerifier struct {
+	lastRequest browserverify.Request
+	result      *capabilities.Result
+	err         error
+}
+
+func (f *fakeBrowserVerifier) Verify(_ context.Context, req browserverify.Request) (*capabilities.Result, error) {
+	f.lastRequest = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.result, nil
+}
+
+type fakeMCPWrapper struct {
+	lastCapability string
+	lastPayload    map[string]any
+	result         *capabilities.Result
+	err            error
+}
+
+func (f *fakeMCPWrapper) Execute(_ context.Context, capability string, payload map[string]any) (*capabilities.Result, error) {
+	f.lastCapability = capability
+	f.lastPayload = payload
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.result, nil
+}
+
+type fakeCommandExecutor struct {
+	lastArgv    []string
+	lastWorkdir string
+	result      CommandExecutionResult
+	err         error
+}
+
+func (f *fakeCommandExecutor) Run(_ context.Context, argv []string, workdir string, _ map[string]string, _ time.Duration) (CommandExecutionResult, error) {
+	f.lastArgv = append([]string{}, argv...)
+	f.lastWorkdir = workdir
+	return f.result, f.err
+}
+
+func TestExecuteInternalCapabilityShellExecRunsInsideAllowedRoot(t *testing.T) {
+	root := t.TempDir()
+	server := &Server{
+		Config: config.Config{
+			AllowedLocalRoots: []string{root},
+		},
+	}
+
+	result, err := server.ExecuteInternalCapability(context.Background(), capabilitybroker.ExecuteRequest{
+		Capability: "shell.exec",
+		Input: map[string]any{
+			"argv":              []any{"python3", "-c", "print('shell-ok')"},
+			"working_directory": root,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" {
+		t.Fatalf("expected success, got %#v", result)
+	}
+	if got := fmt.Sprint(result.Output["stdout"]); got != "shell-ok\n" {
+		t.Fatalf("expected stdout shell-ok, got %#v", result.Output)
+	}
+}
+
+func TestExecuteInternalCapabilityGitStatusReturnsStructuredOutput(t *testing.T) {
+	root := t.TempDir()
+	runGit(t, root, "init")
+	runGit(t, root, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, root, "add", "README.md")
+	runGit(t, root, "-c", "user.name=Codex", "-c", "user.email=codex@example.com", "commit", "-m", "init")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# demo\nchanged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	server := &Server{
+		Config: config.Config{
+			AllowedLocalRoots: []string{root},
+		},
+	}
+	result, err := server.ExecuteInternalCapability(context.Background(), capabilitybroker.ExecuteRequest{
+		Capability: "git.status",
+		Input: map[string]any{
+			"repository_path": root,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" {
+		t.Fatalf("expected success, got %#v", result)
+	}
+	if got := fmt.Sprint(result.Output["path"]); got != "." {
+		t.Fatalf("expected repo-relative path '.', got %#v", result.Output)
+	}
+	if got := fmt.Sprint(result.Output["stdout"]); got == "" {
+		t.Fatalf("expected git status stdout, got %#v", result.Output)
+	}
+}
+
+func TestExecuteInternalCapabilityHTTPCheckUsesExpectedStatusAndBodyMatch(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("healthy service"))
+	}))
+	defer target.Close()
+
+	server := &Server{
+		Config: config.Config{
+			AllowedURLSchemes: []string{"http", "https"},
+		},
+	}
+	result, err := server.ExecuteInternalCapability(context.Background(), capabilitybroker.ExecuteRequest{
+		Capability: "http.check",
+		Input: map[string]any{
+			"url":             target.URL,
+			"method":          "GET",
+			"expected_status": 200,
+			"contains":        "healthy",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" {
+		t.Fatalf("expected success, got %#v", result)
+	}
+	if got := fmt.Sprint(result.Output["status_code"]); got != "200" {
+		t.Fatalf("expected status code 200, got %#v", result.Output)
+	}
+}
+
+func TestExecuteInternalCapabilityBrowserVerifyUsesVerifier(t *testing.T) {
+	verifier := &fakeBrowserVerifier{
+		result: &capabilities.Result{
+			Status:  "success",
+			Summary: "browser verification passed",
+			Output:  map[string]any{"assertions": []string{"title", "cta"}},
+		},
+	}
+	server := &Server{
+		Config:          config.Config{AllowedURLSchemes: []string{"http", "https"}},
+		BrowserVerifier: verifier,
+	}
+	result, err := server.ExecuteInternalCapability(context.Background(), capabilitybroker.ExecuteRequest{
+		Capability: "browser.verify",
+		Input: map[string]any{
+			"url":         "https://example.com",
+			"wait_for":    "#app",
+			"assert_text": "Welcome",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" {
+		t.Fatalf("expected success, got %#v", result)
+	}
+	if verifier.lastRequest.URL != "https://example.com" {
+		t.Fatalf("expected verifier to receive request, got %#v", verifier.lastRequest)
+	}
+}
+
+func TestExecuteInternalCapabilityGitHubReadUsesMCPWrapper(t *testing.T) {
+	wrapper := &fakeMCPWrapper{
+		result: &capabilities.Result{
+			Status:  "success",
+			Summary: "github context read",
+			Output:  map[string]any{"repository": "example/repo"},
+		},
+	}
+	server := &Server{
+		MCPWrappers: wrapper,
+	}
+	result, err := server.ExecuteInternalCapability(context.Background(), capabilitybroker.ExecuteRequest{
+		Capability: "github.read",
+		Input: map[string]any{
+			"repository": "example/repo",
+			"issue":      42,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" {
+		t.Fatalf("expected success, got %#v", result)
+	}
+	if wrapper.lastCapability != "github.read" {
+		t.Fatalf("expected github.read delegation, got %q", wrapper.lastCapability)
+	}
+}
+
+func TestExecuteInternalCapabilityDockerComposeUpUsesCommandExecutor(t *testing.T) {
+	root := t.TempDir()
+	composePath := filepath.Join(root, "docker-compose.yml")
+	if err := os.WriteFile(composePath, []byte("services:\n  app:\n    image: nginx:alpine\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeCommandExecutor{
+		result: CommandExecutionResult{
+			Stdout:   "started\n",
+			Stderr:   "",
+			ExitCode: 0,
+		},
+	}
+	server := &Server{
+		Config: config.Config{
+			AllowedLocalRoots: []string{root},
+		},
+		CommandExecutor: executor.Run,
+	}
+	result, err := server.ExecuteInternalCapability(context.Background(), capabilitybroker.ExecuteRequest{
+		Capability: "docker.compose_up",
+		Input: map[string]any{
+			"compose_file": composePath,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" {
+		t.Fatalf("expected success, got %#v", result)
+	}
+	if got := executor.lastArgv; len(got) < 5 || got[0] != "docker" || got[1] != "compose" || got[3] != composePath || got[4] != "up" {
+		t.Fatalf("unexpected docker argv: %#v", got)
+	}
+	if executor.lastWorkdir != root {
+		t.Fatalf("expected docker workdir %s, got %s", root, executor.lastWorkdir)
 	}
 }
 

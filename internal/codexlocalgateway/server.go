@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -198,6 +199,8 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	var req chatCompletionRequest
+	_ = json.Unmarshal(body, &req)
 	if err := s.enforcePromptSize(body); err != nil {
 		writeError(w, http.StatusBadRequest, "context_window_exceeded", err.Error())
 		return
@@ -208,9 +211,192 @@ func (s *Server) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, "upstream_error", err.Error())
 		return
 	}
+	if normalized, ok, normErr := s.recoverChatCompletionToolCalls(r.Context(), upstreamBody, req); normErr == nil && ok {
+		upstreamBody = normalized
+	} else if normErr != nil {
+		writeError(w, http.StatusBadGateway, "tool_call_parse_error", normErr.Error())
+		return
+	}
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(status)
 	_, _ = w.Write(upstreamBody)
+}
+
+var plainURLPattern = regexp.MustCompile(`https?://[^\s)]+`)
+
+func (s *Server) recoverChatCompletionToolCalls(ctx context.Context, body []byte, req chatCompletionRequest) ([]byte, bool, error) {
+	if normalized, ok, err := s.normalizeChatCompletionToolCalls(body, req); err != nil || ok {
+		return normalized, ok, err
+	}
+	if !shouldUseStrictExecutionForChat(req) {
+		return nil, false, nil
+	}
+	assistantText, ok := firstAssistantText(body)
+	if !ok {
+		return nil, false, nil
+	}
+	if item, ok := synthesizeURLFetchExecCommand(assistantText, req.Tools); ok {
+		return rewriteChatCompletionAsToolCall(body, item)
+	}
+	repaired, ok, err := s.repairChatCompletionToolCall(ctx, req, assistantText)
+	if err != nil || !ok {
+		return repaired, ok, err
+	}
+	return s.normalizeChatCompletionToolCalls(repaired, req)
+}
+
+func (s *Server) normalizeChatCompletionToolCalls(body []byte, req chatCompletionRequest) ([]byte, bool, error) {
+	if req.Stream || !hasTools(req.Tools) {
+		return nil, false, nil
+	}
+	var chat chatCompletionResponse
+	if err := json.Unmarshal(body, &chat); err != nil {
+		return nil, false, nil
+	}
+	if len(chat.Choices) == 0 {
+		return nil, false, nil
+	}
+	choice := &chat.Choices[0]
+	if len(choice.Message.ToolCalls) > 0 {
+		return nil, false, nil
+	}
+	item, ok, err := parseFallbackToolCall(choice.Message.Content, req.Tools)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok || item.Type != "function_call" {
+		return nil, false, nil
+	}
+	choice.Message.ToolCalls = []chatToolCall{{
+		ID:   item.CallID,
+		Type: "function",
+		Function: chatToolFunction{
+			Name:      item.Name,
+			Arguments: item.Arguments,
+		},
+	}}
+	choice.Message.Content = ""
+	choice.FinishReason = "tool_calls"
+	normalized, err := json.Marshal(chat)
+	if err != nil {
+		return nil, false, err
+	}
+	s.toolCalls.WithLabelValues("chat_fallback_json", item.Name).Inc()
+	return normalized, true, nil
+}
+
+func shouldUseStrictExecutionForChat(req chatCompletionRequest) bool {
+	if !hasTools(req.Tools) {
+		return false
+	}
+	if requiresToolCall(req.ToolChoice) {
+		return true
+	}
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		msg := req.Messages[i]
+		if msg.Role != "user" {
+			continue
+		}
+		if looksLikeAgenticExecutionRequest(msg.Content) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstAssistantText(body []byte) (string, bool) {
+	var chat chatCompletionResponse
+	if err := json.Unmarshal(body, &chat); err != nil || len(chat.Choices) == 0 {
+		return "", false
+	}
+	text := chat.Choices[0].Message.Content
+	if text == "" {
+		text = chat.Choices[0].Delta.Content
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", false
+	}
+	return text, true
+}
+
+func synthesizeURLFetchExecCommand(text string, tools json.RawMessage) (responseItem, bool) {
+	if !toolNameAllowed("exec_command", tools) || toolNameAllowed("browser.verify", tools) {
+		return responseItem{}, false
+	}
+	lower := strings.ToLower(text)
+	actionSignals := []string{"open", "navigate", "visit", "check", "search", "website", "docs", "browser"}
+	hasAction := false
+	for _, signal := range actionSignals {
+		if strings.Contains(lower, signal) {
+			hasAction = true
+			break
+		}
+	}
+	if !hasAction {
+		return responseItem{}, false
+	}
+	url := plainURLPattern.FindString(text)
+	if url == "" {
+		return responseItem{}, false
+	}
+	return execCommandItem("call_exec_command", "curl -fsSL "+url), true
+}
+
+func rewriteChatCompletionAsToolCall(body []byte, item responseItem) ([]byte, bool, error) {
+	var chat chatCompletionResponse
+	if err := json.Unmarshal(body, &chat); err != nil {
+		return nil, false, err
+	}
+	if len(chat.Choices) == 0 {
+		return nil, false, nil
+	}
+	choice := &chat.Choices[0]
+	choice.Message.Content = ""
+	choice.Message.ToolCalls = []chatToolCall{{
+		ID:   item.CallID,
+		Type: "function",
+		Function: chatToolFunction{
+			Name:      item.Name,
+			Arguments: item.Arguments,
+		},
+	}}
+	choice.FinishReason = "tool_calls"
+	normalized, err := json.Marshal(chat)
+	if err != nil {
+		return nil, false, err
+	}
+	return normalized, true, nil
+}
+
+func (s *Server) repairChatCompletionToolCall(ctx context.Context, req chatCompletionRequest, assistantText string) ([]byte, bool, error) {
+	rewriteReq := req
+	rewriteReq.Model = s.cfg.UpstreamModel
+	rewriteReq.Stream = false
+	if rewriteReq.MaxTokens <= 0 || rewriteReq.MaxTokens > 256 {
+		rewriteReq.MaxTokens = 256
+	}
+	rewriteReq.Messages = append(cloneMessages(req.Messages),
+		chatMessage{Role: "assistant", Content: assistantText},
+		chatMessage{
+			Role: "system",
+			Content: "Rewrite the previous assistant draft as exactly one tool call. Return either a native tool_call or one JSON object of the form " +
+				`{"type":"function_call","call_id":"call_<short_id>","name":"tool_name","arguments":{...}} with no prose. ` +
+				"If web content is needed and exec_command is available, prefer exec_command with curl -fsSL <url>.",
+		},
+	)
+	body, err := json.Marshal(rewriteReq)
+	if err != nil {
+		return nil, false, err
+	}
+	status, _, repaired, err := s.callUpstream(ctx, "chat_completions_repair", body)
+	if err != nil {
+		return nil, false, err
+	}
+	if status < 200 || status >= 300 {
+		return nil, false, fmt.Errorf("repair upstream returned %d", status)
+	}
+	return repaired, true, nil
 }
 
 func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
@@ -261,6 +447,11 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 
 	envelope, err := s.chatToResponses(upstreamBody, req, chatReq)
 	if err != nil {
+		var execErr *executionNotStartedError
+		if errors.As(err, &execErr) {
+			writeError(w, http.StatusConflict, "execution_not_started", execErr.Error())
+			return
+		}
 		var toolErr *toolCallParseError
 		if errors.As(err, &toolErr) {
 			s.parseErrors.Inc()
@@ -294,6 +485,9 @@ func (s *Server) responsesToChat(req responsesRequest) (chatCompletionRequest, e
 	}
 	if hasTools(req.Tools) {
 		messages = append(messages, fallbackToolInstruction(req.Tools, req.ToolChoice))
+		if shouldUseStrictExecution(req) {
+			messages = append(messages, strictExecutionInstruction())
+		}
 	}
 	for _, msg := range inputMessages {
 		if msg.Role == "tool" {
@@ -343,7 +537,17 @@ func fallbackToolInstruction(tools json.RawMessage, choice any) chatMessage {
 			"If the user explicitly tells you to run or execute a command now, you must answer with the exec_command JSON function_call and no surrounding prose. " +
 			"If approval policy is never or sandbox is already danger-full-access, do not ask for confirmation and do not say you are about to run a command; call the tool immediately. " +
 			"If an exec_command already succeeded for the exact same cmd, do not repeat that same cmd again for the same task; otherwise continue calling exec_command as needed to finish the task. " +
+			"After a successful exec_command, either issue the next necessary tool call or finish with a verified result that includes git status and validation output. " +
 			"Do not use write_stdin unless a prior exec_command returned a session_id. Do not claim that you edited files or ran commands unless a tool result confirms it.",
+	}
+}
+
+func strictExecutionInstruction() chatMessage {
+	return chatMessage{
+		Role: "system",
+		Content: "Strict execution mode: if this task is about executing, editing, fixing, updating, validating, or starting something, the first valid response must be a tool call and not prose. " +
+			"If execution has not started yet, do not explain what you would do next. Call a tool. " +
+			"Only return prose after tool-backed progress exists or the task is conclusively blocked.",
 	}
 }
 
@@ -354,22 +558,22 @@ func effectiveToolChoice(req responsesRequest) any {
 	if requiresToolCall(req.ToolChoice) {
 		return req.ToolChoice
 	}
-	if !toolNameAllowed("exec_command", req.Tools) {
-		return req.ToolChoice
-	}
 	input, err := flattenInput(req.Input)
 	if err != nil {
 		return req.ToolChoice
 	}
-	if !looksLikeImmediateExecRequest(input) {
+	if toolNameAllowed("exec_command", req.Tools) && looksLikeImmediateExecRequest(input) {
+		return map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": "exec_command",
+			},
+		}
+	}
+	if !shouldUseStrictExecution(req) {
 		return req.ToolChoice
 	}
-	return map[string]any{
-		"type": "function",
-		"function": map[string]any{
-			"name": "exec_command",
-		},
-	}
+	return "required"
 }
 
 func looksLikeImmediateExecRequest(input string) bool {
@@ -393,6 +597,74 @@ func looksLikeImmediateExecRequest(input string) bool {
 		}
 	}
 	return false
+}
+
+func shouldUseStrictExecution(req responsesRequest) bool {
+	if hasFunctionCallOutput(req.Input) || !hasTools(req.Tools) {
+		return false
+	}
+	input, err := flattenInput(req.Input)
+	if err != nil {
+		return false
+	}
+	return looksLikeAgenticExecutionRequest(input)
+}
+
+func looksLikeAgenticExecutionRequest(input string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if normalized == "" {
+		return false
+	}
+	actionSignals := []string{
+		"execute",
+		"run ",
+		"edit",
+		"modify",
+		"change",
+		"update",
+		"upgrade",
+		"fix",
+		"correct",
+		"patch",
+		"apply",
+		"install",
+		"start",
+		"launch",
+		"validate",
+		"verify",
+		"test",
+		"migrate",
+		"refactor",
+		"create a branch",
+		"open the repo",
+	}
+	explanationSignals := []string{
+		"explain",
+		"why ",
+		"how does",
+		"how do",
+		"what is",
+		"should i",
+		"is it safe",
+		"could you explain",
+		"summarize",
+	}
+	hasAction := false
+	for _, signal := range actionSignals {
+		if strings.Contains(normalized, signal) {
+			hasAction = true
+			break
+		}
+	}
+	if !hasAction {
+		return false
+	}
+	for _, signal := range explanationSignals {
+		if strings.Contains(normalized, signal) && !looksLikeImmediateExecRequest(normalized) {
+			return false
+		}
+	}
+	return true
 }
 
 func hasFunctionCallOutput(raw json.RawMessage) bool {
@@ -821,6 +1093,14 @@ func (e *toolCallParseError) Error() string {
 	return e.message
 }
 
+type executionNotStartedError struct {
+	message string
+}
+
+func (e *executionNotStartedError) Error() string {
+	return e.message
+}
+
 func (s *Server) chatToResponses(body []byte, req responsesRequest, chatReq chatCompletionRequest) (responsesEnvelope, error) {
 	var chat chatCompletionResponse
 	if err := json.Unmarshal(body, &chat); err != nil {
@@ -912,6 +1192,10 @@ func (s *Server) chatToResponses(body []byte, req responsesRequest, chatReq chat
 		}
 		s.toolCalls.WithLabelValues("synthesized_request", item.Name).Inc()
 		text = ""
+	} else if shouldUseStrictExecution(req) {
+		return responsesEnvelope{}, &executionNotStartedError{
+			message: "strict execution mode required a tool call before prose, but the model returned narration without starting execution",
+		}
 	} else if requiresToolCall(req.ToolChoice) {
 		return responsesEnvelope{}, &toolCallParseError{message: "required tool_choice did not produce a valid native tool_call or fallback JSON function_call"}
 	} else {
@@ -1234,6 +1518,16 @@ func (s *Server) writeResponsesStreamFromUpstream(w http.ResponseWriter, ctx con
 				flusher.Flush()
 			}
 			return nil
+		} else if shouldUseStrictExecution(req) {
+			s.streams.WithLabelValues("error").Inc()
+			s.sseFailures.Inc()
+			msg := "strict execution mode required a tool call before prose, but the model returned narration without starting execution"
+			writeSSE(w, "response.failed", map[string]any{
+				"type":       "response.failed",
+				"error_type": "execution_not_started",
+				"message":    msg,
+			})
+			return &executionNotStartedError{message: msg}
 		} else if requiresToolCall(req.ToolChoice) {
 			s.streams.WithLabelValues("error").Inc()
 			s.sseFailures.Inc()

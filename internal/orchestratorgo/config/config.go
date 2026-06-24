@@ -45,6 +45,9 @@ type Config struct {
 	MaxArtifactTextChars        int
 	DocsSidecarURL              string
 	ImagesSidecarURL            string
+	BrowserVerifierBaseURL      string
+	MCPWrapperBaseURL           string
+	MCPWrapperAPIKey            string
 	TelegramBotToken            string
 	TelegramAllowedUsers        []int64
 	LlamaPlannerBaseURL         string
@@ -103,6 +106,9 @@ func Load() (Config, error) {
 		MaxArtifactTextChars:        getInt(k, "lab.capabilities.max.artifact.text.chars", 16000),
 		DocsSidecarURL:              getString(k, "lab.capabilities.docs.sidecar.url", ""),
 		ImagesSidecarURL:            getString(k, "lab.capabilities.images.sidecar.url", ""),
+		BrowserVerifierBaseURL:      getString(k, "lab.capabilities.browser.verifier.url", ""),
+		MCPWrapperBaseURL:           getString(k, "lab.capabilities.mcp.wrapper.base.url", ""),
+		MCPWrapperAPIKey:            getString(k, "lab.capabilities.mcp.wrapper.api.key", ""),
 		TelegramBotToken:            getString(k, "lab.telegram.bot.token", ""),
 		TelegramAllowedUsers:        splitCSVInt64(getString(k, "lab.telegram.allowed.users", "")),
 		LlamaPlannerBaseURL:         getString(k, "lab.llama.planner.base.url", "http://127.0.0.1:8082/v1"),

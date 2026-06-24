@@ -29,6 +29,7 @@ type Bot struct {
 	redis        *store.RedisStore
 	research     *research.Service
 	initiatives  *initiative.Service
+	autonomous   autonomousStarter
 	capabilities *capabilities.Client
 	safeMode     *httpapi.SafeModeState
 	client       *http.Client
@@ -38,13 +39,18 @@ type Bot struct {
 	mu           sync.Mutex
 }
 
-func New(cfg config.Config, postgres *store.PostgresStore, redis *store.RedisStore, researchService *research.Service, initiativeService *initiative.Service, capabilityClient *capabilities.Client, safeMode *httpapi.SafeModeState) *Bot {
+type autonomousStarter interface {
+	StartFromChannel(ctx context.Context, req domain.AutonomousInitiativeRequest) (*domain.AutonomousRunResult, error)
+}
+
+func New(cfg config.Config, postgres *store.PostgresStore, redis *store.RedisStore, researchService *research.Service, initiativeService *initiative.Service, autonomousRunner autonomousStarter, capabilityClient *capabilities.Client, safeMode *httpapi.SafeModeState) *Bot {
 	return &Bot{
 		cfg:          cfg,
 		postgres:     postgres,
 		redis:        redis,
 		research:     researchService,
 		initiatives:  initiativeService,
+		autonomous:   autonomousRunner,
 		capabilities: capabilityClient,
 		safeMode:     safeMode,
 		client:       &http.Client{Timeout: 35 * time.Second},
@@ -236,7 +242,7 @@ func (b *Bot) answerCallbackQuery(ctx context.Context, callbackID, text string) 
 func (b *Bot) handleCommand(ctx context.Context, message *message) string {
 	text := strings.TrimSpace(message.Text)
 	if text == "" || !strings.HasPrefix(text, "/") {
-		return "Usa /status, /tasks, /task, /safe, /run, /plan, /research, /fetch, /doc, /image, /approvals, /approve, /reject, /capabilities o /sources."
+		return "Usa /status, /tasks, /task, /safe, /run, /plan, /idea, /autonomous, /research, /fetch, /doc, /image, /approvals, /approve, /reject, /capabilities o /sources."
 	}
 	fields := strings.Fields(text)
 	command := strings.TrimPrefix(fields[0], "/")
@@ -263,6 +269,8 @@ func (b *Bot) handleCommand(ctx context.Context, message *message) string {
 		return b.cmdInitiative(ctx, arg)
 	case "idea":
 		return b.cmdIdea(ctx, arg)
+	case "autonomous":
+		return b.cmdAutonomous(ctx, arg, message.From.Username)
 	case "approve_phase":
 		return b.cmdResolveInitiativePhase(ctx, arg, true, message.From.Username)
 	case "reject_phase":
@@ -292,7 +300,7 @@ func (b *Bot) handleCommand(ctx context.Context, message *message) string {
 	case "capabilities":
 		return "Capabilities\n- web.search\n- web.fetch\n- document.read\n- image.analyze\n- research.query"
 	default:
-		return "Comando no soportado todavía en el bot Go. De momento usa /status, /safe, /run, /research, /doc, /image o /capabilities."
+		return "Comando no soportado todavía en el bot Go. De momento usa /status, /safe, /run, /idea, /autonomous, /research, /doc, /image o /capabilities."
 	}
 }
 
@@ -539,6 +547,33 @@ func (b *Bot) cmdIdea(ctx context.Context, arg string) string {
 		return "Error creando iniciativa: " + err.Error()
 	}
 	return fmt.Sprintf("Iniciativa creada\n- ID: %s\n- Workspace: %s\n- Status: %s", item.ID, item.WorkspaceRoot, item.Status)
+}
+
+func (b *Bot) cmdAutonomous(ctx context.Context, arg string, operator string) string {
+	if b.autonomous == nil {
+		return "El runner autónomo no está configurado."
+	}
+	fields := strings.Fields(strings.TrimSpace(arg))
+	if len(fields) < 2 {
+		return "Uso: /autonomous <workspace_alias> <objetivo>"
+	}
+	workspaceAlias := strings.TrimSpace(fields[0])
+	workspaceRoot, err := b.resolveWorkspaceAlias(ctx, workspaceAlias)
+	if err != nil {
+		return "Error resolviendo workspace: " + err.Error()
+	}
+	result, err := b.autonomous.StartFromChannel(ctx, domain.AutonomousInitiativeRequest{
+		Surface:           "openclaw.telegram",
+		WorkspaceAlias:    workspaceAlias,
+		WorkspaceRoot:     workspaceRoot,
+		Goal:              strings.TrimSpace(strings.Join(fields[1:], " ")),
+		OperatorID:        strings.TrimSpace(operator),
+		AutoApprovePhases: true,
+	})
+	if err != nil {
+		return "Error lanzando iniciativa autónoma: " + err.Error()
+	}
+	return result.Summary
 }
 
 func (b *Bot) cmdResolveInitiativePhase(ctx context.Context, arg string, approve bool, operator string) string {

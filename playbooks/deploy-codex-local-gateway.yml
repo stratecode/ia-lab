@@ -1,0 +1,12 @@
+---
+- name: Deploy Codex local gateway only
+  hosts: all
+  become: true
+
+  vars_files:
+    - ../group_vars/vault.yml
+
+  tasks:
+    - name: Install Codex local gateway
+      ansible.builtin.import_role:
+        name: codex_local_gateway

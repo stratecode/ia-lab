@@ -1,10 +1,13 @@
 package telegram
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/stratecode/lab/internal/orchestratorgo/config"
 	"github.com/stratecode/lab/internal/orchestratorgo/domain"
 )
 
@@ -75,4 +78,57 @@ func TestFormatInitiativeSummaryMentionsBacklog(t *testing.T) {
 	if !strings.Contains(withBacklog, "Modes: manual=0 local=1 remote=0") {
 		t.Fatalf("expected mode summary, got %q", withBacklog)
 	}
+}
+
+func TestCmdAutonomousRequiresWorkspaceAndGoal(t *testing.T) {
+	bot := &Bot{}
+	if got := bot.cmdAutonomous(context.Background(), "remote", "tester"); got != "El runner autónomo no está configurado." {
+		t.Fatalf("unexpected response: %q", got)
+	}
+	bot.autonomous = &fakeAutonomousStarter{}
+	if got := bot.cmdAutonomous(context.Background(), "remote", "tester"); got != "Uso: /autonomous <workspace_alias> <objetivo>" {
+		t.Fatalf("unexpected usage response: %q", got)
+	}
+}
+
+func TestCmdAutonomousStartsRunner(t *testing.T) {
+	starter := &fakeAutonomousStarter{
+		result: &domain.AutonomousRunResult{
+			Summary: "Autonomous initiative queued",
+		},
+	}
+	bot := &Bot{
+		cfg:        config.Config{WorkspaceRoot: "/srv/stratecode"},
+		autonomous: starter,
+	}
+	got := bot.cmdAutonomous(context.Background(), "remote arregla el bug del gateway", "tester")
+	if got != "Autonomous initiative queued" {
+		t.Fatalf("unexpected summary: %q", got)
+	}
+	if starter.lastReq.WorkspaceRoot != "/srv/stratecode" {
+		t.Fatalf("unexpected workspace root: %q", starter.lastReq.WorkspaceRoot)
+	}
+	if starter.lastReq.Goal != "arregla el bug del gateway" {
+		t.Fatalf("unexpected goal: %q", starter.lastReq.Goal)
+	}
+	if starter.lastReq.Surface != "openclaw.telegram" {
+		t.Fatalf("unexpected surface: %q", starter.lastReq.Surface)
+	}
+}
+
+type fakeAutonomousStarter struct {
+	lastReq domain.AutonomousInitiativeRequest
+	result  *domain.AutonomousRunResult
+	err     error
+}
+
+func (f *fakeAutonomousStarter) StartFromChannel(_ context.Context, req domain.AutonomousInitiativeRequest) (*domain.AutonomousRunResult, error) {
+	f.lastReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.result != nil {
+		return f.result, nil
+	}
+	return &domain.AutonomousRunResult{Summary: fmt.Sprintf("initiative %s", req.Goal)}, nil
 }

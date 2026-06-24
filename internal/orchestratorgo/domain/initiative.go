@@ -168,6 +168,26 @@ type InitiativeTaskModeRequest struct {
 	ExecutionMode string `json:"execution_mode"`
 }
 
+type AutonomousInitiativeRequest struct {
+	Surface           string `json:"surface"`
+	WorkspaceAlias    string `json:"workspace_alias"`
+	WorkspaceRoot     string `json:"workspace_root"`
+	Goal              string `json:"goal"`
+	OperatorID        string `json:"operator_id"`
+	AutoApprovePhases bool   `json:"auto_approve_phases"`
+}
+
+type AutonomousRunResult struct {
+	InitiativeID  string           `json:"initiative_id"`
+	WorkspaceRoot string           `json:"workspace_root"`
+	Status        InitiativeStatus `json:"status"`
+	CurrentPhase  InitiativePhase  `json:"current_phase"`
+	TasksCreated  int              `json:"tasks_created"`
+	TasksLaunched int              `json:"tasks_launched"`
+	PendingAction string           `json:"pending_action"`
+	Summary       string           `json:"summary"`
+}
+
 func IsRecognizedInitiativePhase(phase InitiativePhase) bool {
 	switch phase {
 	case InitiativePhaseRequirements, InitiativePhaseDesign, InitiativePhasePlan, InitiativePhaseExecution:

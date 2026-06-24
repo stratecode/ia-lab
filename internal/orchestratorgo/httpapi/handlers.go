@@ -18,8 +18,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/stratecode/lab/internal/orchestratorgo/browserverify"
 
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
+	"github.com/stratecode/lab/internal/orchestratorgo/capabilities/mcpwrap"
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilitybroker"
 	"github.com/stratecode/lab/internal/orchestratorgo/codeanalysis"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
@@ -30,19 +32,35 @@ import (
 )
 
 type Server struct {
-	Config           config.Config
-	Postgres         *store.PostgresStore
-	Redis            *store.RedisStore
-	Research         *research.Service
-	Initiatives      *initiative.Service
-	Capabilities     *capabilities.Client
-	CapabilityBroker *capabilitybroker.Broker
-	SafeMode         *SafeModeState
-	Now              func() time.Time
-	Version          string
-	OpenAIToolsID    string
+	Config                     config.Config
+	Postgres                   *store.PostgresStore
+	Redis                      *store.RedisStore
+	Research                   *research.Service
+	Initiatives                *initiative.Service
+	AutonomousRunner           autonomousInitiativeStarter
+	Capabilities               *capabilities.Client
+	BrowserVerifier            browserverify.Verifier
+	MCPWrappers                mcpwrap.Executor
+	CapabilityBroker           *capabilitybroker.Broker
+	SafeMode                   *SafeModeState
+	Now                        func() time.Time
+	Version                    string
+	OpenAIToolsID              string
 	LocalBridgeLeaseTTLSeconds int
+	CommandExecutor            CommandExecutorFunc
 }
+
+type autonomousInitiativeStarter interface {
+	StartFromChannel(ctx context.Context, req domain.AutonomousInitiativeRequest) (*domain.AutonomousRunResult, error)
+}
+
+type CommandExecutionResult struct {
+	Stdout   string
+	Stderr   string
+	ExitCode int
+}
+
+type CommandExecutorFunc func(ctx context.Context, argv []string, workdir string, env map[string]string, timeout time.Duration) (CommandExecutionResult, error)
 
 func (s *Server) Router(auth *Authenticator) http.Handler {
 	r := chi.NewRouter()
@@ -90,6 +108,7 @@ func (s *Server) Router(auth *Authenticator) http.Handler {
 	r.Route("/initiatives", func(r chi.Router) {
 		r.Get("/", s.listInitiatives)
 		r.Post("/", s.createInitiative)
+		r.Post("/autonomous", s.startAutonomousInitiative)
 		r.Get("/{initiativeID}", s.getInitiative)
 		r.Get("/{initiativeID}/history/{phase}", s.getInitiativePhaseHistory)
 		r.Get("/{initiativeID}/artifacts", s.getInitiativeArtifacts)
@@ -107,6 +126,15 @@ func (s *Server) Router(auth *Authenticator) http.Handler {
 	r.Post("/tools/web/search", s.webSearch)
 	r.Post("/tools/web/fetch", s.webFetch)
 	r.Post("/tools/filesystem", s.filesystemTool)
+	r.Post("/tools/shell/exec", s.shellExec)
+	r.Post("/tools/git", s.gitTool)
+	r.Post("/tools/docker", s.dockerTool)
+	r.Post("/tools/http/check", s.httpCheckTool)
+	r.Post("/tools/browser/verify", s.browserVerifyTool)
+	r.Post("/tools/github/read", s.githubReadTool)
+	r.Post("/tools/jira/read", s.jiraReadTool)
+	r.Post("/tools/slack/read", s.slackReadTool)
+	r.Post("/tools/slack/notify", s.slackNotifyTool)
 	r.Post("/tools/code/analyze", s.codeAnalyze)
 	r.Post("/tools/documents/read", s.documentRead)
 	r.Post("/tools/images/analyze", s.imageAnalyze)
@@ -211,8 +239,8 @@ func (s *Server) listModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listCapabilities(w http.ResponseWriter, r *http.Request) {
 	if s.CapabilityBroker == nil {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"capabilities": []string{"web.search", "web.fetch", "filesystem.read", "filesystem.list", "filesystem.write", "code.analysis", "document.read", "image.analyze", "research.query"},
-			"total":        9,
+			"capabilities": []string{"web.search", "web.fetch", "document.read", "image.analyze", "code.analysis", "shell.exec", "git.status", "git.diff", "git.log", "git.branch", "docker.compose_up", "docker.compose_down", "docker.logs", "docker.ps", "docker.build", "docker.run", "http.check", "browser.verify", "github.read", "jira.read", "slack.read", "slack.notify", "filesystem.read", "filesystem.list", "filesystem.write", "research.query"},
+			"total":        26,
 		})
 		return
 	}
@@ -944,27 +972,6 @@ func (s *Server) cleanupWorkspaces(w http.ResponseWriter, r *http.Request) {
 		RetentionHours: s.Config.WorkspaceRetentionHours,
 		Message:        fmt.Sprintf("Cleaned %d workspace(s) older than %dh", cleanedCount, s.Config.WorkspaceRetentionHours),
 	})
-}
-
-func (s *Server) ExecuteInternalCapability(ctx context.Context, req capabilitybroker.ExecuteRequest) (*capabilities.Result, error) {
-	switch strings.TrimSpace(req.Capability) {
-	case "web.search":
-		return s.executeWebSearchCapability(ctx, req.Input)
-	case "web.fetch":
-		return s.executeWebFetchCapability(ctx, req.Input)
-	case "document.read":
-		return s.executeDocumentReadCapability(ctx, req.Input)
-	case "image.analyze":
-		return s.executeImageAnalyzeCapability(ctx, req.Input)
-	case "code.analysis":
-		return s.executeCodeAnalyzeCapability(ctx, req.Input)
-	case "filesystem.read", "filesystem.list", "filesystem.write":
-		return s.executeFilesystemCapability(ctx, req.Capability, req.Input)
-	case "research.query":
-		return s.executeResearchQueryCapability(ctx, req.Input)
-	default:
-		return nil, fmt.Errorf("unsupported capability %s", req.Capability)
-	}
 }
 
 func (s *Server) executeWebSearchCapability(ctx context.Context, input map[string]any) (*capabilities.Result, error) {

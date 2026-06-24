@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	echoWritePattern   = regexp.MustCompile(`(?m)(?:^|[;&\n]\s*)echo\s+(.+?)\s*>\s*([^\s;&]+)`)
-	pythonWritePattern = regexp.MustCompile(`Path\(["']([^"']+)["']\)\.write_text\(["']((?:\\.|[^"'])*)["']\)`)
-	prefixedToolPattern = regexp.MustCompile(`(?s)^\s*([A-Za-z_][A-Za-z0-9_-]*)\s+(\{.*\})\s*$`)
+	echoWritePattern    = regexp.MustCompile(`(?m)(?:^|[;&\n]\s*)echo\s+(.+?)\s*>\s*([^\s;&]+)`)
+	pythonWritePattern  = regexp.MustCompile(`Path\(["']([^"']+)["']\)\.write_text\(["']((?:\\.|[^"'])*)["']\)`)
+	prefixedToolPattern = regexp.MustCompile(`(?s)^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*:?\s+(\{.*\})\s*$`)
 )
 
 func flattenInput(raw json.RawMessage) (string, error) {
@@ -167,10 +167,16 @@ type fallbackToolCall struct {
 }
 
 func parseFallbackToolCall(text string, tools json.RawMessage) (responseItem, bool, error) {
-	if item, ok := shellFenceToolCall(strings.TrimSpace(text), tools); ok {
+	trimmedText := strings.TrimSpace(text)
+	if embedded, ok := embeddedFunctionCallJSON(trimmedText); ok {
+		trimmedText = embedded
+	} else if embedded, ok := embeddedPrefixedToolCall(trimmedText); ok {
+		trimmedText = embedded
+	}
+	if item, ok := shellFenceToolCall(trimmedText, tools); ok {
 		return item, true, nil
 	}
-	if call, ok, err := parsePrefixedToolCall(text); err != nil {
+	if call, ok, err := parsePrefixedToolCall(trimmedText); err != nil {
 		return responseItem{}, false, err
 	} else if ok {
 		if normalized, ok, err := normalizeFallbackAlias(call, tools); err != nil || ok {
@@ -226,7 +232,7 @@ func parseFallbackToolCall(text string, tools json.RawMessage) (responseItem, bo
 			Arguments: arguments,
 		}, true, nil
 	}
-	trimmed := stripJSONFence(strings.TrimSpace(text))
+	trimmed := stripJSONFence(trimmedText)
 	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
 		return responseItem{}, false, nil
 	}
@@ -314,6 +320,72 @@ func parseFallbackToolCall(text string, tools json.RawMessage) (responseItem, bo
 	}, true, nil
 }
 
+func embeddedFunctionCallJSON(text string) (string, bool) {
+	if text == "" || !strings.Contains(text, "function_call") {
+		return "", false
+	}
+	for _, candidate := range fencedJSONCandidates(text) {
+		if candidate == "" || !json.Valid([]byte(candidate)) {
+			continue
+		}
+		var call fallbackToolCall
+		if err := json.Unmarshal([]byte(candidate), &call); err != nil {
+			continue
+		}
+		if call.Type == "function_call" && strings.TrimSpace(call.Name) != "" {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func fencedJSONCandidates(text string) []string {
+	parts := strings.Split(text, "```")
+	if len(parts) < 3 {
+		return nil
+	}
+	candidates := make([]string, 0, len(parts)/2)
+	for i := 1; i < len(parts); i += 2 {
+		block := strings.TrimSpace(parts[i])
+		if block == "" {
+			continue
+		}
+		if newline := strings.IndexByte(block, '\n'); newline >= 0 {
+			header := strings.ToLower(strings.TrimSpace(block[:newline]))
+			if header == "json" || header == "" {
+				block = strings.TrimSpace(block[newline+1:])
+			}
+		}
+		if strings.HasPrefix(block, "{") && strings.HasSuffix(block, "}") {
+			candidates = append(candidates, block)
+		}
+	}
+	return candidates
+}
+
+func embeddedPrefixedToolCall(text string) (string, bool) {
+	lines := strings.Split(text, "\n")
+	pendingTool := ""
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if prefixedToolPattern.MatchString(line) {
+			return line, true
+		}
+		lower := strings.ToLower(strings.Trim(line, "*: "))
+		if pendingTool != "" && strings.HasPrefix(line, "{") && strings.HasSuffix(line, "}") {
+			return pendingTool + " " + line, true
+		}
+		if lower == "action: exec_command" || lower == "exec_command" {
+			pendingTool = "exec_command"
+			continue
+		}
+	}
+	return "", false
+}
+
 func parsePrefixedToolCall(text string) (fallbackToolCall, bool, error) {
 	trimmed := strings.TrimSpace(text)
 	match := prefixedToolPattern.FindStringSubmatch(trimmed)
@@ -392,6 +464,9 @@ func normalizeExecCommandFallback(callID, arguments string) (responseItem, bool,
 	}
 	switch typed := cmd.(type) {
 	case string:
+		if normalized, ok := unwrapNestedExecCommandString(typed); ok {
+			return execCommandItem(callID, normalized), true, nil
+		}
 		var nested map[string]any
 		if err := json.Unmarshal([]byte(strings.TrimSpace(typed)), &nested); err != nil {
 			escapedNewlines := strings.ReplaceAll(strings.TrimSpace(typed), "\n", "\\n")
@@ -408,6 +483,28 @@ func normalizeExecCommandFallback(callID, arguments string) (responseItem, bool,
 		}
 	}
 	return responseItem{}, false, nil
+}
+
+func unwrapNestedExecCommandString(value string) (string, bool) {
+	call, ok, err := parsePrefixedToolCall(value)
+	if err == nil && ok && call.Name == "exec_command" {
+		if command, ok := execCommandFromArguments(strings.TrimSpace(string(call.Arguments))); ok {
+			return command, true
+		}
+	}
+
+	trimmed := stripJSONFence(strings.TrimSpace(value))
+	if !strings.HasPrefix(trimmed, "{") {
+		return "", false
+	}
+	var nestedCall fallbackToolCall
+	if err := json.Unmarshal([]byte(trimmed), &nestedCall); err != nil {
+		return "", false
+	}
+	if nestedCall.Type != "function_call" || nestedCall.Name != "exec_command" {
+		return "", false
+	}
+	return execCommandFromArguments(strings.TrimSpace(string(nestedCall.Arguments)))
 }
 
 func normalizeResponseToolItem(item responseItem) responseItem {

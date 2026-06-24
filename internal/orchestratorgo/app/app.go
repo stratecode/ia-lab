@@ -7,7 +7,9 @@ import (
 
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/stratecode/lab/internal/orchestratorgo/browserverify"
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilities"
+	"github.com/stratecode/lab/internal/orchestratorgo/capabilities/mcpwrap"
 	"github.com/stratecode/lab/internal/orchestratorgo/capabilitybroker"
 	"github.com/stratecode/lab/internal/orchestratorgo/config"
 	"github.com/stratecode/lab/internal/orchestratorgo/httpapi"
@@ -68,19 +70,23 @@ func New() (*Runtime, error) {
 		UtilityTimeoutSeconds: cfg.LlamaTimeoutSeconds,
 	})
 	initiativeService := initiative.New(cfg, researchService)
+	autonomousRunner := initiative.NewAutonomousRunner(cfg, postgres, redisStore, initiativeService)
 	runtimeWorker := worker.New(cfg, postgres, redisStore, researchService)
 	safeMode := httpapi.NewSafeModeState(cfg.SafeMode)
 	server := &httpapi.Server{
-		Config:          cfg,
-		Postgres:        postgres,
-		Redis:           redisStore,
-		Research:        researchService,
-		Initiatives:     initiativeService,
-		Capabilities:    capabilityClient,
-		SafeMode:        safeMode,
-		Now:             time.Now,
-		Version:         "0.1.0-go-runtime",
-		OpenAIToolsID:   cfg.OpenAIToolsModelID,
+		Config:           cfg,
+		Postgres:         postgres,
+		Redis:            redisStore,
+		Research:         researchService,
+		Initiatives:      initiativeService,
+		AutonomousRunner: autonomousRunner,
+		Capabilities:     capabilityClient,
+		BrowserVerifier:  browserverify.NewClient(cfg.BrowserVerifierBaseURL, cfg.MCPWrapperAPIKey, 20),
+		MCPWrappers:      mcpwrap.NewClient(cfg.MCPWrapperBaseURL, cfg.MCPWrapperAPIKey, 20),
+		SafeMode:         safeMode,
+		Now:              time.Now,
+		Version:          "0.1.0-go-runtime",
+		OpenAIToolsID:    cfg.OpenAIToolsModelID,
 	}
 	broker := capabilitybroker.New(capabilitybroker.Options{
 		Store: postgres,
@@ -92,6 +98,23 @@ func New() (*Runtime, error) {
 		"document.read",
 		"image.analyze",
 		"code.analysis",
+		"shell.exec",
+		"git.status",
+		"git.diff",
+		"git.log",
+		"git.branch",
+		"docker.compose_up",
+		"docker.compose_down",
+		"docker.logs",
+		"docker.ps",
+		"docker.build",
+		"docker.run",
+		"http.check",
+		"browser.verify",
+		"github.read",
+		"jira.read",
+		"slack.read",
+		"slack.notify",
 		"filesystem.read",
 		"filesystem.list",
 		"filesystem.write",
@@ -122,7 +145,7 @@ func New() (*Runtime, error) {
 		postgres.Close()
 		return nil, err
 	}
-	bot := telegram.New(cfg, postgres, redisStore, researchService, initiativeService, capabilityClient, safeMode)
+	bot := telegram.New(cfg, postgres, redisStore, researchService, initiativeService, autonomousRunner, capabilityClient, safeMode)
 	if err := bot.Start(backgroundCtx); err != nil {
 		runtimeWorker.Stop()
 		_ = redisStore.Close()

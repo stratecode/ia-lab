@@ -81,3 +81,39 @@ func TestLegacyAliasResolvesToFilesystemWrite(t *testing.T) {
 		t.Fatalf("expected filesystem.write, got %s", candidate.Name)
 	}
 }
+
+func TestResolveCoderPrefersShellExecForWorkspaceExecution(t *testing.T) {
+	store := &memoryStore{definitions: DefaultDefinitions()}
+	broker := New(Options{Store: store})
+	candidate, _, err := broker.Resolve(context.Background(), "https://github.com/example/repo", "coder", "needs_workspace_execution", []string{"shell", "execute"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Name != "shell.exec" {
+		t.Fatalf("expected shell.exec, got %s", candidate.Name)
+	}
+}
+
+func TestResolveReviewerPrefersHTTPCheckForServiceValidation(t *testing.T) {
+	store := &memoryStore{definitions: DefaultDefinitions()}
+	broker := New(Options{Store: store})
+	candidate, _, err := broker.Resolve(context.Background(), "https://github.com/example/repo", "reviewer", "needs_service_validation", []string{"http"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Name != "http.check" {
+		t.Fatalf("expected http.check, got %s", candidate.Name)
+	}
+}
+
+func TestResolveResearcherPrefersGitHubReadForRepoHostingContext(t *testing.T) {
+	store := &memoryStore{definitions: DefaultDefinitions()}
+	broker := New(Options{Store: store})
+	candidate, _, err := broker.Resolve(context.Background(), "https://github.com/example/repo", "researcher", "needs_repo_hosting_context", []string{"github", "repo-hosting"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Name != "github.read" {
+		t.Fatalf("expected github.read, got %s", candidate.Name)
+	}
+}

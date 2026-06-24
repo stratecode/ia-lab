@@ -270,6 +270,228 @@ func DefaultDefinitions() []domain.CapabilityDefinition {
 			Version:          1,
 		},
 		{
+			Name:                   "shell.exec",
+			Kind:                   "internal",
+			BackendRef:             "shell.exec",
+			AuthorizedAgents:       []string{"coder", "infra"},
+			CapabilityTags:         []string{"shell", "execute", "workspace", "validation"},
+			RiskClass:              "workspace_execute",
+			CostClass:              "low",
+			LatencyClass:           "medium",
+			WorkspaceScopeRequired: true,
+			DefaultPolicy:          map[string]any{"approval_required": true},
+			Enabled:                true,
+			Version:                1,
+		},
+		{
+			Name:                   "git.status",
+			Kind:                   "internal",
+			BackendRef:             "git.status",
+			AuthorizedAgents:       []string{"coder", "reviewer", "infra"},
+			CapabilityTags:         []string{"git", "status", "workspace", "review"},
+			RiskClass:              "read_only",
+			CostClass:              "low",
+			LatencyClass:           "low",
+			WorkspaceScopeRequired: true,
+			Enabled:                true,
+			Version:                1,
+		},
+		{
+			Name:                   "git.diff",
+			Kind:                   "internal",
+			BackendRef:             "git.diff",
+			AuthorizedAgents:       []string{"coder", "reviewer", "infra"},
+			CapabilityTags:         []string{"git", "diff", "workspace", "review", "validation"},
+			RiskClass:              "read_only",
+			CostClass:              "low",
+			LatencyClass:           "low",
+			WorkspaceScopeRequired: true,
+			Enabled:                true,
+			Version:                1,
+		},
+		{
+			Name:                   "git.log",
+			Kind:                   "internal",
+			BackendRef:             "git.log",
+			AuthorizedAgents:       []string{"coder", "reviewer", "infra"},
+			CapabilityTags:         []string{"git", "history", "workspace", "review"},
+			RiskClass:              "read_only",
+			CostClass:              "low",
+			LatencyClass:           "low",
+			WorkspaceScopeRequired: true,
+			Enabled:                true,
+			Version:                1,
+		},
+		{
+			Name:                   "git.branch",
+			Kind:                   "internal",
+			BackendRef:             "git.branch",
+			AuthorizedAgents:       []string{"coder", "infra"},
+			CapabilityTags:         []string{"git", "branch", "workspace"},
+			RiskClass:              "workspace_write",
+			CostClass:              "low",
+			LatencyClass:           "low",
+			WorkspaceScopeRequired: true,
+			DefaultPolicy:          map[string]any{"approval_required": true},
+			Enabled:                true,
+			Version:                1,
+		},
+		{
+			Name:                   "docker.compose_up",
+			Kind:                   "internal",
+			BackendRef:             "docker.compose_up",
+			AuthorizedAgents:       []string{"coder", "infra"},
+			CapabilityTags:         []string{"docker", "compose", "service", "validation"},
+			RiskClass:              "workspace_execute",
+			CostClass:              "medium",
+			LatencyClass:           "high",
+			WorkspaceScopeRequired: true,
+			DefaultPolicy:          map[string]any{"approval_required": true},
+			Enabled:                true,
+			Version:                1,
+		},
+		{
+			Name:                   "docker.compose_down",
+			Kind:                   "internal",
+			BackendRef:             "docker.compose_down",
+			AuthorizedAgents:       []string{"coder", "infra"},
+			CapabilityTags:         []string{"docker", "compose", "service"},
+			RiskClass:              "workspace_execute",
+			CostClass:              "medium",
+			LatencyClass:           "medium",
+			WorkspaceScopeRequired: true,
+			DefaultPolicy:          map[string]any{"approval_required": true},
+			Enabled:                true,
+			Version:                1,
+		},
+		{
+			Name:                   "docker.logs",
+			Kind:                   "internal",
+			BackendRef:             "docker.logs",
+			AuthorizedAgents:       []string{"coder", "reviewer", "infra"},
+			CapabilityTags:         []string{"docker", "logs", "service", "validation"},
+			RiskClass:              "read_only",
+			CostClass:              "medium",
+			LatencyClass:           "medium",
+			WorkspaceScopeRequired: true,
+			Enabled:                true,
+			Version:                1,
+		},
+		{
+			Name:                   "docker.ps",
+			Kind:                   "internal",
+			BackendRef:             "docker.ps",
+			AuthorizedAgents:       []string{"coder", "reviewer", "infra"},
+			CapabilityTags:         []string{"docker", "service", "status", "validation"},
+			RiskClass:              "read_only",
+			CostClass:              "low",
+			LatencyClass:           "low",
+			WorkspaceScopeRequired: true,
+			Enabled:                true,
+			Version:                1,
+		},
+		{
+			Name:                   "docker.build",
+			Kind:                   "internal",
+			BackendRef:             "docker.build",
+			AuthorizedAgents:       []string{"coder", "infra"},
+			CapabilityTags:         []string{"docker", "build", "service"},
+			RiskClass:              "workspace_execute",
+			CostClass:              "high",
+			LatencyClass:           "high",
+			WorkspaceScopeRequired: true,
+			DefaultPolicy:          map[string]any{"approval_required": true},
+			Enabled:                true,
+			Version:                1,
+		},
+		{
+			Name:                   "docker.run",
+			Kind:                   "internal",
+			BackendRef:             "docker.run",
+			AuthorizedAgents:       []string{"coder", "infra"},
+			CapabilityTags:         []string{"docker", "run", "service"},
+			RiskClass:              "workspace_execute",
+			CostClass:              "high",
+			LatencyClass:           "high",
+			WorkspaceScopeRequired: true,
+			DefaultPolicy:          map[string]any{"approval_required": true},
+			Enabled:                true,
+			Version:                1,
+		},
+		{
+			Name:             "http.check",
+			Kind:             "internal",
+			BackendRef:       "http.check",
+			AuthorizedAgents: []string{"coder", "reviewer", "researcher"},
+			CapabilityTags:   []string{"http", "validation", "service", "evidence"},
+			RiskClass:        "read_only",
+			CostClass:        "low",
+			LatencyClass:     "medium",
+			Enabled:          true,
+			Version:          1,
+		},
+		{
+			Name:             "browser.verify",
+			Kind:             "internal",
+			BackendRef:       "browser.verify",
+			AuthorizedAgents: []string{"reviewer", "researcher"},
+			CapabilityTags:   []string{"browser", "validation", "service", "evidence"},
+			RiskClass:        "read_only",
+			CostClass:        "medium",
+			LatencyClass:     "high",
+			Enabled:          true,
+			Version:          1,
+		},
+		{
+			Name:             "github.read",
+			Kind:             "mcp_wrapper",
+			BackendRef:       "github.read",
+			AuthorizedAgents: []string{"researcher", "reviewer"},
+			CapabilityTags:   []string{"github", "repo-hosting", "issues", "prs", "evidence"},
+			RiskClass:        "read_only",
+			CostClass:        "medium",
+			LatencyClass:     "medium",
+			Enabled:          true,
+			Version:          1,
+		},
+		{
+			Name:             "jira.read",
+			Kind:             "mcp_wrapper",
+			BackendRef:       "jira.read",
+			AuthorizedAgents: []string{"researcher", "reviewer"},
+			CapabilityTags:   []string{"jira", "issue-tracker", "tickets", "evidence"},
+			RiskClass:        "read_only",
+			CostClass:        "medium",
+			LatencyClass:     "medium",
+			Enabled:          true,
+			Version:          1,
+		},
+		{
+			Name:             "slack.read",
+			Kind:             "mcp_wrapper",
+			BackendRef:       "slack.read",
+			AuthorizedAgents: []string{"researcher", "reviewer"},
+			CapabilityTags:   []string{"slack", "chatops", "context", "evidence"},
+			RiskClass:        "read_only",
+			CostClass:        "medium",
+			LatencyClass:     "medium",
+			Enabled:          true,
+			Version:          1,
+		},
+		{
+			Name:             "slack.notify",
+			Kind:             "mcp_wrapper",
+			BackendRef:       "slack.notify",
+			AuthorizedAgents: []string{"reviewer", "infra"},
+			CapabilityTags:   []string{"slack", "chatops", "notify"},
+			RiskClass:        "external_write",
+			CostClass:        "low",
+			LatencyClass:     "medium",
+			DefaultPolicy:    map[string]any{"approval_required": true},
+			Enabled:          true,
+			Version:          1,
+		},
+		{
 			Name:                   "filesystem.read",
 			Kind:                   "internal",
 			BackendRef:             "filesystem.read",
@@ -340,11 +562,18 @@ func normalizeCapabilityAlias(value string) string {
 func defaultPolicyAllows(def domain.CapabilityDefinition, agentType string) bool {
 	switch strings.TrimSpace(agentType) {
 	case "coder":
-		return def.Name == "filesystem.write"
+		return def.Name == "filesystem.write" ||
+			def.Name == "shell.exec" ||
+			strings.HasPrefix(def.Name, "git.") ||
+			strings.HasPrefix(def.Name, "docker.") ||
+			def.Name == "http.check"
 	case "researcher":
-		return def.RiskClass == "read_only" && (containsAnyTag(def.CapabilityTags, []string{"evidence", "docs", "search", "research"}) || strings.HasPrefix(def.Name, "web."))
+		return def.RiskClass == "read_only" &&
+			(containsAnyTag(def.CapabilityTags, []string{"evidence", "docs", "search", "research", "browser", "http", "github", "jira", "slack"}) ||
+				strings.HasPrefix(def.Name, "web."))
 	case "reviewer":
-		return def.RiskClass == "read_only" && containsAnyTag(def.CapabilityTags, []string{"review", "validation", "docs", "evidence", "static-analysis", "code-quality"})
+		return (def.RiskClass == "read_only" || def.Name == "slack.notify") &&
+			containsAnyTag(def.CapabilityTags, []string{"review", "validation", "docs", "evidence", "static-analysis", "code-quality", "github", "jira", "slack", "browser", "http", "git"})
 	case "planner":
 		return def.RiskClass == "read_only" && containsAnyTag(def.CapabilityTags, []string{"evidence", "docs", "research", "search"})
 	default:
@@ -405,11 +634,39 @@ func scoreCandidate(def domain.CapabilityDefinition, agentType, intent string, p
 		if containsAnyTag(def.CapabilityTags, []string{"filesystem", "write"}) {
 			score += 20
 		}
+	case "needs_workspace_execution":
+		if containsAnyTag(def.CapabilityTags, []string{"shell", "execute"}) {
+			score += 25
+		}
+	case "needs_git_context":
+		if containsAnyTag(def.CapabilityTags, []string{"git", "review"}) {
+			score += 20
+		}
+	case "needs_service_validation":
+		if containsAnyTag(def.CapabilityTags, []string{"http", "browser", "service"}) {
+			score += 24
+		}
+	case "needs_browser_validation":
+		if containsAnyTag(def.CapabilityTags, []string{"browser", "validation"}) {
+			score += 24
+		}
+	case "needs_repo_hosting_context":
+		if containsAnyTag(def.CapabilityTags, []string{"github", "repo-hosting", "prs", "issues"}) {
+			score += 22
+		}
+	case "needs_issue_tracker_context":
+		if containsAnyTag(def.CapabilityTags, []string{"jira", "issue-tracker", "tickets"}) {
+			score += 22
+		}
+	case "needs_chatops_context":
+		if containsAnyTag(def.CapabilityTags, []string{"slack", "chatops", "notify", "context"}) {
+			score += 22
+		}
 	case "needs_docs_lookup":
 		if containsAnyTag(def.CapabilityTags, []string{"docs", "fetch", "search"}) {
 			score += 20
 		}
-	case "needs_ci_signal", "needs_issue_tracker_context":
+	case "needs_ci_signal":
 		if containsAnyTag(def.CapabilityTags, []string{"evidence", "review"}) {
 			score += 10
 		}
