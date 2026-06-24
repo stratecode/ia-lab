@@ -58,7 +58,7 @@
       },
       "skills": [],
       "experimental": {
-        "localModelLean": true
+        "localModelLean": {{ openclaw_local_model_lean_enabled | tojson }}
       },
       "bootstrapMaxChars": 50000,
       "bootstrapTotalMaxChars": 300000,
@@ -116,9 +116,13 @@
   },
   "tools": {
     "profile": {{ openclaw_tools_profile | tojson }},
+{% if openclaw_tool_search_enabled %}
     "toolSearch": {
       "mode": {{ openclaw_tool_search_mode | tojson }}
     },
+{% else %}
+    "toolSearch": false,
+{% endif %}
     "agentToAgent": {
       "enabled": true
     }

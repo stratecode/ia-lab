@@ -20,7 +20,9 @@ checks = [
     'openclaw_model_api_key:',
     'openclaw_model_context_window:',
     'openclaw_model_force_tool_choice:',
+    'openclaw_local_model_lean_enabled:',
     'openclaw_tools_profile:',
+    'openclaw_tool_search_enabled:',
     'openclaw_tool_search_mode:',
 ]
 missing = [item for item in checks if item not in text]
@@ -30,6 +32,12 @@ if 'default(true' not in text and \"default('true'\" not in text:
     raise SystemExit('expected env-backed true default for openclaw_enabled')
 if \"default('true', true) | bool\" not in text:
     raise SystemExit('expected codex gateway routing to default to true')
+if \"openclaw_model_force_tool_choice: \\\"{{ lookup('env', 'LAB_OPENCLAW_FORCE_TOOL_CHOICE') | default('false', true) | bool }}\\\"\" not in text:
+    raise SystemExit('expected tool choice default to false')
+if \"openclaw_local_model_lean_enabled: \\\"{{ lookup('env', 'LAB_OPENCLAW_LOCAL_MODEL_LEAN') | default('false', true) | bool }}\\\"\" not in text:
+    raise SystemExit('expected local model lean default to false')
+if \"openclaw_tool_search_enabled: \\\"{{ lookup('env', 'LAB_OPENCLAW_TOOL_SEARCH_ENABLED') | default('false', true) | bool }}\\\"\" not in text:
+    raise SystemExit('expected tool search default to false')
 PY"
   [ "$status" -eq 0 ]
 }
@@ -111,13 +119,37 @@ checks = [
     'openclaw.tools.search(...)',
     'openclaw.tools.describe(...)',
     'openclaw.tools.call(...)',
+    '{ path, content }',
+    '{ path, edits }',
+    '{ input }',
+    '{ command }',
     'Do not use ',
     'child_process',
     'tool_search_code.code',
     'Do not send plain-English task text as ',
+    'If a tool validation error says required fields are missing, fix the payload and retry in the same turn.',
+    'If exec returns (no output) and exit code 0, the command succeeded;',
+    'Do not call apply_patch with { patch }',
 ]
-combined = agents + '\\n' + tools
+combined = (agents + '\\n' + tools).replace(chr(96), '')
 missing = [item for item in checks if item not in combined]
+if missing:
+    raise SystemExit('missing: ' + ', '.join(missing))
+PY"
+  [ "$status" -eq 0 ]
+}
+
+@test "openclaw config template makes lean mode and tool-search compaction explicit" {
+  run bash -lc "cd '$repo_root' && python3 - <<'PY'
+from pathlib import Path
+text = Path('roles/openclaw/templates/openclaw.json.j2').read_text()
+checks = [
+    '\"localModelLean\": {{ openclaw_local_model_lean_enabled | tojson }}',
+    '{% if openclaw_tool_search_enabled %}',
+    '\"toolSearch\": false,',
+    '\"mode\": {{ openclaw_tool_search_mode | tojson }}',
+]
+missing = [item for item in checks if item not in text]
 if missing:
     raise SystemExit('missing: ' + ', '.join(missing))
 PY"
