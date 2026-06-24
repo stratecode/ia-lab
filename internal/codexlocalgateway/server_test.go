@@ -831,6 +831,35 @@ func TestResponsesStreamMapsShellFenceToExecCommand(t *testing.T) {
 	}
 }
 
+func TestResponsesStreamMapsShellFenceToToolSearchCodeWhenExecUnavailable(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"```bash\\necho after > hello.txt\\n```\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	payload := `{
+		"model":"qwen-local-code",
+		"stream":true,
+		"input":"Create hello.txt and write after into it.",
+		"tools":[{"type":"function","name":"tool_search_code","parameters":{"type":"object"}}]
+	}`
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(payload)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	for _, want := range []string{`"type":"function_call"`, `"name":"tool_search_code"`, `openclaw.tools.call`, `hello.txt`} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Fatalf("expected stream body to contain %q, got: %s", want, body)
+		}
+	}
+	if bytes.Contains(body, []byte(`"type":"message"`)) {
+		t.Fatalf("shell fence must become a tool_search_code call, not text: %s", body)
+	}
+}
+
 func TestResponsesStreamMapsNarratedShellFenceToExecCommand(t *testing.T) {
 	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -860,6 +889,35 @@ func TestResponsesStreamMapsNarratedShellFenceToExecCommand(t *testing.T) {
 	}
 	if bytes.Contains(body, []byte("response.output_text.delta")) {
 		t.Fatalf("narrated shell fence must become a tool call, not text: %s", body)
+	}
+}
+
+func TestResponsesStreamMapsNarratedShellFenceToToolSearchCodeWhenExecUnavailable(t *testing.T) {
+	gateway, _ := newTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"```bash\\necho after > hello.txt\\ncat hello.txt\\n```\\nContenido de hello.txt:\\nafter\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+
+	payload := `{
+		"model":"qwen-local-code",
+		"stream":true,
+		"input":"Create hello.txt, verify it, and summarize the result.",
+		"tools":[{"type":"function","name":"tool_search_code","parameters":{"type":"object"}}]
+	}`
+	res, err := http.DefaultClient.Do(authedRequest(t, http.MethodPost, gateway.URL+"/v1/responses", strings.NewReader(payload)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	for _, want := range []string{`"type":"function_call"`, `"name":"tool_search_code"`, `cat hello.txt`} {
+		if !bytes.Contains(body, []byte(want)) {
+			t.Fatalf("expected stream body to contain %q, got: %s", want, body)
+		}
+	}
+	if bytes.Contains(body, []byte(`"type":"message"`)) {
+		t.Fatalf("narrated shell fence must become a tool_search_code call, not text: %s", body)
 	}
 }
 

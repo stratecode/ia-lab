@@ -115,6 +115,10 @@
     "enabled": true
   },
   "tools": {
+    "profile": {{ openclaw_tools_profile | tojson }},
+    "toolSearch": {
+      "mode": {{ openclaw_tool_search_mode | tojson }}
+    },
     "agentToAgent": {
       "enabled": true
     }

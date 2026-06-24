@@ -410,14 +410,17 @@ func parsePrefixedToolCall(text string) (fallbackToolCall, bool, error) {
 }
 
 func shellFenceToolCall(text string, tools json.RawMessage) (responseItem, bool) {
-	if !toolNameAllowed("exec_command", tools) {
-		return responseItem{}, false
-	}
 	command, ok := shellFenceCommand(text)
 	if !ok {
 		return responseItem{}, false
 	}
-	return execCommandItem("call_exec_command", command), true
+	if toolNameAllowed("exec_command", tools) {
+		return execCommandItem("call_exec_command", command), true
+	}
+	if toolNameAllowed("tool_search_code", tools) {
+		return toolSearchCodeExecItem("call_tool_search_code_exec", command), true
+	}
+	return responseItem{}, false
 }
 
 func shellFenceCommand(text string) (string, bool) {
@@ -748,6 +751,44 @@ func execCommandItem(callID, command string) responseItem {
 		Name:      "exec_command",
 		Arguments: mustJSON(map[string]string{"cmd": command}),
 	}
+}
+
+func toolSearchCodeExecItem(callID, command string) responseItem {
+	return responseItem{
+		ID:        "fc_" + callID,
+		Type:      "function_call",
+		Status:    "completed",
+		CallID:    callID,
+		Name:      "tool_search_code",
+		Arguments: mustJSON(map[string]string{"code": buildToolSearchCodeExec(command)}),
+	}
+}
+
+func buildToolSearchCodeExec(command string) string {
+	quotedCommand := mustJSON(command)
+	return strings.TrimSpace(fmt.Sprintf(`
+const hits = await openclaw.tools.search("exec shell command runtime");
+const target =
+  hits.find((hit) => hit && (hit.name === "exec" || hit.name === "bash" || hit.name === "exec_command")) ??
+  hits[0];
+if (!target) {
+  throw new Error("exec tool unavailable in tool_search_code catalog");
+}
+const tool = await openclaw.tools.describe(target.id);
+const properties = tool?.parameters?.properties ?? {};
+const args = {};
+if (Object.prototype.hasOwnProperty.call(properties, "command")) {
+  args.command = %s;
+} else if (Object.prototype.hasOwnProperty.call(properties, "cmd")) {
+  args.cmd = %s;
+} else {
+  args.command = %s;
+}
+if (Object.prototype.hasOwnProperty.call(properties, "yieldMs")) {
+  args.yieldMs = 1000;
+}
+return await openclaw.tools.call(tool.id, args);
+`, quotedCommand, quotedCommand, quotedCommand))
 }
 
 func mustJSON(value any) string {

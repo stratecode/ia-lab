@@ -501,6 +501,8 @@ openclaw_model_force_tool_choice: "{{ lookup('env', 'LAB_OPENCLAW_FORCE_TOOL_CHO
 openclaw_model_parallel_tool_calls: "{{ lookup('env', 'LAB_OPENCLAW_PARALLEL_TOOL_CALLS') | default('false', true) | bool }}"
 openclaw_llama_max_tokens: "{{ lookup('env', 'LAB_OPENCLAW_MAX_TOKENS') | default('4096', true) | int }}"
 openclaw_llama_timeout_seconds: "{{ lookup('env', 'LAB_OPENCLAW_TIMEOUT_SECONDS') | default('300', true) | int }}"
+openclaw_tools_profile: "{{ lookup('env', 'LAB_OPENCLAW_TOOLS_PROFILE') | default('coding', true) }}"
+openclaw_tool_search_mode: "{{ lookup('env', 'LAB_OPENCLAW_TOOL_SEARCH_MODE') | default('code', true) }}"
 openclaw_telegram_enabled: "{{ lookup('env', 'LAB_OPENCLAW_TELEGRAM_ENABLED') | default('true', true) | bool }}"
 openclaw_telegram_channel_name: "{{ lookup('env', 'LAB_OPENCLAW_TELEGRAM_CHANNEL_NAME') | default('telegram-bot', true) }}"
 openclaw_telegram_bot_token: "{{ lookup('env', 'LAB_OPENCLAW_TELEGRAM_BOT_TOKEN') | default(orchestrator_telegram_bot_token, true) }}"

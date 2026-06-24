@@ -20,6 +20,8 @@ checks = [
     'openclaw_model_api_key:',
     'openclaw_model_context_window:',
     'openclaw_model_force_tool_choice:',
+    'openclaw_tools_profile:',
+    'openclaw_tool_search_mode:',
 ]
 missing = [item for item in checks if item not in text]
 if missing:
