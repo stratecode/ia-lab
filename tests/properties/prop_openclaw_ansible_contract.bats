@@ -15,13 +15,19 @@ checks = [
     'openclaw_model_provider_key:',
     'openclaw_model_id:',
     'openclaw_model_provider_api:',
-    'openclaw_llama_base_url:',
+    'openclaw_route_via_codex_gateway:',
+    'openclaw_model_base_url:',
+    'openclaw_model_api_key:',
+    'openclaw_model_context_window:',
+    'openclaw_model_force_tool_choice:',
 ]
 missing = [item for item in checks if item not in text]
 if missing:
     raise SystemExit('missing: ' + ', '.join(missing))
 if 'default(true' not in text and \"default('true'\" not in text:
     raise SystemExit('expected env-backed true default for openclaw_enabled')
+if \"default('true', true) | bool\" not in text:
+    raise SystemExit('expected codex gateway routing to default to true')
 PY"
   [ "$status" -eq 0 ]
 }

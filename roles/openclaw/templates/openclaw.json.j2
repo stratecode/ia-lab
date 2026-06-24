@@ -13,8 +13,8 @@
   "models": {
     "providers": {
       "{{ openclaw_model_provider_key }}": {
-        "baseUrl": {{ openclaw_llama_base_url | tojson }},
-        "apiKey": {{ openclaw_llama_api_key | tojson }},
+        "baseUrl": {{ openclaw_model_base_url | tojson }},
+        "apiKey": {{ openclaw_model_api_key | tojson }},
         "api": {{ openclaw_model_provider_api | tojson }},
         "timeoutSeconds": {{ openclaw_llama_timeout_seconds }},
         "models": [
@@ -23,7 +23,7 @@
             "name": {{ openclaw_model_name | tojson }},
             "reasoning": false,
             "input": ["text"],
-            "contextWindow": {{ openclaw_llama_context_window }},
+            "contextWindow": {{ openclaw_model_context_window }},
             "maxTokens": {{ openclaw_llama_max_tokens }},
             "cost": {
               "input": 0,
@@ -39,12 +39,19 @@
   "agents": {
     "defaults": {
       "models": {
-        "{{ openclaw_model_provider_key }}/{{ openclaw_model_id }}": {}
+        "{{ openclaw_model_provider_key }}/{{ openclaw_model_id }}": {
+{% if openclaw_model_force_tool_choice %}
+          "params": {
+            "tool_choice": "required",
+            "parallel_tool_calls": {{ openclaw_model_parallel_tool_calls | tojson }}
+          }
+{% endif %}
+        }
       },
       "model": {
         "primary": "{{ openclaw_model_provider_key }}/{{ openclaw_model_id }}"
       },
-      "contextTokens": {{ openclaw_llama_context_window }},
+      "contextTokens": {{ openclaw_model_context_window }},
       "compaction": {
         "reserveTokens": 4096,
         "reserveTokensFloor": 2048

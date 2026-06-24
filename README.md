@@ -7,9 +7,10 @@ Ansible-managed homelab infrastructure. Provisions and configures an Ubuntu serv
 - Observed host state on June 24, 2026 before reconciliation: `codex-local-gateway`, `llama-cpp-code`, `nginx`, `wg-quick`, `prometheus`, `alertmanager`, and `grafana` were active; `orchestrator`, `aider`, and `open-webui` were absent.
 - Repo target after this cleanup: `orchestrator + lab-agent + lab-agentd` return as the primary operating model.
 - `Codex gateway` remains supported as a complementary slice for direct repo work, not the primary source of operational truth.
-- `OpenClaw` is also treated as a complementary surface. Its local model provider
-  is pinned to the `llama.cpp` `coder` instance through Ansible, while the
-  orchestrator remains the governing runtime.
+- `OpenClaw` is also treated as a complementary surface. Its Ansible defaults
+  now route model traffic through `codex-local-gateway` instead of talking to
+  `llama.cpp` directly, while raw `llama.cpp` remains the underlying inference
+  engine and the orchestrator remains the governing runtime.
 
 ## Prerequisites
 

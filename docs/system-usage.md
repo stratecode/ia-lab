@@ -663,6 +663,14 @@ LAB_AGENT_WORKSPACE_ROOT="/abs/path/to/current/workspace" \
 
 This command registers the local bridge, creates the objective, processes local claims, auto-approves objective-scoped `local_bridge_tool` approvals by default, and waits until the initiative reaches a terminal state.
 
+## OpenClaw operational note
+
+OpenClaw remains a complementary operator surface, but its default model route in Ansible now goes through `codex-local-gateway` instead of talking directly to raw `llama.cpp`.
+
+That matters for one reason: the gateway is the only local path in this lab that is deliberately configured around tool use, repository edits, and validation-oriented coding turns. The OpenClaw model entry is also rendered with forced tool choice by default on that path.
+
+If you want the old direct-model behavior for a lightweight chat-only slice, override `LAB_OPENCLAW_ROUTE_VIA_CODEX_GATEWAY=false` before running the OpenClaw role.
+
 ### Open the local bridge cockpit
 
 ```bash
