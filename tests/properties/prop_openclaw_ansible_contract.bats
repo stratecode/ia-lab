@@ -83,3 +83,43 @@ if missing:
 PY"
   [ "$status" -eq 0 ]
 }
+
+@test "openclaw role patches direct-chat prompt to suppress NO_REPLY guidance" {
+  run bash -lc "cd '$repo_root' && python3 - <<'PY'
+from pathlib import Path
+text = Path('roles/openclaw/tasks/main.yml').read_text()
+checks = [
+    'Patch OpenClaw direct-chat prompt to suppress silent replies',
+    'system-prompt-config-*.js',
+    'const directRuntimeChat = params.runtimeChatType === \"direct\" || params.runtimeChatType === \"dm\";',
+    'const hasDirectConversationContext = typeof params.extraSystemPrompt === \"string\" && params.extraSystemPrompt.includes(\"direct conversation.\");',
+    'const silentReplyPromptMode = sourceMessageToolOnly || directRuntimeChat || hasDirectConversationContext ? \"none\" : params.silentReplyPromptMode ?? \"generic\";',
+]
+missing = [item for item in checks if item not in text]
+if missing:
+    raise SystemExit('missing: ' + ', '.join(missing))
+PY"
+  [ "$status" -eq 0 ]
+}
+
+@test "openclaw workspace guidance defines tool_search_code bridge contract" {
+  run bash -lc "cd '$repo_root' && python3 - <<'PY'
+from pathlib import Path
+agents = Path('roles/openclaw/templates/workspace-AGENTS.md.j2').read_text()
+tools = Path('roles/openclaw/templates/workspace-TOOLS.md.j2').read_text()
+checks = [
+    'openclaw.tools.search(...)',
+    'openclaw.tools.describe(...)',
+    'openclaw.tools.call(...)',
+    'Do not use ',
+    'child_process',
+    'tool_search_code.code',
+    'Do not send plain-English task text as ',
+]
+combined = agents + '\\n' + tools
+missing = [item for item in checks if item not in combined]
+if missing:
+    raise SystemExit('missing: ' + ', '.join(missing))
+PY"
+  [ "$status" -eq 0 ]
+}

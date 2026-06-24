@@ -108,6 +108,54 @@
       changed_when: "'up to date' not in (openclaw_npm_install.stdout | lower)"
       when: not ansible_check_mode
 
+    - name: Patch OpenClaw direct-chat prompt to suppress silent replies
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 - <<'PY'
+        from pathlib import Path
+
+        dist_dir = Path("{{ openclaw_user_home }}/.nvm/versions/node/{{ openclaw_node_version }}/lib/node_modules/openclaw/dist")
+        original = 'const silentReplyPromptMode = sourceMessageToolOnly ? "none" : params.silentReplyPromptMode ?? "generic";'
+        patched = (
+            'const directRuntimeChat = params.runtimeChatType === "direct" || params.runtimeChatType === "dm";\n\t'
+            'const hasDirectConversationContext = typeof params.extraSystemPrompt === "string" && params.extraSystemPrompt.includes("direct conversation.");\n\t'
+            'const silentReplyPromptMode = sourceMessageToolOnly || directRuntimeChat || hasDirectConversationContext ? "none" : params.silentReplyPromptMode ?? "generic";'
+        )
+
+        matched = False
+        changed = False
+        for path in dist_dir.glob("system-prompt-config-*.js"):
+            text = path.read_text()
+            if patched in text:
+                matched = True
+                print(f"already-patched {path}")
+                continue
+            legacy = (
+                'const directRuntimeChat = params.runtimeChatType === "direct" || params.runtimeChatType === "dm";\n\t'
+                'const silentReplyPromptMode = sourceMessageToolOnly || directRuntimeChat ? "none" : params.silentReplyPromptMode ?? "generic";'
+            )
+            if legacy in text:
+                path.write_text(text.replace(legacy, patched, 1))
+                matched = True
+                changed = True
+                print(f"repatched {path}")
+                continue
+            if original in text:
+                path.write_text(text.replace(original, patched, 1))
+                matched = True
+                changed = True
+                print(f"patched {path}")
+        if not matched:
+            raise SystemExit("OpenClaw prompt patch target not found")
+        print("changed=" + ("true" if changed else "false"))
+        PY
+      args:
+        executable: /bin/bash
+      register: openclaw_prompt_patch
+      changed_when: "'patched ' in openclaw_prompt_patch.stdout"
+      when: not ansible_check_mode
+      notify: Restart openclaw gateway
+
     - name: Ensure operator npm-global bin directory exists
       ansible.builtin.file:
         path: "{{ openclaw_user_home }}/.npm-global/bin"

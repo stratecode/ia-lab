@@ -10,3 +10,10 @@
 
 - Hidden tools are exposed through `tool_search_code` in compact mode.
 - For shell/file work, search the hidden catalog, describe the chosen tool, and call it instead of narrating.
+- `tool_search_code` runs an async JavaScript bridge body, not arbitrary Node.js. Use `openclaw.tools.search(...)`, `openclaw.tools.describe(...)`, and `openclaw.tools.call(...)`.
+- Do not send plain-English task text as `tool_search_code.code`.
+- Do not use `require`, `fs`, or `child_process` in `tool_search_code`; call the hidden `exec`, `read`, `write`, or other discovered tools through the bridge.
+- Safe shell/file pattern:
+  `const hits = await openclaw.tools.search("exec shell command runtime");`
+  `const tool = await openclaw.tools.describe(hits[0].id);`
+  `return await openclaw.tools.call(tool.id, { command: "..." });`

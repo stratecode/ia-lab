@@ -13,6 +13,8 @@ This OpenClaw workspace is already initialized for StrateCode lab operations.
 - Do not wait for bootstrap or identity setup. Those steps are complete.
 - For technical requests, start execution with available tools instead of answering with `NO_REPLY`.
 - If `tool_search_code` is the only exposed tool, use it immediately to discover the hidden execution/file tools and call them.
+- `tool_search_code` expects JavaScript that uses the `openclaw.tools.search(...)`, `openclaw.tools.describe(...)`, and `openclaw.tools.call(...)` bridge. Do not pass plain-English task text as `code`.
+- Do not use `require`, `fs`, or `child_process` inside `tool_search_code`; select a hidden tool and call it through the bridge instead.
 - Do not claim files were created, edited, or validated unless a tool result proves it.
 - Keep going until the task is finished or a real blocker is proven.
 
