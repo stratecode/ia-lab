@@ -182,26 +182,32 @@
     - name: Install aider runtime
       ansible.builtin.import_role:
         name: aider
+      when: not retired_stack_cleanup_enabled
 
     - name: Install orchestrator platform
       ansible.builtin.import_role:
         name: orchestrator
+      when: not retired_stack_cleanup_enabled
 
     - name: Configure Codex host runtime
       ansible.builtin.import_role:
         name: codex_host
+      when: not retired_stack_cleanup_enabled
 
     - name: Install Codex local gateway
       ansible.builtin.import_role:
         name: codex_local_gateway
+      when: not retired_stack_cleanup_enabled
 
     - name: Install Open WebUI
       ansible.builtin.import_role:
         name: open_webui
+      when: not retired_stack_cleanup_enabled
 
     - name: Install OpenClaw gateway
       ansible.builtin.import_role:
         name: openclaw
+      when: not retired_stack_cleanup_enabled
 
     - name: Install monitoring web console
       ansible.builtin.import_role:

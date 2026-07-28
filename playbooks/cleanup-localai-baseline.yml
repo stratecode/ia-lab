@@ -1,0 +1,256 @@
+---
+- name: Reconcile lab to the LocalAI evaluation baseline
+  hosts: all
+  become: true
+
+  vars:
+    retired_system_units:
+      - aider-cleanup.timer
+      - aider-cleanup.service
+      - codex-local-gateway.service
+      - codex-worktree-cleanup.timer
+      - codex-worktree-cleanup.service
+      - orchestrator.service
+      - orchestrator-cap-docs.service
+      - orchestrator-cap-images.service
+      - orchestrator-workspace-cleanup.timer
+      - orchestrator-workspace-cleanup.service
+      - orchestrator-pg-backup.timer
+      - orchestrator-pg-backup.service
+    retired_system_unit_files:
+      - /etc/systemd/system/aider-cleanup.timer
+      - /etc/systemd/system/aider-cleanup.service
+      - /etc/systemd/system/codex-local-gateway.service
+      - /etc/systemd/system/codex-worktree-cleanup.timer
+      - /etc/systemd/system/codex-worktree-cleanup.service
+      - /etc/systemd/system/orchestrator.service
+      - /etc/systemd/system/orchestrator-cap-docs.service
+      - /etc/systemd/system/orchestrator-cap-images.service
+      - /etc/systemd/system/orchestrator-workspace-cleanup.timer
+      - /etc/systemd/system/orchestrator-workspace-cleanup.service
+      - /etc/systemd/system/orchestrator-pg-backup.timer
+      - /etc/systemd/system/orchestrator-pg-backup.service
+    retired_runtime_paths:
+      - /run/aider
+      - /srv/ai-lab/codex-local-gateway/runtime
+      - /srv/ai-lab/codex-local-gateway
+      - /srv/ai-lab/openclaw
+      - /srv/ai-lab/orchestrator/runtime
+      - /srv/ai-lab/orchestrator/sidecars
+      - /srv/ai-lab/orchestrator/sidecars-venv
+      - /srv/ai-lab/orchestrator/workspaces
+      - /srv/ai-lab/orchestrator
+      - /opt/docker/orchestrator
+      - /opt/docker/postgres
+      - /opt/openclaw-agent
+      - /usr/local/bin/aider-task
+      - /usr/local/bin/aider-cleanup
+      - /etc/logrotate.d/aider
+      - "/etc/letsencrypt/renewal/{{ openclaw_public_domain }}.conf"
+      - /var/snap/prometheus/common/file_sd/codex-local-gateway.yml
+      - /var/snap/prometheus/common/file_sd/orchestrator-targets.yml
+    retired_nginx_sites:
+      - openclaw-local.conf
+      - openclaw-public.conf
+      - openclaw-subdomain.conf
+
+  pre_tasks:
+    - name: Verify preserved WireGuard interface before cleanup
+      ansible.builtin.command:
+        argv:
+          - wg
+          - show
+          - wg0
+      changed_when: false
+
+    - name: Verify preserved services before cleanup
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - "{{ item }}"
+      loop:
+        - wg-quick@wg0.service
+        - nginx.service
+        - snap.prometheus.prometheus.service
+        - prometheus-alertmanager.service
+        - prometheus-node-exporter.service
+        - llama-cpp-code.service
+        - llama-cpp-planner.service
+        - llama-cpp-utility.service
+        - llama-cpp-embeddings.service
+      changed_when: false
+
+  tasks:
+    - name: Stop retired Docker Compose projects
+      ansible.builtin.shell: |
+        set -euo pipefail
+        changed=false
+        for compose_file in \
+          /opt/docker/orchestrator/docker-compose.yml \
+          /srv/ai-lab/open-webui/docker-compose.yml
+        do
+          if [[ -f "${compose_file}" ]]; then
+            docker compose -f "${compose_file}" down -v --remove-orphans
+            changed=true
+          fi
+        done
+        printf 'changed=%s\n' "${changed}"
+      args:
+        executable: /bin/bash
+      register: retired_compose_cleanup
+      changed_when: "'changed=true' in retired_compose_cleanup.stdout"
+
+    - name: Stop and disable retired system services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop: "{{ retired_system_units }}"
+      failed_when: false
+
+    - name: Stop and disable the retired OpenClaw user service
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - --user
+          - "--machine={{ openclaw_user }}@.host"
+          - disable
+          - --now
+          - openclaw-gateway.service
+      register: openclaw_user_service_cleanup
+      changed_when: >-
+        'Removed ' in openclaw_user_service_cleanup.stdout
+        or 'Removed ' in openclaw_user_service_cleanup.stderr
+      failed_when: >-
+        openclaw_user_service_cleanup.rc != 0
+        and 'does not exist' not in openclaw_user_service_cleanup.stderr
+        and 'not loaded' not in openclaw_user_service_cleanup.stderr
+
+    - name: Remove retired OpenClaw user unit files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ openclaw_systemd_user_dir }}/openclaw-gateway.service"
+        - "{{ openclaw_systemd_user_dir }}/openclaw-gateway.service.bak"
+        - "{{ openclaw_systemd_user_dir }}/default.target.wants/openclaw-gateway.service"
+
+    - name: Remove retired system unit files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ retired_system_unit_files }}"
+
+    - name: Remove retired runtime data without deleting secret-bearing configuration
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ retired_runtime_paths }}"
+
+    - name: Remove retired OpenClaw Nginx sites
+      ansible.builtin.file:
+        path: "{{ item.0 }}/{{ item.1 }}"
+        state: absent
+      loop: "{{ ['/etc/nginx/sites-enabled', '/etc/nginx/sites-available'] | product(retired_nginx_sites) | list }}"
+      notify: Reload nginx
+
+    - name: Remove residual Open WebUI Docker volume
+      ansible.builtin.command:
+        argv:
+          - docker
+          - volume
+          - rm
+          - open-webui
+      register: open_webui_volume_cleanup
+      changed_when: open_webui_volume_cleanup.rc == 0
+      failed_when: >-
+        open_webui_volume_cleanup.rc != 0
+        and 'no such volume' not in open_webui_volume_cleanup.stderr | lower
+
+    - name: Remove residual orchestrator Docker network
+      ansible.builtin.command:
+        argv:
+          - docker
+          - network
+          - rm
+          - orchestrator_default
+      register: orchestrator_network_cleanup
+      changed_when: orchestrator_network_cleanup.rc == 0
+      failed_when: >-
+        orchestrator_network_cleanup.rc != 0
+        and 'not found' not in orchestrator_network_cleanup.stderr | lower
+
+    - name: Remove Redis runtime no longer required by the preserved baseline
+      ansible.builtin.apt:
+        name: redis-server
+        state: absent
+        purge: true
+
+    - name: Reload systemd after retired unit cleanup
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Flush service handlers before verification
+      ansible.builtin.meta: flush_handlers
+
+  post_tasks:
+    - name: Verify preserved services after cleanup
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-active
+          - "{{ item }}"
+      loop:
+        - wg-quick@wg0.service
+        - nginx.service
+        - snap.prometheus.prometheus.service
+        - prometheus-alertmanager.service
+        - prometheus-node-exporter.service
+        - llama-cpp-code.service
+        - llama-cpp-planner.service
+        - llama-cpp-utility.service
+        - llama-cpp-embeddings.service
+      changed_when: false
+
+    - name: Verify WireGuard remains enabled across reboots
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - is-enabled
+          - wg-quick@wg0.service
+      changed_when: false
+
+    - name: Verify preserved HTTP health endpoints
+      ansible.builtin.uri:
+        url: "{{ item }}"
+        status_code: 200
+        return_content: false
+      loop:
+        - http://127.0.0.1:3000/api/health
+        - http://127.0.0.1:9090/prometheus/-/ready
+        - http://127.0.0.1:8080/health
+        - http://127.0.0.1:8082/health
+        - http://127.0.0.1:8083/health
+        - http://127.0.0.1:8084/health
+
+    - name: Verify retired ports are closed
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ item }}"
+        state: stopped
+        timeout: 5
+      loop:
+        - 5432
+        - 6379
+        - 8100
+        - 8180
+        - 8221
+        - 8222
+        - 18789
+
+  handlers:
+    - name: Reload nginx
+      ansible.builtin.systemd:
+        name: nginx.service
+        state: reloaded
