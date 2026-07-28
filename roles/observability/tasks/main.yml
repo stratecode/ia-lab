@@ -110,15 +110,6 @@
                 summary: Host temperature is high
                 description: A hardware sensor is reporting above 80C.
 
-            - alert: CodexGatewayDown
-              expr: up{job="codex-local-gateway"} == 0
-              for: 2m
-              labels:
-                severity: critical
-              annotations:
-                summary: Codex local gateway is down
-                description: Prometheus cannot scrape the Codex local gateway.
-
             - alert: LlamaCppDown
               expr: up{job="llama-cpp-code"} == 0
               for: 2m
@@ -127,33 +118,6 @@
               annotations:
                 summary: llama.cpp code server is down
                 description: Prometheus cannot scrape llama-cpp-code.
-
-            - alert: CodexGatewayHighErrorRate
-              expr: sum(rate(codex_gateway_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(codex_gateway_requests_total[5m])), 1) > 0.10
-              for: 5m
-              labels:
-                severity: warning
-              annotations:
-                summary: Codex gateway error rate is high
-                description: More than 10% of Codex gateway requests are failing with 5xx responses.
-
-            - alert: CodexGatewayHighLatency
-              expr: histogram_quantile(0.95, sum(rate(codex_gateway_request_duration_seconds_bucket[5m])) by (le)) > 30
-              for: 5m
-              labels:
-                severity: warning
-              annotations:
-                summary: Codex gateway latency is high
-                description: p95 Codex gateway request latency is above 30 seconds.
-
-            - alert: CodexGatewayToolParseErrors
-              expr: rate(codex_gateway_tool_parse_errors_total[5m]) > 0
-              for: 5m
-              labels:
-                severity: warning
-              annotations:
-                summary: Codex gateway tool-call parsing is failing
-                description: The local model is not producing valid native tool calls or fallback JSON for required tools.
 
             - alert: LlamaCppMemoryHigh
               expr: max(llama_cpp_memory_usage_percent{instance="llama-cpp-code"}) > 90
@@ -201,12 +165,6 @@
           metrics_path: /prometheus/metrics
           static_configs:
             - targets: ["localhost:9090"]
-
-        - job_name: "codex-local-gateway"
-          metrics_path: /metrics
-          file_sd_configs:
-            - files:
-                - /var/snap/prometheus/common/file_sd/*.yml
 
         - job_name: "llama-cpp-code"
           metrics_path: /metrics
@@ -270,84 +228,8 @@
         "panels": [
           {
             "type": "timeseries",
-            "title": "Codex Gateway Request Rate",
-            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
-            "targets": [
-              {"expr": "sum by (endpoint) (rate(codex_gateway_requests_total[5m]))", "legendFormat": "{% raw %}{{endpoint}}{% endraw %}"}
-            ]
-          },
-          {
-            "type": "timeseries",
-            "title": "Codex Gateway Error Rate",
-            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
-            "targets": [
-              {"expr": "sum by (status) (rate(codex_gateway_requests_total{status=~\"4..|5..\"}[5m]))", "legendFormat": "{% raw %}{{status}}{% endraw %}"}
-            ]
-          },
-          {
-            "type": "timeseries",
-            "title": "Codex Gateway p50/p95 Latency",
-            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
-            "targets": [
-              {"expr": "histogram_quantile(0.50, sum(rate(codex_gateway_request_duration_seconds_bucket[5m])) by (le, endpoint))", "legendFormat": "p50 {% raw %}{{endpoint}}{% endraw %}"},
-              {"expr": "histogram_quantile(0.95, sum(rate(codex_gateway_request_duration_seconds_bucket[5m])) by (le, endpoint))", "legendFormat": "p95 {% raw %}{{endpoint}}{% endraw %}"}
-            ]
-          },
-          {
-            "type": "timeseries",
-            "title": "Upstream Latency",
-            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 8},
-            "targets": [
-              {"expr": "histogram_quantile(0.95, sum(rate(codex_gateway_upstream_duration_seconds_bucket[5m])) by (le, endpoint))", "legendFormat": "p95 {% raw %}{{endpoint}}{% endraw %}"}
-            ]
-          },
-          {
-            "type": "timeseries",
-            "title": "Tokens",
-            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 8},
-            "targets": [
-              {"expr": "sum by (type) (rate(codex_gateway_tokens_total[5m]))", "legendFormat": "{% raw %}{{type}}{% endraw %}"}
-            ]
-          },
-          {
-            "type": "timeseries",
-            "title": "Streams",
-            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
-            "targets": [
-              {"expr": "sum by (status) (rate(codex_gateway_streams_total[5m]))", "legendFormat": "{% raw %}{{status}}{% endraw %}"}
-            ]
-          },
-          {
-            "type": "timeseries",
-            "title": "Tool Calls",
-            "gridPos": {"h": 8, "w": 8, "x": 0, "y": 16},
-            "targets": [
-              {"expr": "sum by (source, name) (rate(codex_gateway_tool_calls_total[5m]))", "legendFormat": "{% raw %}{{source}} {{name}}{% endraw %}"},
-              {"expr": "rate(codex_gateway_tool_outputs_total[5m])", "legendFormat": "tool outputs"}
-            ]
-          },
-          {
-            "type": "timeseries",
-            "title": "Tool Parse Errors / Compactions",
-            "gridPos": {"h": 8, "w": 8, "x": 8, "y": 16},
-            "targets": [
-              {"expr": "rate(codex_gateway_tool_parse_errors_total[5m])", "legendFormat": "parse errors"},
-              {"expr": "rate(codex_gateway_compactions_total[5m])", "legendFormat": "compactions"},
-              {"expr": "rate(codex_gateway_sse_failures_total[5m])", "legendFormat": "sse failures"}
-            ]
-          },
-          {
-            "type": "timeseries",
-            "title": "Response Store",
-            "gridPos": {"h": 8, "w": 8, "x": 16, "y": 16},
-            "targets": [
-              {"expr": "sum by (result) (rate(codex_gateway_response_store_total[5m]))", "legendFormat": "{% raw %}{{result}}{% endraw %}"}
-            ]
-          },
-          {
-            "type": "timeseries",
             "title": "llama.cpp Memory / KV / Queue",
-            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
             "targets": [
               {"expr": "llama_cpp_memory_usage_percent{instance=\"llama-cpp-code\"}", "legendFormat": "memory %"},
               {"expr": "llama_cpp_kv_cache_usage_percent{instance=\"llama-cpp-code\"}", "legendFormat": "kv cache %"},
@@ -357,9 +239,9 @@
           {
             "type": "stat",
             "title": "Service Status",
-            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
             "targets": [
-              {"expr": "up{job=~\"codex-local-gateway|llama-cpp-code|node\"}", "legendFormat": "{% raw %}{{job}}{% endraw %}"}
+              {"expr": "up{job=~\"prometheus|llama-cpp-code|node\"}", "legendFormat": "{% raw %}{{job}}{% endraw %}"}
             ]
           },
           {
@@ -432,12 +314,12 @@
         ],
         "schemaVersion": 39,
         "style": "dark",
-        "tags": ["lab", "codex"],
+        "tags": ["lab", "baseline"],
         "templating": {"list": []},
         "time": {"from": "now-6h", "to": "now"},
         "timezone": "browser",
-        "title": "Codex Local Runner",
-        "uid": "codex-local-runner",
+        "title": "Lab Baseline",
+        "uid": "lab-baseline",
         "version": 1
       }
   when: grafana_enabled
@@ -470,19 +352,44 @@
         grafana-data:
   when: grafana_enabled
 
-- name: Install Grafana environment file
+- name: Check existing Grafana environment file
+  ansible.builtin.stat:
+    path: /srv/ai-lab/observability/grafana.env
+  register: observability_grafana_env
+  when: grafana_enabled
+
+- name: Require an existing Grafana environment when its vault password is unavailable
+  ansible.builtin.assert:
+    that:
+      - observability_grafana_env.stat.exists
+    fail_msg: >-
+      Define vault_grafana_admin_password before provisioning Grafana for the
+      first time. The existing secret file is preserved when that variable is
+      intentionally unavailable.
+  when:
+    - grafana_enabled
+    - vault_grafana_admin_password is not defined
+
+- name: Install Grafana environment file from vault
   ansible.builtin.copy:
     dest: /srv/ai-lab/observability/grafana.env
     mode: "0600"
     content: |
       GF_SECURITY_ADMIN_USER={{ grafana_admin_user }}
       GF_SECURITY_ADMIN_PASSWORD={{ grafana_admin_password }}
-  when: grafana_enabled
+  when:
+    - grafana_enabled
+    - vault_grafana_admin_password is defined
 
 - name: Start Grafana stack
   ansible.builtin.command: docker compose up -d
   args:
     chdir: /srv/ai-lab/observability
+  register: observability_grafana_compose
+  changed_when: >-
+    'Created' in observability_grafana_compose.stderr
+    or 'Started' in observability_grafana_compose.stderr
+    or 'Recreated' in observability_grafana_compose.stderr
   when: grafana_enabled
 
 - name: Enable and start alertmanager

@@ -36,6 +36,7 @@ The cleanup retires:
 - Redis, which is not required by the preserved baseline
 - obsolete Prometheus file-discovery targets for the orchestrator and Codex
   gateway
+- obsolete Codex/Orchestrator alert rules and Grafana dashboards
 
 The requested name was `OpenCloud`; no deployed component with that name was
 found. The installed component matching the scope was OpenClaw, and that is the
@@ -95,6 +96,8 @@ The cleanup does not delete:
 - retained OpenClaw/Codex/Orchestrator configuration that may contain tokens
 - TLS private keys or archived certificates
 - PostgreSQL dumps and pre-cleanup archives under `/srv/ai-lab/backups`
+- the one-time pre-migration Grafana database backup created before removing
+  obsolete dashboard resources
 - repository checkouts or Codex workspaces that may contain user work
 
 The OpenClaw certificate renewal file is removed so the retired endpoint is no
@@ -115,5 +118,6 @@ Observed final state:
 - only the Grafana application container remained
 - WireGuard was active, enabled, and listening on UDP `51820`
 - Grafana, Prometheus, and all `llama.cpp` health checks passed
+- Prometheus exposed no Codex or Orchestrator target, rule, or dashboard query
 - no retired unit or retired application port remained
 - Nginx configuration validation passed

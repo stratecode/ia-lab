@@ -3,6 +3,9 @@
   hosts: all
   become: true
 
+  vars_files:
+    - ../group_vars/vault.yml
+
   vars:
     retired_system_units:
       - aider-cleanup.timer
@@ -49,6 +52,9 @@
       - "/etc/letsencrypt/renewal/{{ openclaw_public_domain }}.conf"
       - /var/snap/prometheus/common/file_sd/codex-local-gateway.yml
       - /var/snap/prometheus/common/file_sd/orchestrator-targets.yml
+      - /var/snap/prometheus/current/file_sd/orchestrator-targets.yml
+      - /var/snap/prometheus/current/promreg/orchestrator-backup-alerts.yml
+      - /srv/ai-lab/observability/grafana/dashboards/semantic-runtime.json
     retired_nginx_sites:
       - openclaw-local.conf
       - openclaw-public.conf
@@ -190,6 +196,77 @@
     - name: Reload systemd after retired unit cleanup
       ansible.builtin.systemd:
         daemon_reload: true
+
+    - name: Remove retired dashboards from Grafana resource storage
+      ansible.builtin.shell: |
+        set -euo pipefail
+        db=/opt/docker/volumes/observability_grafana-data/_data/grafana.db
+        backup=/srv/ai-lab/backups/grafana-pre-localai-dashboard-cleanup.db
+        [[ -f "${db}" ]] || {
+          echo changed=false
+          exit 0
+        }
+        matches="$(
+          python3 - "${db}" <<'PY'
+        import sqlite3
+        import sys
+
+        connection = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+        count = connection.execute(
+            """
+            SELECT count(*)
+            FROM resource
+            WHERE resource = 'dashboards'
+              AND (
+                name = 'lab-overview'
+                OR lower(name) LIKE '%codex%'
+                OR lower(name) LIKE '%orchestrator%'
+                OR lower(CAST(value AS TEXT)) LIKE '%codex%'
+                OR lower(CAST(value AS TEXT)) LIKE '%orchestrator%'
+              )
+            """
+        ).fetchone()[0]
+        print(count)
+        PY
+        )"
+        if [[ "${matches}" == "0" ]]; then
+          echo changed=false
+          exit 0
+        fi
+        docker stop grafana >/dev/null
+        install -d -m 0755 /srv/ai-lab/backups
+        if [[ ! -f "${backup}" ]]; then
+          cp --preserve=mode,timestamps "${db}" "${backup}"
+        fi
+        python3 - "${db}" <<'PY'
+        import sqlite3
+        import sys
+
+        connection = sqlite3.connect(sys.argv[1])
+        with connection:
+            connection.execute(
+                """
+                DELETE FROM resource
+                WHERE resource = 'dashboards'
+                  AND (
+                    name = 'lab-overview'
+                    OR lower(name) LIKE '%codex%'
+                    OR lower(name) LIKE '%orchestrator%'
+                    OR lower(CAST(value AS TEXT)) LIKE '%codex%'
+                    OR lower(CAST(value AS TEXT)) LIKE '%orchestrator%'
+                  )
+                """
+            )
+        PY
+        echo changed=true
+      args:
+        executable: /bin/bash
+      register: retired_grafana_dashboard_cleanup
+      changed_when: "'changed=true' in retired_grafana_dashboard_cleanup.stdout"
+
+    - name: Reconcile the preserved observability stack
+      ansible.builtin.import_role:
+        name: observability
 
     - name: Flush service handlers before verification
       ansible.builtin.meta: flush_handlers
