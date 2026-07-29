@@ -32,6 +32,7 @@ jetbrains-plugin/.idea/
 .stratecode/
 .codex-local/
 .codex-lab/
+.worktrees/
 
 # Local benchmark configuration and generated reports
 benchmarks/benchmark.local.json
