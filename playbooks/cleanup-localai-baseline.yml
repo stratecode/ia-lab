@@ -352,6 +352,14 @@
         - 8222
         - 18789
 
+    - name: Verify LocalAI backend port is closed after requested cleanup
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ localai_port }}"
+        state: stopped
+        timeout: 5
+      when: localai_cleanup_enabled
+
   handlers:
     - name: Reload nginx
       ansible.builtin.systemd:

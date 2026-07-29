@@ -205,6 +205,55 @@
   no_log: true
   when: not ansible_check_mode
 
+- name: Read installed LocalAI models
+  ansible.builtin.uri:
+    url: "http://{{ localai_bind_address }}:{{ localai_port }}/v1/models"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ localai_api_key }}"
+    status_code: 200
+    return_content: true
+  register: localai_installed_models
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Install LocalAI default model
+  ansible.builtin.uri:
+    url: "http://{{ localai_bind_address }}:{{ localai_port }}/models/apply"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ localai_api_key }}"
+    body_format: json
+    body:
+      id: "{{ localai_default_model }}"
+    status_code:
+      - 200
+      - 201
+      - 202
+  no_log: true
+  when:
+    - not ansible_check_mode
+    - >-
+      localai_default_model not in
+      (localai_installed_models.json.data | default([]) | map(attribute='id') | list)
+
+- name: Wait for LocalAI default model
+  ansible.builtin.uri:
+    url: "http://{{ localai_bind_address }}:{{ localai_port }}/v1/models"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ localai_api_key }}"
+    status_code: 200
+    return_content: true
+  register: localai_model_readiness
+  until: >-
+    localai_default_model in
+    (localai_model_readiness.json.data | default([]) | map(attribute='id') | list)
+  retries: 60
+  delay: 10
+  no_log: true
+  when: not ansible_check_mode
+
 - name: Flush LocalAI handlers before HTTPS verification
   ansible.builtin.meta: flush_handlers
 

@@ -63,6 +63,8 @@ required_tasks = [
     "Remove drifted LocalAI container",
     "Reconcile LocalAI container",
     "Wait for LocalAI runtime readiness",
+    "Install LocalAI default model",
+    "Wait for LocalAI default model",
 ]
 missing = [value for value in required_tasks if value not in tasks]
 if missing:
@@ -121,4 +123,35 @@ if "/srv/ai-lab/localai/models" in cleanup:
     raise SystemExit("cleanup must retain LocalAI models")
 PY
   [ "$status" -eq 0 ]
+}
+
+@test "LocalAI verifier checks auth readiness chat and tool calls" {
+  fixture_port=18991
+  python3 "$repo_root/tests/fixtures/localai_api_fixture.py" "$fixture_port" \
+    >"$BATS_TEST_TMPDIR/localai-fixture.log" 2>&1 &
+  fixture_pid=$!
+  trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+
+  for _ in {1..20}; do
+    if curl -s "http://127.0.0.1:$fixture_port/readyz" >/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  run env \
+    LAB_LOCALAI_API_KEY=test-localai-api-key-123456 \
+    LAB_LOCALAI_DEFAULT_MODEL=qwen3-4b \
+    "$repo_root/scripts/verify-localai.sh" \
+    --base-url "http://127.0.0.1:$fixture_port"
+
+  kill "$fixture_pid" 2>/dev/null || true
+  wait "$fixture_pid" 2>/dev/null || true
+
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"authentication: ok"* ]]
+  [[ "$output" == *"readiness: ok"* ]]
+  [[ "$output" == *"model: ok"* ]]
+  [[ "$output" == *"chat: ok"* ]]
+  [[ "$output" == *"tool-call: ok"* ]]
 }
