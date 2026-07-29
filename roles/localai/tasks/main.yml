@@ -1,0 +1,168 @@
+---
+- name: Validate LocalAI configuration
+  ansible.builtin.assert:
+    that:
+      - localai_api_key | length >= 24
+      - localai_bind_address == '127.0.0.1'
+      - localai_port not in [8080, 8082, 8083, 8084, 8100, 8180, 8221, 8222, 18789]
+      - "':latest' not in localai_image"
+      - localai_domain | length > 0
+    fail_msg: >-
+      LocalAI requires a strong API key, loopback binding, pinned image,
+      unique port, and domain.
+
+- name: Install LocalAI runtime packages
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - nginx
+      - openssl
+    state: present
+
+- name: Ensure LocalAI persistent directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - "{{ localai_root_dir }}"
+    - "{{ localai_models_dir }}"
+    - "{{ localai_config_dir }}"
+    - "{{ localai_data_dir }}"
+
+- name: Install LocalAI runtime environment
+  ansible.builtin.template:
+    src: localai.env.j2
+    dest: "{{ localai_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  register: localai_env_template
+  no_log: true
+
+- name: Calculate LocalAI runtime specification hash
+  ansible.builtin.set_fact:
+    localai_runtime_spec_hash: >-
+      {{
+        (
+          localai_image ~ '|' ~
+          localai_bind_address ~ '|' ~
+          (localai_port | string) ~ '|' ~
+          localai_models_dir ~ '|' ~
+          localai_config_dir ~ '|' ~
+          localai_data_dir ~ '|' ~
+          localai_memory_limit ~ '|' ~
+          localai_cpu_limit ~ '|' ~
+          (localai_env_template.checksum | default('check-mode'))
+        ) | hash('sha256')
+      }}
+
+- name: Inspect pinned LocalAI image
+  ansible.builtin.command:
+    argv:
+      - docker
+      - image
+      - inspect
+      - "{{ localai_image }}"
+  register: localai_image_inspect
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Pull pinned LocalAI image
+  ansible.builtin.command:
+    argv:
+      - docker
+      - pull
+      - "{{ localai_image }}"
+  when:
+    - not ansible_check_mode
+    - localai_image_inspect.rc != 0
+
+- name: Inspect existing LocalAI container
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - inspect
+      - "{{ localai_container_name }}"
+  register: localai_container_inspect
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Derive existing LocalAI runtime specification
+  ansible.builtin.set_fact:
+    localai_existing_spec_hash: >-
+      {{
+        (
+          (localai_container_inspect.stdout | from_json)[0].Config.Labels[
+            'io.stratecode.localai.spec'
+          ]
+        ) | default('')
+      }}
+  when:
+    - not ansible_check_mode
+    - localai_container_inspect.rc == 0
+
+- name: Remove drifted LocalAI container
+  ansible.builtin.command:
+    argv:
+      - docker
+      - container
+      - rm
+      - --force
+      - "{{ localai_container_name }}"
+  when:
+    - not ansible_check_mode
+    - localai_container_inspect.rc == 0
+    - localai_existing_spec_hash != localai_runtime_spec_hash
+
+- name: Reconcile LocalAI container
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --detach
+      - --name
+      - "{{ localai_container_name }}"
+      - --restart
+      - unless-stopped
+      - --env-file
+      - "{{ localai_env_file }}"
+      - --publish
+      - "{{ localai_bind_address }}:{{ localai_port }}:8080"
+      - --volume
+      - "{{ localai_models_dir }}:/models"
+      - --volume
+      - "{{ localai_config_dir }}:/config"
+      - --volume
+      - "{{ localai_data_dir }}:/data"
+      - --memory
+      - "{{ localai_memory_limit }}"
+      - --cpus
+      - "{{ localai_cpu_limit }}"
+      - --label
+      - "io.stratecode.localai.spec={{ localai_runtime_spec_hash }}"
+      - "{{ localai_image }}"
+  when: >-
+    ansible_check_mode
+    or localai_container_inspect.rc != 0
+    or localai_existing_spec_hash | default('') != localai_runtime_spec_hash
+  changed_when: not ansible_check_mode
+
+- name: Wait for LocalAI runtime readiness
+  ansible.builtin.uri:
+    url: "http://{{ localai_bind_address }}:{{ localai_port }}{{ localai_readiness_path }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ localai_api_key }}"
+    status_code: 200
+  register: localai_readiness
+  until: localai_readiness.status == 200
+  retries: 36
+  delay: 5
+  no_log: true
+  when: not ansible_check_mode

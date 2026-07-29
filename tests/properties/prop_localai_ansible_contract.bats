@@ -45,3 +45,38 @@ if "LAB_LOCALAI_API_KEY=replace-with-random-hex" not in env_text:
 PY
   [ "$status" -eq 0 ]
 }
+
+@test "LocalAI role defines an authenticated persistent loopback runtime" {
+  run python3 - "$repo_root" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+tasks = (root / "roles/localai/tasks/main.yml").read_text()
+environment = (root / "roles/localai/templates/localai.env.j2").read_text()
+
+required_tasks = [
+    "Validate LocalAI configuration",
+    "Ensure LocalAI persistent directories exist",
+    "Install LocalAI runtime environment",
+    "Inspect existing LocalAI container",
+    "Remove drifted LocalAI container",
+    "Reconcile LocalAI container",
+    "Wait for LocalAI runtime readiness",
+]
+missing = [value for value in required_tasks if value not in tasks]
+if missing:
+    raise SystemExit("missing runtime behavior: " + ", ".join(missing))
+if "localai_bind_address == '127.0.0.1'" not in tasks:
+    raise SystemExit("loopback assertion missing")
+if "localai_api_key | length >= 24" not in tasks:
+    raise SystemExit("strong API key assertion missing")
+if '"{{ localai_models_dir }}:/models"' not in tasks:
+    raise SystemExit("persistent model mount missing")
+if "Authorization" not in tasks or "Bearer {{ localai_api_key }}" not in tasks:
+    raise SystemExit("authenticated readiness missing")
+if "LOCALAI_API_KEY={{ localai_api_key }}" not in environment:
+    raise SystemExit("runtime API key missing")
+PY
+  [ "$status" -eq 0 ]
+}
