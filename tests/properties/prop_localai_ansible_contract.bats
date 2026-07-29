@@ -24,6 +24,7 @@ required = [
     "localai_models_dir:",
     "localai_config_dir:",
     "localai_data_dir:",
+    "localai_backends_dir:",
     "localai_default_model:",
 ]
 missing = [value for value in required if value not in vars_text]
@@ -40,6 +41,9 @@ if "name: localai" not in bootstrap:
     raise SystemExit("bootstrap missing localai role")
 if "when: localai_enabled" not in bootstrap:
     raise SystemExit("bootstrap LocalAI role must be opt-in")
+deploy = (root / "playbooks/deploy-localai.yml").read_text()
+if "name: localai" not in deploy:
+    raise SystemExit("dedicated deployment playbook missing localai role")
 if "LAB_LOCALAI_API_KEY=replace-with-random-hex" not in env_text:
     raise SystemExit("example API key placeholder missing")
 PY
@@ -54,6 +58,7 @@ import sys
 root = Path(sys.argv[1])
 tasks = (root / "roles/localai/tasks/main.yml").read_text()
 environment = (root / "roles/localai/templates/localai.env.j2").read_text()
+model = (root / "roles/localai/templates/localai-model.yaml.j2").read_text()
 
 required_tasks = [
     "Validate LocalAI configuration",
@@ -63,8 +68,10 @@ required_tasks = [
     "Remove drifted LocalAI container",
     "Reconcile LocalAI container",
     "Wait for LocalAI runtime readiness",
+    "Check LocalAI default backend",
     "Install LocalAI default model",
     "Wait for LocalAI default model",
+    "Install conservative LocalAI model configuration",
 ]
 missing = [value for value in required_tasks if value not in tasks]
 if missing:
@@ -75,10 +82,27 @@ if "localai_api_key | length >= 24" not in tasks:
     raise SystemExit("strong API key assertion missing")
 if '"{{ localai_models_dir }}:/models"' not in tasks:
     raise SystemExit("persistent model mount missing")
+if '"{{ localai_backends_dir }}:/backends"' not in tasks:
+    raise SystemExit("persistent backend mount missing")
+if '"{{ localai_backends_dir }}/cpu-llama-cpp/run.sh"' not in tasks:
+    raise SystemExit("backend readiness check missing")
+if "not localai_default_backend.stat.exists" not in tasks:
+    raise SystemExit("backend absence must trigger model apply")
 if "Authorization" not in tasks or "Bearer {{ localai_api_key }}" not in tasks:
     raise SystemExit("authenticated readiness missing")
 if "LOCALAI_API_KEY={{ localai_api_key }}" not in environment:
     raise SystemExit("runtime API key missing")
+if "LOCALAI_DISABLE_HARDWARE_DEFAULTS=true" not in environment:
+    raise SystemExit("hardware auto-tuning must be disabled")
+model_checks = [
+    "context_size: {{ localai_model_context_size }}",
+    "threads: {{ localai_model_threads }}",
+    "batch: {{ localai_model_batch }}",
+    "gpu_layers: 0",
+]
+missing = [value for value in model_checks if value not in model]
+if missing:
+    raise SystemExit("missing conservative model settings: " + ", ".join(missing))
 PY
   [ "$status" -eq 0 ]
 }
@@ -113,6 +137,10 @@ if "Generate self-signed certificate for LocalAI" not in tasks:
     raise SystemExit("certificate generation missing")
 if "Install LocalAI nginx site" not in tasks:
     raise SystemExit("nginx installation missing")
+if 'url: "https://127.0.0.1{{ localai_readiness_path }}"' not in tasks:
+    raise SystemExit("HTTPS readiness must not depend on external DNS")
+if 'Host: "{{ localai_domain }}"' not in tasks:
+    raise SystemExit("HTTPS readiness must select the LocalAI virtual host")
 if "nginx -t" not in handlers:
     raise SystemExit("safe nginx validation missing")
 if "Remove LocalAI evaluation container" not in cleanup:
@@ -140,18 +168,32 @@ PY
   done
 
   run env \
+    NO_PROXY=localai.test \
     LAB_LOCALAI_API_KEY=test-localai-api-key-123456 \
     LAB_LOCALAI_DEFAULT_MODEL=qwen3-4b \
     "$repo_root/scripts/verify-localai.sh" \
-    --base-url "http://127.0.0.1:$fixture_port"
-
-  kill "$fixture_pid" 2>/dev/null || true
-  wait "$fixture_pid" 2>/dev/null || true
+    --base-url "http://localai.test:$fixture_port" \
+    --resolve "localai.test:$fixture_port:127.0.0.1"
 
   [ "$status" -eq 0 ]
   [[ "$output" == *"authentication: ok"* ]]
   [[ "$output" == *"readiness: ok"* ]]
   [[ "$output" == *"model: ok"* ]]
   [[ "$output" == *"chat: ok"* ]]
+  [[ "$output" == *"tool-call: skipped"* ]]
+
+  run env \
+    NO_PROXY=localai.test \
+    LAB_LOCALAI_API_KEY=test-localai-api-key-123456 \
+    LAB_LOCALAI_DEFAULT_MODEL=qwen3-4b \
+    "$repo_root/scripts/verify-localai.sh" \
+    --base-url "http://localai.test:$fixture_port" \
+    --resolve "localai.test:$fixture_port:127.0.0.1" \
+    --include-tool-call
+
+  [ "$status" -eq 0 ]
   [[ "$output" == *"tool-call: ok"* ]]
+
+  kill "$fixture_pid" 2>/dev/null || true
+  wait "$fixture_pid" 2>/dev/null || true
 }

@@ -31,6 +31,7 @@
     - "{{ localai_models_dir }}"
     - "{{ localai_config_dir }}"
     - "{{ localai_data_dir }}"
+    - "{{ localai_backends_dir }}"
 
 - name: Install LocalAI runtime environment
   ansible.builtin.template:
@@ -53,6 +54,7 @@
           localai_models_dir ~ '|' ~
           localai_config_dir ~ '|' ~
           localai_data_dir ~ '|' ~
+          localai_backends_dir ~ '|' ~
           localai_memory_limit ~ '|' ~
           localai_cpu_limit ~ '|' ~
           (localai_env_template.checksum | default('check-mode'))
@@ -140,6 +142,8 @@
       - "{{ localai_config_dir }}:/config"
       - --volume
       - "{{ localai_data_dir }}:/data"
+      - --volume
+      - "{{ localai_backends_dir }}:/backends"
       - --memory
       - "{{ localai_memory_limit }}"
       - --cpus
@@ -217,6 +221,12 @@
   no_log: true
   when: not ansible_check_mode
 
+- name: Check LocalAI default backend
+  ansible.builtin.stat:
+    path: "{{ localai_backends_dir }}/cpu-llama-cpp/run.sh"
+  register: localai_default_backend
+  when: not ansible_check_mode
+
 - name: Install LocalAI default model
   ansible.builtin.uri:
     url: "http://{{ localai_bind_address }}:{{ localai_port }}/models/apply"
@@ -236,6 +246,16 @@
     - >-
       localai_default_model not in
       (localai_installed_models.json.data | default([]) | map(attribute='id') | list)
+      or not localai_default_backend.stat.exists
+
+- name: Wait for LocalAI default backend
+  ansible.builtin.stat:
+    path: "{{ localai_backends_dir }}/cpu-llama-cpp/run.sh"
+  register: localai_default_backend_readiness
+  until: localai_default_backend_readiness.stat.exists
+  retries: 60
+  delay: 10
+  when: not ansible_check_mode
 
 - name: Wait for LocalAI default model
   ansible.builtin.uri:
@@ -254,15 +274,42 @@
   no_log: true
   when: not ansible_check_mode
 
+- name: Install conservative LocalAI model configuration
+  ansible.builtin.template:
+    src: localai-model.yaml.j2
+    dest: "{{ localai_models_dir }}/{{ localai_default_model }}.yaml"
+    owner: root
+    group: root
+    mode: "0640"
+  notify: Restart LocalAI
+
+- name: Flush LocalAI model handlers
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for LocalAI readiness after model configuration
+  ansible.builtin.uri:
+    url: "http://{{ localai_bind_address }}:{{ localai_port }}{{ localai_readiness_path }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ localai_api_key }}"
+    status_code: 200
+  register: localai_configured_readiness
+  until: localai_configured_readiness.status == 200
+  retries: 36
+  delay: 5
+  no_log: true
+  when: not ansible_check_mode
+
 - name: Flush LocalAI handlers before HTTPS verification
   ansible.builtin.meta: flush_handlers
 
 - name: Verify LocalAI HTTPS readiness
   ansible.builtin.uri:
-    url: "https://{{ localai_domain }}{{ localai_readiness_path }}"
+    url: "https://127.0.0.1{{ localai_readiness_path }}"
     method: GET
     headers:
       Authorization: "Bearer {{ localai_api_key }}"
+      Host: "{{ localai_domain }}"
     status_code: 200
     validate_certs: false
   no_log: true

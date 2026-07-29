@@ -7,3 +7,11 @@
   args:
     executable: /bin/bash
   listen: Reload LocalAI nginx
+
+- name: Restart LocalAI container
+  ansible.builtin.command:
+    argv:
+      - docker
+      - restart
+      - "{{ localai_container_name }}"
+  listen: Restart LocalAI

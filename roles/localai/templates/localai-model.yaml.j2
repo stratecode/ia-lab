@@ -1,0 +1,27 @@
+name: {{ localai_default_model }}
+backend: llama-cpp
+parameters:
+  model: {{ localai_default_model_file }}
+context_size: {{ localai_model_context_size }}
+threads: {{ localai_model_threads }}
+batch: {{ localai_model_batch }}
+f16: false
+gpu_layers: 0
+temperature: 0.6
+top_p: 0.95
+top_k: 20
+min_p: 0
+repeat_penalty: 1
+options:
+  - use_jinja:true
+  - parallel:1
+template:
+  use_tokenizer_template: true
+function:
+  grammar:
+    disable: true
+stopwords:
+  - <|im_end|>
+  - <dummy32000>
+  - </s>
+  - <|endoftext|>

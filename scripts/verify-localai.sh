@@ -4,6 +4,8 @@ set -euo pipefail
 base_url="${LAB_LOCALAI_BASE_URL:-https://${LAB_LOCALAI_DOMAIN:-localai.stratecode.local}}"
 model="${LAB_LOCALAI_DEFAULT_MODEL:-qwen3-4b}"
 api_key="${LAB_LOCALAI_API_KEY:-}"
+curl_network_args=()
+include_tool_call=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -14,6 +16,18 @@ while [[ $# -gt 0 ]]; do
       }
       base_url="${2%/}"
       shift 2
+      ;;
+    --resolve)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --resolve" >&2
+        exit 2
+      }
+      curl_network_args+=(--resolve "$2")
+      shift 2
+      ;;
+    --include-tool-call)
+      include_tool_call=true
+      shift
       ;;
     *)
       echo "unknown argument: $1" >&2
@@ -44,6 +58,7 @@ trap 'rm -rf "${tmp_dir}"' EXIT
 
 unauthenticated_status="$(
   curl --silent --show-error \
+    "${curl_network_args[@]}" \
     "${curl_tls_args[@]}" \
     --output "${tmp_dir}/unauthenticated.json" \
     --write-out '%{http_code}' \
@@ -58,6 +73,7 @@ case "${unauthenticated_status}" in
 esac
 
 curl --silent --show-error --fail-with-body \
+  "${curl_network_args[@]}" \
   "${curl_tls_args[@]}" \
   --header "Authorization: Bearer ${api_key}" \
   "${base_url}/readyz" \
@@ -65,6 +81,7 @@ curl --silent --show-error --fail-with-body \
 echo "readiness: ok"
 
 curl --silent --show-error --fail-with-body \
+  "${curl_network_args[@]}" \
   "${curl_tls_args[@]}" \
   --header "Authorization: Bearer ${api_key}" \
   "${base_url}/v1/models" \
@@ -76,10 +93,15 @@ echo "model: ok"
 
 jq -n --arg model "${model}" '{
   model: $model,
-  messages: [{role: "user", content: "Reply with exactly fixture-ok."}],
+  messages: [{
+    role: "user",
+    content: "/no_think Reply with exactly fixture-ok."
+  }],
+  max_tokens: 128,
   temperature: 0
 }' >"${tmp_dir}/chat-request.json"
 curl --silent --show-error --fail-with-body \
+  "${curl_network_args[@]}" \
   "${curl_tls_args[@]}" \
   --header "Authorization: Bearer ${api_key}" \
   --header "Content-Type: application/json" \
@@ -90,11 +112,16 @@ jq -e '.choices[0].message.content | type == "string" and length > 0' \
   "${tmp_dir}/chat-response.json" >/dev/null
 echo "chat: ok"
 
+if [[ "${include_tool_call}" != true ]]; then
+  echo "tool-call: skipped"
+  exit 0
+fi
+
 jq -n --arg model "${model}" '{
   model: $model,
   messages: [{
     role: "user",
-    content: "Use get_weather for Madrid. Do not answer without the tool."
+    content: "/no_think Use get_weather for Madrid. Do not answer without the tool."
   }],
   tools: [{
     type: "function",
@@ -109,9 +136,11 @@ jq -n --arg model "${model}" '{
     }
   }],
   tool_choice: "required",
+  max_tokens: 128,
   temperature: 0
 }' >"${tmp_dir}/tool-request.json"
 curl --silent --show-error --fail-with-body \
+  "${curl_network_args[@]}" \
   "${curl_tls_args[@]}" \
   --header "Authorization: Bearer ${api_key}" \
   --header "Content-Type: application/json" \

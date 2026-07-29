@@ -37,6 +37,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/v1/chat/completions":
             self._json(404, {"error": "not found"})
             return
+        if payload.get("max_tokens") != 128:
+            self._json(400, {"error": "max_tokens must be 128"})
+            return
+        if not payload.get("messages") or "/no_think" not in payload["messages"][0].get("content", ""):
+            self._json(400, {"error": "thinking must be disabled"})
+            return
         if payload.get("tools"):
             message = {
                 "role": "assistant",

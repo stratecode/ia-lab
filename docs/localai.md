@@ -8,7 +8,8 @@ orchestrator architecture.
 
 The role uses the version-pinned `localai/localai:v4.7.1` image and installs the
 small, CPU-capable `qwen3-4b` gallery model by default. Model, configuration,
-and application data persist under `/srv/ai-lab/localai`.
+application data, and downloaded inference backends persist under
+`/srv/ai-lab/localai`.
 
 Configure `.env` without committing the real API key:
 
@@ -20,6 +21,10 @@ LAB_LOCALAI_PORT=8181
 LAB_LOCALAI_DOMAIN=localai.stratecode.local
 LAB_LOCALAI_API_KEY=<random-secret-with-at-least-24-characters>
 LAB_LOCALAI_DEFAULT_MODEL=qwen3-4b
+LAB_LOCALAI_DEFAULT_MODEL_FILE=Qwen3-4B.Q4_K_M.gguf
+LAB_LOCALAI_MODEL_CONTEXT_SIZE=2048
+LAB_LOCALAI_MODEL_THREADS=2
+LAB_LOCALAI_MODEL_BATCH=64
 LAB_LOCALAI_MEMORY_LIMIT=6g
 LAB_LOCALAI_CPU_LIMIT=4.0
 ```
@@ -31,11 +36,12 @@ set -a
 source .env
 set +a
 ansible-playbook playbooks/bootstrap.yml --syntax-check
-ansible-playbook playbooks/bootstrap.yml
+ansible-playbook playbooks/deploy-localai.yml
 ```
 
-The first run downloads the pinned container image and model. Later runs reuse
-the persistent model directory.
+The dedicated playbook changes only LocalAI. The main bootstrap includes the
+same role when `LAB_LOCALAI_ENABLED=true`. The first run downloads the pinned
+container image and model; later runs reuse the persistent model directory.
 
 ## Access
 
@@ -85,6 +91,7 @@ Repository checks:
 ```bash
 bats tests/properties/prop_localai_ansible_contract.bats
 ansible-playbook playbooks/bootstrap.yml --syntax-check
+ansible-playbook playbooks/deploy-localai.yml --syntax-check
 ansible-playbook playbooks/cleanup-localai-baseline.yml --syntax-check
 bash -n scripts/verify-localai.sh
 git diff --check
@@ -99,13 +106,39 @@ set +a
 scripts/verify-localai.sh --base-url https://localai.stratecode.local
 ```
 
-The verifier proves:
+Before changing a client hosts file, validate the same domain and TLS virtual
+host with:
+
+```bash
+scripts/verify-localai.sh \
+  --base-url https://localai.stratecode.local \
+  --resolve localai.stratecode.local:443:<lab-ip>
+```
+
+The default verifier proves:
 
 - anonymous API access is rejected;
 - authenticated readiness succeeds;
 - the configured model is present;
-- chat completion returns content;
-- a fixed tool request returns structured `tool_calls`.
+- chat completion returns content.
+
+The acceptance requests use Qwen's `/no_think` control and cap output at 128
+tokens. This keeps routine validation bounded.
+
+The tool-call probe is opt-in:
+
+```bash
+scripts/verify-localai.sh \
+  --base-url https://localai.stratecode.local \
+  --include-tool-call
+```
+
+Do not run that option on the current host. On 2026-07-29 it repeatedly caused
+a hard server reset, including after limiting LocalAI to CPU-only inference,
+two threads, a 2048-token context, batch size 64, `/no_think`, and 128 output
+tokens. There was no orderly shutdown or container OOM event. Treat tool
+calling as unvalidated until host power, thermal, kernel, and CPU-tuning
+stability is diagnosed independently.
 
 Also inspect the listening socket and container:
 
@@ -132,7 +165,10 @@ Nginx site. Its handlers do not notify or restart `llama.cpp`.
 
 ## AMD and ROCm
 
-The initial profile is CPU-only. AMD acceleration remains unverified until all
+The initial profile is deliberately CPU-only: two threads, 2048-token context,
+batch size 64, hardware auto-tuning disabled, and zero GPU layers. These
+conservative limits protect a host that already runs four inference services.
+AMD acceleration remains unverified until all
 of the following agree:
 
 - the host GPU architecture is supported by the selected LocalAI image;
