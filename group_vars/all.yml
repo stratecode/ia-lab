@@ -70,6 +70,26 @@ retired_stack_cleanup_enabled: "{{ lookup('env', 'LAB_RETIRED_STACK_CLEANUP_ENAB
 open_webui_enabled: "{{ lookup('env', 'LAB_OPEN_WEBUI_ENABLED') | default('false', true) | bool }}"
 aider_enabled: "{{ lookup('env', 'LAB_AIDER_ENABLED') | default('true', true) | bool }}"
 orchestrator_enabled: "{{ lookup('env', 'LAB_ORCHESTRATOR_ENABLED') | default('true', true) | bool }}"
+localai_enabled: "{{ lookup('env', 'LAB_LOCALAI_ENABLED') | default('false', true) | bool }}"
+
+# ─── LocalAI evaluation runtime ─────────────────────────────────────────────
+localai_image: "{{ lookup('env', 'LAB_LOCALAI_IMAGE') | default('localai/localai:v4.7.1', true) }}"
+localai_container_name: localai
+localai_bind_address: "{{ lookup('env', 'LAB_LOCALAI_BIND_ADDRESS') | default('127.0.0.1', true) }}"
+localai_port: "{{ lookup('env', 'LAB_LOCALAI_PORT') | default('8181', true) | int }}"
+localai_domain: "{{ lookup('env', 'LAB_LOCALAI_DOMAIN') | default('localai.stratecode.local', true) }}"
+localai_api_key: "{{ lookup('env', 'LAB_LOCALAI_API_KEY') | default('', true) }}"
+localai_root_dir: /srv/ai-lab/localai
+localai_models_dir: "{{ localai_root_dir }}/models"
+localai_config_dir: "{{ localai_root_dir }}/config"
+localai_data_dir: "{{ localai_root_dir }}/data"
+localai_env_file: "{{ localai_config_dir }}/localai.env"
+localai_ssl_certificate: "/etc/ssl/certs/{{ localai_domain }}.crt"
+localai_ssl_certificate_key: "/etc/ssl/private/{{ localai_domain }}.key"
+localai_default_model: "{{ lookup('env', 'LAB_LOCALAI_DEFAULT_MODEL') | default('qwen3-4b', true) }}"
+localai_memory_limit: "{{ lookup('env', 'LAB_LOCALAI_MEMORY_LIMIT') | default('6g', true) }}"
+localai_cpu_limit: "{{ lookup('env', 'LAB_LOCALAI_CPU_LIMIT') | default('4.0', true) }}"
+localai_readiness_path: "{{ lookup('env', 'LAB_LOCALAI_READINESS_PATH') | default('/readyz', true) }}"
 
 # ─── Alertmanager ───────────────────────────────────────────────────────────
 alertmanager_enabled: true
