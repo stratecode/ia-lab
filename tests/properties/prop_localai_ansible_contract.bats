@@ -80,3 +80,45 @@ if "LOCALAI_API_KEY={{ localai_api_key }}" not in environment:
 PY
   [ "$status" -eq 0 ]
 }
+
+@test "LocalAI HTTPS is private and cleanup retains persistent data" {
+  run python3 - "$repo_root" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+nginx = (root / "roles/localai/templates/localai-nginx.conf.j2").read_text()
+tasks = (root / "roles/localai/tasks/main.yml").read_text()
+handlers = (root / "roles/localai/handlers/main.yml").read_text()
+cleanup = (root / "playbooks/cleanup-localai-baseline.yml").read_text()
+
+nginx_checks = [
+    "server_name {{ localai_domain }};",
+    "allow 127.0.0.1;",
+    "allow {{ server_lan_cidr }};",
+    "allow {{ docker_internal_cidr }};",
+    "allow {{ wireguard_subnet }};",
+    "deny all;",
+    "proxy_pass http://{{ localai_bind_address }}:{{ localai_port }};",
+    "proxy_buffering off;",
+    "proxy_request_buffering off;",
+    "proxy_read_timeout 300s;",
+]
+missing = [value for value in nginx_checks if value not in nginx]
+if missing:
+    raise SystemExit("missing nginx behavior: " + ", ".join(missing))
+if "Generate self-signed certificate for LocalAI" not in tasks:
+    raise SystemExit("certificate generation missing")
+if "Install LocalAI nginx site" not in tasks:
+    raise SystemExit("nginx installation missing")
+if "nginx -t" not in handlers:
+    raise SystemExit("safe nginx validation missing")
+if "Remove LocalAI evaluation container" not in cleanup:
+    raise SystemExit("cleanup does not remove LocalAI runtime")
+if "/etc/nginx/sites-available/localai.conf" not in cleanup:
+    raise SystemExit("cleanup does not remove LocalAI nginx site")
+if "/srv/ai-lab/localai/models" in cleanup:
+    raise SystemExit("cleanup must retain LocalAI models")
+PY
+  [ "$status" -eq 0 ]
+}

@@ -153,6 +153,44 @@
     or localai_existing_spec_hash | default('') != localai_runtime_spec_hash
   changed_when: not ansible_check_mode
 
+- name: Generate self-signed certificate for LocalAI
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -x509
+      - -nodes
+      - -newkey
+      - rsa:4096
+      - -days
+      - "365"
+      - -keyout
+      - "{{ localai_ssl_certificate_key }}"
+      - -out
+      - "{{ localai_ssl_certificate }}"
+      - -subj
+      - "/CN={{ localai_domain }}"
+      - -addext
+      - "subjectAltName=DNS:{{ localai_domain }}"
+  args:
+    creates: "{{ localai_ssl_certificate }}"
+
+- name: Install LocalAI nginx site
+  ansible.builtin.template:
+    src: localai-nginx.conf.j2
+    dest: /etc/nginx/sites-available/localai.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload LocalAI nginx
+
+- name: Enable LocalAI nginx site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/localai.conf
+    dest: /etc/nginx/sites-enabled/localai.conf
+    state: link
+  notify: Reload LocalAI nginx
+
 - name: Wait for LocalAI runtime readiness
   ansible.builtin.uri:
     url: "http://{{ localai_bind_address }}:{{ localai_port }}{{ localai_readiness_path }}"
@@ -164,5 +202,19 @@
   until: localai_readiness.status == 200
   retries: 36
   delay: 5
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Flush LocalAI handlers before HTTPS verification
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify LocalAI HTTPS readiness
+  ansible.builtin.uri:
+    url: "https://{{ localai_domain }}{{ localai_readiness_path }}"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ localai_api_key }}"
+    status_code: 200
+    validate_certs: false
   no_log: true
   when: not ansible_check_mode
