@@ -563,7 +563,7 @@ func (b *Bot) cmdAutonomous(ctx context.Context, arg string, operator string) st
 		return "Error resolviendo workspace: " + err.Error()
 	}
 	result, err := b.autonomous.StartFromChannel(ctx, domain.AutonomousInitiativeRequest{
-		Surface:           "openclaw.telegram",
+		Surface:           "orchestrator.telegram",
 		WorkspaceAlias:    workspaceAlias,
 		WorkspaceRoot:     workspaceRoot,
 		Goal:              strings.TrimSpace(strings.Join(fields[1:], " ")),

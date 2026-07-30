@@ -41,7 +41,7 @@ func TestStartFromChannelRunsInitiativeToLaunch(t *testing.T) {
 	runner := NewAutonomousRunner(config.Config{WorkspaceRoot: "/srv/default"}, store, queue, generator)
 
 	result, err := runner.StartFromChannel(context.Background(), domain.AutonomousInitiativeRequest{
-		Surface:           "openclaw.telegram",
+		Surface:           "orchestrator.telegram",
 		WorkspaceRoot:     "/srv/workspaces/repo",
 		Goal:              "Implementa un fix minimo",
 		OperatorID:        "telegram:user-1",
@@ -79,7 +79,7 @@ func TestStartFromChannelUsesDefaultWorkspaceWhenRequestIsEmpty(t *testing.T) {
 	store := newFakeAutonomousStore()
 	runner := NewAutonomousRunner(config.Config{WorkspaceRoot: "/srv/default"}, store, &fakeTaskQueue{}, fakePhaseGenerator{})
 	_, err := runner.StartFromChannel(context.Background(), domain.AutonomousInitiativeRequest{
-		Surface:           "openclaw.telegram",
+		Surface:           "orchestrator.telegram",
 		Goal:              "Implementa un fix minimo",
 		OperatorID:        "telegram:user-1",
 		AutoApprovePhases: true,

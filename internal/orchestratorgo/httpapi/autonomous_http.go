@@ -18,7 +18,7 @@ func (s *Server) startAutonomousInitiative(w http.ResponseWriter, r *http.Reques
 		writeDetail(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	req.Surface = firstNonEmptyString(strings.TrimSpace(req.Surface), "openclaw.http")
+	req.Surface = firstNonEmptyString(strings.TrimSpace(req.Surface), "orchestrator.http")
 	if !req.AutoApprovePhases {
 		req.AutoApprovePhases = true
 	}

@@ -204,11 +204,6 @@
         name: open_webui
       when: not retired_stack_cleanup_enabled
 
-    - name: Install OpenClaw gateway
-      ansible.builtin.import_role:
-        name: openclaw
-      when: not retired_stack_cleanup_enabled
-
     - name: Install monitoring web console
       ansible.builtin.import_role:
         name: monitor

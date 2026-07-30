@@ -23,7 +23,7 @@ func TestStartAutonomousInitiativeRequiresRunner(t *testing.T) {
 	}
 }
 
-func TestStartAutonomousInitiativeUsesDefaultSurfaceAndAutoApproval(t *testing.T) {
+func TestAutonomousInitiativeUsesDefaultSurfaceAndAutoApproval(t *testing.T) {
 	starter := &fakeAutonomousHTTPStarter{
 		result: &domain.AutonomousRunResult{InitiativeID: "initiative-1", Summary: "queued"},
 	}
@@ -40,7 +40,7 @@ func TestStartAutonomousInitiativeUsesDefaultSurfaceAndAutoApproval(t *testing.T
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, rec.Code, rec.Body.String())
 	}
-	if starter.lastReq.Surface != "openclaw.http" {
+	if starter.lastReq.Surface != "orchestrator.http" {
 		t.Fatalf("unexpected surface: %q", starter.lastReq.Surface)
 	}
 	if !starter.lastReq.AutoApprovePhases {

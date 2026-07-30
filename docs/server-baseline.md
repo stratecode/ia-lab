@@ -109,11 +109,6 @@ Current alert coverage:
 - disk I/O pressure
 - high temperature
 
-`OpenClaw` is part of the current lab surface again, but as a complementary
-gateway/UI layered over the local `llama.cpp` code model and the
-orchestrator-led runtime. Treat its configuration as Ansible-managed host
-state, not manual drift.
-
 The host exposes local `llama.cpp` endpoints for testing:
 
 - `http://127.0.0.1:8080/v1` for code

@@ -801,28 +801,8 @@ func toolSearchCodeExecItem(callID, command string) responseItem {
 func buildToolSearchCodeExec(command string) string {
 	quotedCommand := mustJSON(command)
 	return strings.TrimSpace(fmt.Sprintf(`
-const hits = await openclaw.tools.search("exec shell command runtime");
-const target =
-  hits.find((hit) => hit && (hit.name === "exec" || hit.name === "bash" || hit.name === "exec_command")) ??
-  hits[0];
-if (!target) {
-  throw new Error("exec tool unavailable in tool_search_code catalog");
-}
-const tool = await openclaw.tools.describe(target.id);
-const properties = tool?.parameters?.properties ?? {};
-const args = {};
-if (Object.prototype.hasOwnProperty.call(properties, "command")) {
-  args.command = %s;
-} else if (Object.prototype.hasOwnProperty.call(properties, "cmd")) {
-  args.cmd = %s;
-} else {
-  args.command = %s;
-}
-if (Object.prototype.hasOwnProperty.call(properties, "yieldMs")) {
-  args.yieldMs = 1000;
-}
-return await openclaw.tools.call(tool.id, args);
-`, quotedCommand, quotedCommand, quotedCommand))
+return await tools.exec_command({cmd: %s, yield_time_ms: 1000});
+`, quotedCommand))
 }
 
 func mustJSON(value any) string {

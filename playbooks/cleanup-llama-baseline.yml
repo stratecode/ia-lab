@@ -37,7 +37,6 @@
       - /run/aider
       - /srv/ai-lab/codex-local-gateway/runtime
       - /srv/ai-lab/codex-local-gateway
-      - /srv/ai-lab/openclaw
       - /srv/ai-lab/orchestrator/runtime
       - /srv/ai-lab/orchestrator/sidecars
       - /srv/ai-lab/orchestrator/sidecars-venv
@@ -45,21 +44,14 @@
       - /srv/ai-lab/orchestrator
       - /opt/docker/orchestrator
       - /opt/docker/postgres
-      - /opt/openclaw-agent
       - /usr/local/bin/aider-task
       - /usr/local/bin/aider-cleanup
       - /etc/logrotate.d/aider
-      - "/etc/letsencrypt/renewal/{{ openclaw_public_domain }}.conf"
       - /var/snap/prometheus/common/file_sd/codex-local-gateway.yml
       - /var/snap/prometheus/common/file_sd/orchestrator-targets.yml
       - /var/snap/prometheus/current/file_sd/orchestrator-targets.yml
       - /var/snap/prometheus/current/promreg/orchestrator-backup-alerts.yml
       - /srv/ai-lab/observability/grafana/dashboards/semantic-runtime.json
-    retired_nginx_sites:
-      - openclaw-local.conf
-      - openclaw-public.conf
-      - openclaw-subdomain.conf
-
   pre_tasks:
     - name: Verify preserved WireGuard interface before cleanup
       ansible.builtin.command:
@@ -115,33 +107,6 @@
       loop: "{{ retired_system_units }}"
       failed_when: false
 
-    - name: Stop and disable the retired OpenClaw user service
-      ansible.builtin.command:
-        argv:
-          - systemctl
-          - --user
-          - "--machine={{ openclaw_user }}@.host"
-          - disable
-          - --now
-          - openclaw-gateway.service
-      register: openclaw_user_service_cleanup
-      changed_when: >-
-        'Removed ' in openclaw_user_service_cleanup.stdout
-        or 'Removed ' in openclaw_user_service_cleanup.stderr
-      failed_when: >-
-        openclaw_user_service_cleanup.rc != 0
-        and 'does not exist' not in openclaw_user_service_cleanup.stderr
-        and 'not loaded' not in openclaw_user_service_cleanup.stderr
-
-    - name: Remove retired OpenClaw user unit files
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - "{{ openclaw_systemd_user_dir }}/openclaw-gateway.service"
-        - "{{ openclaw_systemd_user_dir }}/openclaw-gateway.service.bak"
-        - "{{ openclaw_systemd_user_dir }}/default.target.wants/openclaw-gateway.service"
-
     - name: Remove retired system unit files
       ansible.builtin.file:
         path: "{{ item }}"
@@ -153,13 +118,6 @@
         path: "{{ item }}"
         state: absent
       loop: "{{ retired_runtime_paths }}"
-
-    - name: Remove retired OpenClaw Nginx sites
-      ansible.builtin.file:
-        path: "{{ item.0 }}/{{ item.1 }}"
-        state: absent
-      loop: "{{ ['/etc/nginx/sites-enabled', '/etc/nginx/sites-available'] | product(retired_nginx_sites) | list }}"
-      notify: Reload nginx
 
     - name: Remove residual Open WebUI Docker volume
       ansible.builtin.command:

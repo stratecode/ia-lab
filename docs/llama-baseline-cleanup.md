@@ -26,7 +26,6 @@ The cleanup preserves:
 
 The cleanup retires:
 
-- OpenClaw runtime, user service, and Nginx sites
 - Open WebUI runtime remnants and its Docker volume
 - the Go orchestrator, document/image sidecars, timers, PostgreSQL container,
   compose project, network, and live database directory
@@ -36,10 +35,6 @@ The cleanup retires:
 - obsolete Prometheus file-discovery targets for the orchestrator and Codex
   gateway
 - obsolete Codex/Orchestrator alert rules and Grafana dashboards
-
-The requested name was `OpenCloud`; no deployed component with that name was
-found. The installed component matching the scope was OpenClaw, and that is the
-component reconciled to absent.
 
 ## Reconcile the host
 
@@ -71,8 +66,8 @@ Run the playbook a second time after any change. A clean reconciliation reports
 
 ## Bootstrap interaction
 
-`playbooks/bootstrap.yml` skips Aider, Orchestrator, Codex host/gateway, Open
-WebUI, and OpenClaw when `retired_stack_cleanup_enabled` is true.
+`playbooks/bootstrap.yml` skips Aider, Orchestrator, Codex host/gateway, and
+Open WebUI when `retired_stack_cleanup_enabled` is true.
 
 Export the corresponding environment flag before using bootstrap on this
 reduced host:
@@ -92,15 +87,12 @@ The cleanup does not delete:
 
 - `.env`, `group_vars/vault.yml`, or files under `ssh/`
 - WireGuard keys or `/etc/wireguard`
-- retained OpenClaw/Codex/Orchestrator configuration that may contain tokens
+- retained Codex/Orchestrator configuration that may contain tokens
 - TLS private keys or archived certificates
 - PostgreSQL dumps and pre-cleanup archives under `/srv/ai-lab/backups`
 - the one-time pre-migration Grafana database backup created before removing
   obsolete dashboard resources
 - repository checkouts or Codex workspaces that may contain user work
-
-The OpenClaw certificate renewal file is removed so the retired endpoint is no
-longer renewed, but existing certificate/key material is retained.
 
 These residuals are inert: no retired systemd unit, user unit, container, Nginx
 site, Prometheus target, or listening application port remains. Delete retained

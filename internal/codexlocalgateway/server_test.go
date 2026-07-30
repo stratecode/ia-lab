@@ -853,7 +853,7 @@ func TestResponsesStreamMapsShellFenceToToolSearchCodeWhenExecUnavailable(t *tes
 	for _, want := range []string{
 		`"type":"function_call"`,
 		`"name":"tool_search_code"`,
-		`openclaw.tools.call`,
+		`tools.exec_command`,
 		`hello.txt`,
 		`"type":"response.function_call_arguments.delta"`,
 		`"type":"response.function_call_arguments.done"`,
@@ -979,7 +979,7 @@ func TestResponsesNormalizesNativeToolSearchCodeCmdArguments(t *testing.T) {
 	if len(out.Output) != 1 || out.Output[0].Type != "function_call" || out.Output[0].Name != "tool_search_code" {
 		t.Fatalf("expected normalized tool_search_code function call, got %#v", out.Output)
 	}
-	for _, want := range []string{`"code":"`, `openclaw.tools.call`, `hello.txt`} {
+	for _, want := range []string{`"code":"`, `tools.exec_command`, `hello.txt`} {
 		if !strings.Contains(out.Output[0].Arguments, want) {
 			t.Fatalf("expected normalized arguments to contain %q, got %q", want, out.Output[0].Arguments)
 		}

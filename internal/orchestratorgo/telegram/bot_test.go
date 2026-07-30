@@ -111,7 +111,7 @@ func TestCmdAutonomousStartsRunner(t *testing.T) {
 	if starter.lastReq.Goal != "arregla el bug del gateway" {
 		t.Fatalf("unexpected goal: %q", starter.lastReq.Goal)
 	}
-	if starter.lastReq.Surface != "openclaw.telegram" {
+	if starter.lastReq.Surface != "orchestrator.telegram" {
 		t.Fatalf("unexpected surface: %q", starter.lastReq.Surface)
 	}
 }
