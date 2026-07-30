@@ -14,6 +14,24 @@
     - /var/snap/prometheus/current/promreg
   when: grafana_enabled or alertmanager_enabled
 
+- name: Bind Alertmanager to loopback and disable single-node clustering
+  ansible.builtin.copy:
+    dest: /etc/default/prometheus-alertmanager
+    mode: "0644"
+    content: |
+      ARGS="--web.listen-address=127.0.0.1:{{ alertmanager_port }} --cluster.listen-address="
+  notify: Restart alertmanager
+  when: alertmanager_enabled
+
+- name: Bind node-exporter to loopback
+  ansible.builtin.copy:
+    dest: /etc/default/prometheus-node-exporter
+    mode: "0644"
+    content: |
+      ARGS="--web.listen-address=127.0.0.1:9100"
+  notify: Restart node-exporter
+  when: alertmanager_enabled
+
 - name: Configure Alertmanager
   ansible.builtin.copy:
     dest: /etc/alertmanager/alertmanager.yml
@@ -241,7 +259,7 @@
     dest: /var/snap/prometheus/current/daemon_arguments
     mode: "0644"
     content: |
-      ARGS="--web.external-url=https://{{ observability_domain }}/prometheus/ --web.route-prefix=/prometheus/"
+      ARGS="--web.listen-address=127.0.0.1:9090 --web.external-url=https://{{ observability_domain }}/prometheus/ --web.route-prefix=/prometheus/"
   notify: Restart prometheus
   when: alertmanager_enabled
 
@@ -255,7 +273,7 @@
         - name: Prometheus
           type: prometheus
           access: proxy
-          url: http://host.docker.internal:9090/prometheus
+          url: https://{{ observability_domain }}/prometheus
           isDefault: true
           editable: false
   when: grafana_enabled
@@ -399,6 +417,7 @@
             - "127.0.0.1:{{ grafana_port }}:3000"
           extra_hosts:
             - "host.docker.internal:host-gateway"
+            - "{{ observability_domain }}:host-gateway"
           env_file:
             - /srv/ai-lab/observability/grafana.env
           environment:

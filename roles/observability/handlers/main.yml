@@ -4,6 +4,12 @@
     state: restarted
     enabled: true
 
+- name: Restart node-exporter
+  ansible.builtin.systemd:
+    name: prometheus-node-exporter
+    state: restarted
+    enabled: true
+
 - name: Validate Prometheus configuration
   ansible.builtin.command: >-
     promtool check config /var/snap/prometheus/current/prometheus.yml
