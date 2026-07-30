@@ -16,6 +16,29 @@
     purge: true
     autoremove: true
 
+- name: Ensure Certbot systemd override directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/certbot.service.d
+    state: directory
+    mode: "0755"
+  when:
+    - monitor_tls_mode == "letsencrypt"
+    - monitor_letsencrypt_challenge == "dns-route53"
+
+- name: Configure Route53 credentials for unattended Certbot renewal
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/certbot.service.d/route53.conf
+    mode: "0644"
+    content: |
+      [Service]
+      Environment="AWS_PROFILE={{ monitor_letsencrypt_aws_profile }}"
+      Environment="AWS_SHARED_CREDENTIALS_FILE=/root/.aws/credentials"
+      Environment="AWS_CONFIG_FILE=/root/.aws/config"
+  notify: Reload systemd
+  when:
+    - monitor_tls_mode == "letsencrypt"
+    - monitor_letsencrypt_challenge == "dns-route53"
+
 - name: Reset failed state for removed legacy services
   ansible.builtin.command: systemctl reset-failed openipmi.service
   changed_when: false
