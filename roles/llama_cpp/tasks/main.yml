@@ -354,7 +354,8 @@
         -np {{ item.parallel }} \
         -ngl {{ item.n_gpu_layers }} \
         --api-key {{ item.api_key }} \
-        --metrics{% if item.embedding_mode | default(false) %} \
+        --metrics{% for arg in (item.extra_args | default([], true)) %} \
+        {{ arg }}{% endfor %}{% if item.embedding_mode | default(false) %} \
         --embedding{% else %} \
         --temp 0.7 --top-p 0.9 --repeat-penalty 1.1 --jinja{% endif %}
 

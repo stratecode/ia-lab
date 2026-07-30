@@ -1,0 +1,9 @@
+---
+- name: Deploy lab observability
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Install observability stack
+      ansible.builtin.import_role:
+        name: observability

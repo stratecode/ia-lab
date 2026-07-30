@@ -70,31 +70,6 @@ retired_stack_cleanup_enabled: "{{ lookup('env', 'LAB_RETIRED_STACK_CLEANUP_ENAB
 open_webui_enabled: "{{ lookup('env', 'LAB_OPEN_WEBUI_ENABLED') | default('false', true) | bool }}"
 aider_enabled: "{{ lookup('env', 'LAB_AIDER_ENABLED') | default('true', true) | bool }}"
 orchestrator_enabled: "{{ lookup('env', 'LAB_ORCHESTRATOR_ENABLED') | default('true', true) | bool }}"
-localai_enabled: "{{ lookup('env', 'LAB_LOCALAI_ENABLED') | default('false', true) | bool }}"
-
-# ─── LocalAI evaluation runtime ─────────────────────────────────────────────
-localai_image: "{{ lookup('env', 'LAB_LOCALAI_IMAGE') | default('localai/localai:v4.7.1', true) }}"
-localai_container_name: localai
-localai_bind_address: "{{ lookup('env', 'LAB_LOCALAI_BIND_ADDRESS') | default('127.0.0.1', true) }}"
-localai_port: "{{ lookup('env', 'LAB_LOCALAI_PORT') | default('8181', true) | int }}"
-localai_domain: "{{ lookup('env', 'LAB_LOCALAI_DOMAIN') | default('localai.stratecode.local', true) }}"
-localai_api_key: "{{ lookup('env', 'LAB_LOCALAI_API_KEY') | default('', true) }}"
-localai_root_dir: /srv/ai-lab/localai
-localai_models_dir: "{{ localai_root_dir }}/models"
-localai_config_dir: "{{ localai_root_dir }}/config"
-localai_data_dir: "{{ localai_root_dir }}/data"
-localai_backends_dir: "{{ localai_root_dir }}/backends"
-localai_env_file: "{{ localai_config_dir }}/localai.env"
-localai_ssl_certificate: "/etc/ssl/certs/{{ localai_domain }}.crt"
-localai_ssl_certificate_key: "/etc/ssl/private/{{ localai_domain }}.key"
-localai_default_model: "{{ lookup('env', 'LAB_LOCALAI_DEFAULT_MODEL') | default('qwen3-4b', true) }}"
-localai_default_model_file: "{{ lookup('env', 'LAB_LOCALAI_DEFAULT_MODEL_FILE') | default('Qwen3-4B.Q4_K_M.gguf', true) }}"
-localai_model_context_size: "{{ lookup('env', 'LAB_LOCALAI_MODEL_CONTEXT_SIZE') | default('2048', true) | int }}"
-localai_model_threads: "{{ lookup('env', 'LAB_LOCALAI_MODEL_THREADS') | default('2', true) | int }}"
-localai_model_batch: "{{ lookup('env', 'LAB_LOCALAI_MODEL_BATCH') | default('64', true) | int }}"
-localai_memory_limit: "{{ lookup('env', 'LAB_LOCALAI_MEMORY_LIMIT') | default('6g', true) }}"
-localai_cpu_limit: "{{ lookup('env', 'LAB_LOCALAI_CPU_LIMIT') | default('4.0', true) }}"
-localai_readiness_path: "{{ lookup('env', 'LAB_LOCALAI_READINESS_PATH') | default('/readyz', true) }}"
 
 # ─── Alertmanager ───────────────────────────────────────────────────────────
 alertmanager_enabled: true
@@ -120,19 +95,22 @@ llama_cpp_instances:
     port: "{{ lookup('env', 'LAB_LLAMA_CODE_PORT') | default('8080', true) | int }}"
     hf_repo: "{{ lookup('env', 'LAB_LLAMA_CODE_MODEL') | default('Qwen/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M', true) }}"
     alias: coder
-    ctx_size: "{{ lookup('env', 'LAB_LLAMA_CODE_CTX_SIZE') | default('24576', true) | int }}"
-    recommended_ctx_size: 24576
+    ctx_size: "{{ lookup('env', 'LAB_LLAMA_CODE_CTX_SIZE') | default('16384', true) | int }}"
+    recommended_ctx_size: 16384
     max_ctx_size: 32768
-    threads: "{{ lookup('env', 'LAB_LLAMA_CODE_THREADS') | default('8', true) | int }}"
+    threads: "{{ lookup('env', 'LAB_LLAMA_CODE_THREADS') | default('6', true) | int }}"
     parallel: "{{ lookup('env', 'LAB_LLAMA_CODE_PARALLEL') | default('1', true) | int }}"
-    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_CODE_GPU_LAYERS') | default('33', true) | int }}"
+    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_CODE_GPU_LAYERS') | default('24', true) | int }}"
     api_key: "{{ lookup('env', 'LAB_LLAMA_CODE_API_KEY') | default('local-code', true) }}"
     instance_lifecycle: "always-on"
     priority: 1
     model_size_mb: 4100
     ram_estimation_override_mb: null
-    vram_reservation_mb: 2200
-    memory_max_mb: 10240
+    vram_reservation_mb: 1800
+    memory_max_mb: 8192
+    extra_args:
+      - "--cache-ram"
+      - "0"
     gpu_fallback_policy: "reduce-layers"
     max_queued_requests: 4
     request_timeout_seconds: 180
@@ -159,13 +137,13 @@ llama_cpp_instances:
     max_ctx_size: 24576
     threads: "{{ lookup('env', 'LAB_LLAMA_PLANNER_THREADS') | default('4', true) | int }}"
     parallel: "{{ lookup('env', 'LAB_LLAMA_PLANNER_PARALLEL') | default('2', true) | int }}"
-    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_PLANNER_GPU_LAYERS') | default('20', true) | int }}"
+    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_PLANNER_GPU_LAYERS') | default('14', true) | int }}"
     api_key: "{{ lookup('env', 'LAB_LLAMA_PLANNER_API_KEY') | default('local-planner', true) }}"
     instance_lifecycle: "always-on"
     priority: 2
     model_size_mb: 1900
     ram_estimation_override_mb: null
-    vram_reservation_mb: 1200
+    vram_reservation_mb: 800
     memory_max_mb: 6144
     gpu_fallback_policy: "reduce-layers"
     max_queued_requests: 4
@@ -191,15 +169,15 @@ llama_cpp_instances:
     ctx_size: "{{ lookup('env', 'LAB_LLAMA_UTILITY_CTX_SIZE') | default('8192', true) | int }}"
     recommended_ctx_size: 8192
     max_ctx_size: 16384
-    threads: "{{ lookup('env', 'LAB_LLAMA_UTILITY_THREADS') | default('4', true) | int }}"
+    threads: "{{ lookup('env', 'LAB_LLAMA_UTILITY_THREADS') | default('3', true) | int }}"
     parallel: "{{ lookup('env', 'LAB_LLAMA_UTILITY_PARALLEL') | default('1', true) | int }}"
-    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_UTILITY_GPU_LAYERS') | default('16', true) | int }}"
+    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_UTILITY_GPU_LAYERS') | default('10', true) | int }}"
     api_key: "{{ lookup('env', 'LAB_LLAMA_UTILITY_API_KEY') | default('local-utility', true) }}"
     instance_lifecycle: "always-on"
     priority: 3
     model_size_mb: 1200
     ram_estimation_override_mb: null
-    vram_reservation_mb: 900
+    vram_reservation_mb: 500
     memory_max_mb: 4096
     gpu_fallback_policy: "reduce-layers"
     max_queued_requests: 4

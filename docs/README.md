@@ -70,7 +70,7 @@ Tool registry and MCP integrations.
 - [Autonomous Objective Runtime Plan](architecture/autonomous-objective-runtime-plan.md)
 - [Local Bridge and CLI](local-bridge.md)
 - [Orchestrator Redeploy Runbook](orchestrator-redeploy.md)
-- [LocalAI Evaluation Baseline](localai-baseline-cleanup.md)
+- [llama.cpp Baseline](llama-baseline-cleanup.md)
 - [Server Baseline](server-baseline.md)
 - [WireGuard](wireguard.md)
 
@@ -78,6 +78,6 @@ Tool registry and MCP integrations.
 
 | Date | Author | Change Description |
 |------|--------|--------------------|
-| 2026-07-28 | Codex | Documented the reduced LocalAI evaluation baseline and cleanup verification |
+| 2026-07-28 | Codex | Documented the reduced llama.cpp baseline and cleanup verification |
 | 2025-07-14 | Platform Architect | Initial documentation index skeleton creation |
 | 2025-07-15 | Platform Architect | Final index update with all documents, verified links and headings |

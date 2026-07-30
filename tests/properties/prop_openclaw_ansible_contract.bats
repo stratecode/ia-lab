@@ -155,3 +155,42 @@ if missing:
 PY"
   [ "$status" -eq 0 ]
 }
+
+@test "llama cpp service supports stability extra args and default budgets stay under host limits" {
+  run bash -lc "cd '$repo_root' && python3 - <<'PY'
+from pathlib import Path
+
+group_vars = Path('group_vars/all.yml').read_text()
+tasks = Path('roles/llama_cpp/tasks/main.yml').read_text()
+
+checks = [
+    \"LAB_LLAMA_CODE_CTX_SIZE') | default('16384', true)\",
+    \"LAB_LLAMA_CODE_THREADS') | default('6', true)\",
+    \"LAB_LLAMA_CODE_GPU_LAYERS') | default('24', true)\",
+    \"LAB_LLAMA_PLANNER_GPU_LAYERS') | default('14', true)\",
+    \"LAB_LLAMA_UTILITY_THREADS') | default('3', true)\",
+    \"LAB_LLAMA_UTILITY_GPU_LAYERS') | default('10', true)\",
+    'vram_reservation_mb: 1800',
+    'vram_reservation_mb: 800',
+    'vram_reservation_mb: 500',
+    'extra_args:',
+    '      - \"--cache-ram\"',
+    '      - \"0\"',
+    \"llama_cpp_thread_budget: \\\"{{ lookup('env', 'LAB_LLAMA_THREAD_BUDGET') | default('16', true) | int }}\\\"\",
+    \"llama_cpp_vram_total_mb: \\\"{{ lookup('env', 'LAB_LLAMA_VRAM_TOTAL_MB') | default('4096', true) | int }}\\\"\",
+]
+missing = [item for item in checks if item not in group_vars]
+if missing:
+    raise SystemExit('missing: ' + ', '.join(missing))
+
+thread_total = 6 + 4 + 3 + 2
+vram_total = 1800 + 800 + 500 + 512
+if thread_total > 16:
+    raise SystemExit(f'thread budget exceeded: {thread_total} > 16')
+if vram_total > 4096:
+    raise SystemExit(f'vram budget exceeded: {vram_total} > 4096')
+if 'item.extra_args | default([], true)' not in tasks:
+    raise SystemExit('llama.cpp service does not render extra_args')
+PY"
+  [ "$status" -eq 0 ]
+}

@@ -179,11 +179,6 @@
       ansible.builtin.import_role:
         name: llama_cpp
 
-    - name: Install LocalAI evaluation runtime
-      ansible.builtin.import_role:
-        name: localai
-      when: localai_enabled
-
     - name: Install aider runtime
       ansible.builtin.import_role:
         name: aider

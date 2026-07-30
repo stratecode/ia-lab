@@ -1,8 +1,7 @@
-# LocalAI Evaluation Baseline
+# llama.cpp Baseline
 
-This runbook documents the reduced lab state prepared for a future LocalAI
-installation and evaluation. It describes deployed infrastructure, not the
-product roadmap.
+This runbook documents the reduced lab state centered on `llama.cpp`. It
+describes deployed infrastructure, not the product roadmap.
 
 Last verified against the `lab` inventory: July 28, 2026.
 
@@ -51,8 +50,8 @@ set -a
 source .env
 set +a
 
-ansible-playbook playbooks/cleanup-localai-baseline.yml --syntax-check
-ansible-playbook playbooks/cleanup-localai-baseline.yml
+ansible-playbook playbooks/cleanup-llama-baseline.yml --syntax-check
+ansible-playbook playbooks/cleanup-llama-baseline.yml
 ```
 
 The playbook first asserts that WireGuard, monitoring, and every `llama.cpp`
@@ -85,7 +84,7 @@ ansible-playbook playbooks/bootstrap.yml
 
 Running bootstrap without that flag follows the full-stack defaults and may
 reinstall retired components. The dedicated cleanup playbook remains the source
-of truth for the LocalAI evaluation baseline.
+of truth for the `llama.cpp` baseline.
 
 ## Secrets, backups, and intentional residuals
 

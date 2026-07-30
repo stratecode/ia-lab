@@ -1,10 +1,6 @@
 # StrateCode Lab
 
-Ansible-managed homelab infrastructure. Provisions and configures an Ubuntu server as a self-hosted platform for local AI inference, orchestrated task execution, VPN access, observability, optional Codex gateway access, and basic hardening.
-
-LocalAI is available as an opt-in evaluation runtime alongside `llama.cpp`.
-Installation, private HTTPS access, authentication, validation, and rollback
-are documented in [docs/localai.md](docs/localai.md).
+Ansible-managed homelab infrastructure. Provisions and configures an Ubuntu server as a self-hosted platform for local AI inference with `llama.cpp`, orchestrated task execution, VPN access, observability, optional Codex gateway access, and basic hardening.
 
 ## Operating summary
 
@@ -128,7 +124,6 @@ Roles are applied in dependency order:
 | `https://<observability_domain>` | Grafana | LAN + VPN |
 | `https://<observability_domain>/prometheus/` | Prometheus | LAN + VPN |
 | `https://<chat_domain>` | Open WebUI | LAN + VPN when `open_webui_enabled=true` |
-| `https://localai.stratecode.local` | LocalAI evaluation runtime | LAN + VPN when `localai_enabled=true` |
 | `http://127.0.0.1:8080/v1` | llama.cpp (code) | localhost |
 | `http://127.0.0.1:8082/v1` | llama.cpp (planner) | localhost |
 | `http://127.0.0.1:8083/v1` | llama.cpp (utility) | localhost |

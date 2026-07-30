@@ -1,5 +1,5 @@
 ---
-- name: Reconcile lab to the LocalAI evaluation baseline
+- name: Reconcile lab to the llama.cpp baseline
   hosts: all
   become: true
 
@@ -7,7 +7,6 @@
     - ../group_vars/vault.yml
 
   vars:
-    localai_cleanup_enabled: "{{ lookup('env', 'LAB_LOCALAI_CLEANUP_ENABLED') | default('false', true) | bool }}"
     retired_system_units:
       - aider-cleanup.timer
       - aider-cleanup.service
@@ -162,31 +161,6 @@
       loop: "{{ ['/etc/nginx/sites-enabled', '/etc/nginx/sites-available'] | product(retired_nginx_sites) | list }}"
       notify: Reload nginx
 
-    - name: Remove LocalAI evaluation container
-      ansible.builtin.command:
-        argv:
-          - docker
-          - container
-          - rm
-          - --force
-          - localai
-      register: localai_container_cleanup
-      changed_when: localai_container_cleanup.rc == 0
-      failed_when: >-
-        localai_container_cleanup.rc != 0
-        and 'no such container' not in localai_container_cleanup.stderr | lower
-      when: localai_cleanup_enabled
-
-    - name: Remove LocalAI nginx exposure
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /etc/nginx/sites-enabled/localai.conf
-        - /etc/nginx/sites-available/localai.conf
-      notify: Reload nginx
-      when: localai_cleanup_enabled
-
     - name: Remove residual Open WebUI Docker volume
       ansible.builtin.command:
         argv:
@@ -227,7 +201,7 @@
       ansible.builtin.shell: |
         set -euo pipefail
         db=/opt/docker/volumes/observability_grafana-data/_data/grafana.db
-        backup=/srv/ai-lab/backups/grafana-pre-localai-dashboard-cleanup.db
+        backup=/srv/ai-lab/backups/grafana-pre-retired-dashboard-cleanup.db
         [[ -f "${db}" ]] || {
           echo changed=false
           exit 0
@@ -351,14 +325,6 @@
         - 8221
         - 8222
         - 18789
-
-    - name: Verify LocalAI backend port is closed after requested cleanup
-      ansible.builtin.wait_for:
-        host: 127.0.0.1
-        port: "{{ localai_port }}"
-        state: stopped
-        timeout: 5
-      when: localai_cleanup_enabled
 
   handlers:
     - name: Reload nginx

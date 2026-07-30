@@ -4,8 +4,21 @@
     state: restarted
     enabled: true
 
-- name: Restart prometheus
+- name: Validate Prometheus configuration
+  ansible.builtin.command: >-
+    promtool check config /var/snap/prometheus/current/prometheus.yml
+  changed_when: false
+  listen: Restart prometheus
+
+- name: Validate Prometheus alert rules
+  ansible.builtin.command: >-
+    promtool check rules /var/snap/prometheus/current/promreg/lab-alerts.yml
+  changed_when: false
+  listen: Restart prometheus
+
+- name: Restart validated Prometheus configuration
   ansible.builtin.systemd:
     name: snap.prometheus.prometheus
     state: restarted
     enabled: true
+  listen: Restart prometheus

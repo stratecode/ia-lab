@@ -57,7 +57,7 @@
         - name: lab-host
           rules:
             - alert: NodeDown
-              expr: up{job="node"} == 0
+              expr: up{job="node"} != 1 or absent(up{job="node"})
               for: 2m
               labels:
                 severity: critical
@@ -92,6 +92,32 @@
                 summary: Root filesystem usage is high
                 description: Root filesystem usage is above 85%.
 
+            - alert: RootFilesystemCritical
+              expr: 100 * (1 - (node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"})) > 95
+              for: 5m
+              labels:
+                severity: critical
+              annotations:
+                summary: Root filesystem usage is critical
+                description: Root filesystem usage is above 95%.
+
+            - alert: HostSwapPressure
+              expr: (1 - (node_memory_SwapFree_bytes / node_memory_SwapTotal_bytes)) * 100 > 50
+              for: 5m
+              labels:
+                severity: warning
+              annotations:
+                summary: Host swap usage is high
+                description: More than half of configured swap is in use.
+
+            - alert: HostRecentlyRebooted
+              expr: time() - node_boot_time_seconds < 900
+              labels:
+                severity: critical
+              annotations:
+                summary: Lab host restarted recently
+                description: The host booted less than 15 minutes ago; inspect the previous boot for a crash.
+
             - alert: DiskIOPressure
               expr: max(rate(node_disk_io_time_seconds_total{device!~"^(loop|ram|zram|dm-|md).*"}[5m])) > 0.6
               for: 10m
@@ -111,7 +137,7 @@
                 description: A hardware sensor is reporting above 80C.
 
             - alert: LlamaCppDown
-              expr: up{job="llama-cpp-code"} == 0
+              expr: up{job="llama-cpp-code"} != 1 or absent(up{job="llama-cpp-code"})
               for: 2m
               labels:
                 severity: critical
@@ -136,6 +162,33 @@
               annotations:
                 summary: llama.cpp queue backlog detected
                 description: llama-cpp-code has more than two pending requests for five minutes.
+
+            - alert: GrafanaDown
+              expr: up{job="grafana"} != 1 or absent(up{job="grafana"})
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: Grafana is down
+                description: Prometheus cannot scrape Grafana.
+
+            - alert: AlertmanagerDown
+              expr: up{job="alertmanager"} != 1 or absent(up{job="alertmanager"})
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: Alertmanager is down
+                description: Prometheus cannot scrape Alertmanager.
+
+            - alert: PrometheusConfigurationReloadFailed
+              expr: prometheus_config_last_reload_successful != 1
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: Prometheus configuration reload failed
+                description: Prometheus rejected its latest configuration or rule reload.
   notify: Restart prometheus
   when: alertmanager_enabled
 
@@ -165,6 +218,14 @@
           metrics_path: /prometheus/metrics
           static_configs:
             - targets: ["localhost:9090"]
+
+        - job_name: "alertmanager"
+          static_configs:
+            - targets: ["127.0.0.1:{{ alertmanager_port }}"]
+
+        - job_name: "grafana"
+          static_configs:
+            - targets: ["127.0.0.1:{{ grafana_port }}"]
 
         - job_name: "llama-cpp-code"
           metrics_path: /metrics
