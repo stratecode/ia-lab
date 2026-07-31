@@ -1,0 +1,12 @@
+---
+- name: Deploy SRL local HTTPS access
+  hosts: all
+  become: true
+
+  vars_files:
+    - ../group_vars/vault.yml
+
+  tasks:
+    - name: Configure SRL domains, certificates, and reverse proxies
+      ansible.builtin.import_role:
+        name: monitor

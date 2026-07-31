@@ -41,6 +41,8 @@ server_packages:
 cockpit_domain: "{{ lookup('env', 'LAB_COCKPIT_DOMAIN') | default('lab.localhost', true) }}"
 observability_domain: "{{ lookup('env', 'LAB_OBSERVABILITY_DOMAIN') | default('monitor.localhost', true) }}"
 open_webui_domain: "{{ lookup('env', 'LAB_CHAT_DOMAIN') | default('chat.localhost', true) }}"
+srl_dashboard_domain: "{{ lookup('env', 'LAB_SRL_DASHBOARD_DOMAIN') | default('srl.' ~ (cockpit_domain.split('.', 1) | last), true) }}"
+srl_opensearch_domain: "{{ lookup('env', 'LAB_SRL_OPENSEARCH_DOMAIN') | default('opensearch.' ~ (cockpit_domain.split('.', 1) | last), true) }}"
 
 # ─── Monitor / Nginx / TLS ──────────────────────────────────────────────────
 monitor_backend_port: 9091
@@ -48,6 +50,9 @@ monitor_tls_mode: "{{ lookup('env', 'LAB_TLS_MODE') | default('selfsigned', true
 monitor_letsencrypt_email: "{{ lookup('env', 'LAB_LETSENCRYPT_EMAIL') | default('', true) }}"
 monitor_letsencrypt_challenge: "{{ lookup('env', 'LAB_LETSENCRYPT_CHALLENGE') | default('dns-route53', true) }}"
 monitor_letsencrypt_aws_profile: "{{ lookup('env', 'LAB_LETSENCRYPT_AWS_PROFILE') | default('route53-dns', true) }}"
+srl_access_enabled: "{{ lookup('env', 'LAB_SRL_ACCESS_ENABLED') | default('true', true) | bool }}"
+srl_dashboard_port: 5601
+srl_opensearch_port: 9200
 monitor_absent_packages:
   - openipmi
 monitor_pcp_services:

@@ -167,6 +167,11 @@
           else []
         )
         + (
+          ['-d', srl_dashboard_domain] + ['-d', srl_opensearch_domain]
+          if srl_access_enabled | default(false)
+          else []
+        )
+        + (
           ['-m', monitor_letsencrypt_email]
           if monitor_letsencrypt_email | length > 0
           else ['--register-unsafely-without-email']
@@ -364,6 +369,82 @@
               proxy_connect_timeout 60s;
               gzip off;
               add_header X-Accel-Buffering no always;
+          }
+      }
+      {% endif %}
+      {% if srl_access_enabled | default(false) %}
+
+      server {
+          listen 80;
+          listen [::]:80;
+          server_name {{ srl_dashboard_domain }} {{ srl_opensearch_domain }};
+
+          location / {
+              return 301 https://$host$request_uri;
+          }
+      }
+
+      server {
+          listen 443 ssl;
+          listen [::]:443 ssl;
+          http2 on;
+          server_name {{ srl_dashboard_domain }};
+
+          ssl_certificate {{ monitor_nginx_ssl_certificate }};
+          ssl_certificate_key {{ monitor_nginx_ssl_certificate_key }};
+
+          allow 127.0.0.1;
+          allow ::1;
+          allow {{ server_lan_cidr }};
+          allow {{ docker_internal_cidr }};
+      {% if wireguard_enabled %}
+          allow {{ wireguard_subnet }};
+      {% endif %}
+          deny all;
+
+          location / {
+              proxy_pass http://127.0.0.1:{{ srl_dashboard_port }};
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header X-Forwarded-Host $host;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_http_version 1.1;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection "upgrade";
+              proxy_read_timeout 300s;
+          }
+      }
+
+      server {
+          listen 443 ssl;
+          listen [::]:443 ssl;
+          http2 on;
+          server_name {{ srl_opensearch_domain }};
+          client_max_body_size 300m;
+
+          ssl_certificate {{ monitor_nginx_ssl_certificate }};
+          ssl_certificate_key {{ monitor_nginx_ssl_certificate_key }};
+
+          allow 127.0.0.1;
+          allow ::1;
+          allow {{ server_lan_cidr }};
+          allow {{ docker_internal_cidr }};
+      {% if wireguard_enabled %}
+          allow {{ wireguard_subnet }};
+      {% endif %}
+          deny all;
+
+          location / {
+              proxy_pass http://127.0.0.1:{{ srl_opensearch_port }};
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header X-Forwarded-Host $host;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_http_version 1.1;
+              proxy_buffering off;
+              proxy_request_buffering off;
+              proxy_read_timeout 300s;
+              proxy_send_timeout 300s;
           }
       }
       {% endif %}

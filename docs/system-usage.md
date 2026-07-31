@@ -673,6 +673,24 @@ Full operator behavior, views, and keybindings live in:
 
 - [TUI Operator Guide](tui.md)
 
+## MINECO SRL local access
+
+The lab terminates TLS for the local SRL deployment and forwards only to
+loopback-bound Docker ports:
+
+- `https://srl.stratecode.com` -> OpenSearch Dashboards on `127.0.0.1:5601`
+- `https://opensearch.stratecode.com` -> OpenSearch API on `127.0.0.1:9200`
+
+The host certificate is issued with the Route53 DNS challenge and includes
+both names. On a Mac without local DNS entries, map both names to the lab IP in
+`/etc/hosts`; do not expose the Docker ports directly on the LAN.
+
+Deploy or reconcile this access layer with:
+
+```bash
+ansible-playbook playbooks/deploy-srl-access.yml
+```
+
 ## Research mode notes
 
 `orchestrator-tools` is no longer just a thin tool gateway. It now runs a server-side research flow:

@@ -119,6 +119,8 @@ Roles are applied in dependency order:
 | `https://<cockpit_domain>/orchestrator/health` | Orchestrator API | LAN + VPN |
 | `https://<observability_domain>` | Grafana | LAN + VPN |
 | `https://<observability_domain>/prometheus/` | Prometheus | LAN + VPN |
+| `https://<srl_dashboard_domain>` | MINECO SRL Dashboard | LAN + VPN |
+| `https://<srl_opensearch_domain>` | MINECO SRL OpenSearch API | LAN + VPN |
 | `https://<chat_domain>` | Open WebUI | LAN + VPN when `open_webui_enabled=true` |
 | `http://127.0.0.1:8080/v1` | llama.cpp (code) | localhost |
 | `http://127.0.0.1:8082/v1` | llama.cpp (planner) | localhost |
