@@ -1286,13 +1286,13 @@ func (s *PostgresStore) RequeueRecoverableRemoteTasks(ctx context.Context, cutof
 		       queued_at = NOW(),
 		       updated_at = NOW(),
 		       metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
-		           'recovery_checkpoint',
-		           COALESCE(metadata->'recovery_checkpoint', '{}'::jsonb) || jsonb_build_object(
-		               'last_requeue_at', NOW(),
-		               'recovery_actor', $2,
-		               'recovery_stage', 'requeued_after_interruption'
-		           )
-		       )
+		        'recovery_checkpoint',
+		        COALESCE(metadata->'recovery_checkpoint', '{}'::jsonb) || jsonb_build_object(
+		         'last_requeue_at', NOW(),
+		         'recovery_actor', to_jsonb($2),
+		         'recovery_stage', 'requeued_after_interruption'
+		        )
+		        )
 		 WHERE execution_target != 'local'
 		   AND archived_at IS NULL
 		   AND state IN ('assigned', 'in_progress', 'retrying')
