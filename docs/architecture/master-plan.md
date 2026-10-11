@@ -26,6 +26,13 @@ and conversation/memory layer. The channel boundary must authenticate the
 operator and preserve action permissions; a public inference endpoint is
 not required.
 
+Secretary tooling and skill priorities are analyzed in
+`../research/2026-10-11-ai-secretary-tools-skills.md`. Six synthetic prompts on
+the deployed LFM exposed an incorrect attribution of a commitment deadline and
+several omissions. This is exploratory evidence, not acceptance of autonomous
+secretary actions. External connectors remain undeployed; prioritize grounded
+read flows and reviewed drafts before bounded writes.
+
 The legacy initiative control plane remains in source as a possible governed
 execution foundation, but is retired on the host. The sections below preserve
 its historical architecture and validation; they do not describe active host
