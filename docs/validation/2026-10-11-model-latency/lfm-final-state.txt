@@ -1,0 +1,8 @@
+active
+active
+active
+open-webui Up 7 minutes (healthy)
+grafana Up 4 days
+LFM2.5-1.2B-Instruct-Q4_0.gguf 695751488 bytes
+{"status":true}LISTEN 0      4096       127.0.0.1:8081       0.0.0.0:*
+LISTEN 0      512        127.0.0.1:8080       0.0.0.0:*

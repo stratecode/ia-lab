@@ -1,0 +1,280 @@
+{
+  "hardware": "AMD Ryzen 7 7730U; 8 cores/16 threads; AVX2; RAM 30994 MiB",
+  "mode": "CPU only: --device none -ngl 0 --no-kv-offload",
+  "lfm_revision": "8ed288026e23958ad9dfa92d53ed773a8eee7125",
+  "lfm_sha256": "2ea801949d760cdf1a2cc04a54262c22c3c0c54f0769d57760c9adeb0e59233f",
+  "runs": [
+    {
+      "model": "Qwen2.5-1.5B-Instruct-Q4_K_M",
+      "threads": 4,
+      "run": 1,
+      "elapsed_s": 4.268,
+      "rss_mib": 1921.3,
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 183,
+        "prompt_ms": 1438.863,
+        "prompt_per_token_ms": 7.862639344262296,
+        "prompt_per_second": 127.18375550695235,
+        "predicted_n": 96,
+        "predicted_ms": 2827.317,
+        "predicted_per_token_ms": 29.45121875,
+        "predicted_per_second": 33.954452224494105
+      },
+      "generated_tokens": 96,
+      "prompt_tokens": 183
+    },
+    {
+      "model": "Qwen2.5-1.5B-Instruct-Q4_K_M",
+      "threads": 4,
+      "run": 2,
+      "elapsed_s": 4.581,
+      "rss_mib": 1921.4,
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 183,
+        "prompt_ms": 1718.009,
+        "prompt_per_token_ms": 9.38802732240437,
+        "prompt_per_second": 106.518650367955,
+        "predicted_n": 96,
+        "predicted_ms": 2861.397,
+        "predicted_per_token_ms": 29.80621875,
+        "predicted_per_second": 33.55004565951527
+      },
+      "generated_tokens": 96,
+      "prompt_tokens": 183
+    },
+    {
+      "model": "Qwen2.5-1.5B-Instruct-Q4_K_M",
+      "threads": 4,
+      "run": 3,
+      "elapsed_s": 4.557,
+      "rss_mib": 1921.5,
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 183,
+        "prompt_ms": 1689.857,
+        "prompt_per_token_ms": 9.2341912568306,
+        "prompt_per_second": 108.29318693830307,
+        "predicted_n": 96,
+        "predicted_ms": 2865.565,
+        "predicted_per_token_ms": 29.84963541666667,
+        "predicted_per_second": 33.50124670003996
+      },
+      "generated_tokens": 96,
+      "prompt_tokens": 183
+    },
+    {
+      "model": "Qwen2.5-1.5B-Instruct-Q4_K_M",
+      "threads": 8,
+      "run": 1,
+      "elapsed_s": 4.394,
+      "rss_mib": 1922.9,
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 183,
+        "prompt_ms": 1486.445,
+        "prompt_per_token_ms": 8.122650273224043,
+        "prompt_per_second": 123.11252686779531,
+        "predicted_n": 96,
+        "predicted_ms": 2906.117,
+        "predicted_per_token_ms": 30.272052083333335,
+        "predicted_per_second": 33.03376980348692
+      },
+      "generated_tokens": 96,
+      "prompt_tokens": 183
+    },
+    {
+      "model": "Qwen2.5-1.5B-Instruct-Q4_K_M",
+      "threads": 8,
+      "run": 2,
+      "elapsed_s": 4.524,
+      "rss_mib": 1922.9,
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 183,
+        "prompt_ms": 1615.714,
+        "prompt_per_token_ms": 8.82903825136612,
+        "prompt_per_second": 113.26261949825279,
+        "predicted_n": 96,
+        "predicted_ms": 2906.217,
+        "predicted_per_token_ms": 30.27309375,
+        "predicted_per_second": 33.032633144737645
+      },
+      "generated_tokens": 96,
+      "prompt_tokens": 183
+    },
+    {
+      "model": "Qwen2.5-1.5B-Instruct-Q4_K_M",
+      "threads": 8,
+      "run": 3,
+      "elapsed_s": 4.543,
+      "rss_mib": 1923.0,
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 183,
+        "prompt_ms": 1564.046,
+        "prompt_per_token_ms": 8.546699453551913,
+        "prompt_per_second": 117.00423133334952,
+        "predicted_n": 96,
+        "predicted_ms": 2976.681,
+        "predicted_per_token_ms": 31.00709375,
+        "predicted_per_second": 32.25068457117172
+      },
+      "generated_tokens": 96,
+      "prompt_tokens": 183
+    },
+    {
+      "model": "LFM2.5-1.2B-Instruct-Q4_0",
+      "threads": 4,
+      "run": 1,
+      "elapsed_s": 3.243,
+      "rss_mib": 1359.5,
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 200,
+        "prompt_ms": 1225.273,
+        "prompt_per_token_ms": 6.126365,
+        "prompt_per_second": 163.2289293896136,
+        "predicted_n": 96,
+        "predicted_ms": 2015.905,
+        "predicted_per_token_ms": 20.999010416666668,
+        "predicted_per_second": 47.621291677931254
+      },
+      "generated_tokens": 96,
+      "prompt_tokens": 200
+    },
+    {
+      "model": "LFM2.5-1.2B-Instruct-Q4_0",
+      "threads": 4,
+      "run": 2,
+      "elapsed_s": 3.296,
+      "rss_mib": 1359.6,
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 200,
+        "prompt_ms": 1272.906,
+        "prompt_per_token_ms": 6.364529999999999,
+        "prompt_per_second": 157.12079289436926,
+        "predicted_n": 96,
+        "predicted_ms": 2021.4,
+        "predicted_per_token_ms": 21.056250000000002,
+        "predicted_per_second": 47.49183734045711
+      },
+      "generated_tokens": 96,
+      "prompt_tokens": 200
+    },
+    {
+      "model": "LFM2.5-1.2B-Instruct-Q4_0",
+      "threads": 4,
+      "run": 3,
+      "elapsed_s": 3.291,
+      "rss_mib": 1359.7,
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 200,
+        "prompt_ms": 1272.587,
+        "prompt_per_token_ms": 6.362935,
+        "prompt_per_second": 157.1601784396666,
+        "predicted_n": 96,
+        "predicted_ms": 2016.763,
+        "predicted_per_token_ms": 21.007947916666666,
+        "predicted_per_second": 47.60103195070516
+      },
+      "generated_tokens": 96,
+      "prompt_tokens": 200
+    },
+    {
+      "model": "LFM2.5-1.2B-Instruct-Q4_0",
+      "threads": 8,
+      "run": 1,
+      "elapsed_s": 2.799,
+      "rss_mib": 1360.4,
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 200,
+        "prompt_ms": 781.093,
+        "prompt_per_token_ms": 3.905465,
+        "prompt_per_second": 256.051456100618,
+        "predicted_n": 96,
+        "predicted_ms": 2016.125,
+        "predicted_per_token_ms": 21.001302083333332,
+        "predicted_per_second": 47.61609523219046
+      },
+      "generated_tokens": 96,
+      "prompt_tokens": 200
+    },
+    {
+      "model": "LFM2.5-1.2B-Instruct-Q4_0",
+      "threads": 8,
+      "run": 2,
+      "elapsed_s": 2.849,
+      "rss_mib": 1360.5,
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 200,
+        "prompt_ms": 830.971,
+        "prompt_per_token_ms": 4.154855,
+        "prompt_per_second": 240.6822861447632,
+        "predicted_n": 96,
+        "predicted_ms": 2016.314,
+        "predicted_per_token_ms": 21.003270833333335,
+        "predicted_per_second": 47.611631918441276
+      },
+      "generated_tokens": 96,
+      "prompt_tokens": 200
+    },
+    {
+      "model": "LFM2.5-1.2B-Instruct-Q4_0",
+      "threads": 8,
+      "run": 3,
+      "elapsed_s": 2.851,
+      "rss_mib": 1360.6,
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 200,
+        "prompt_ms": 831.328,
+        "prompt_per_token_ms": 4.1566399999999994,
+        "prompt_per_second": 240.57892913507067,
+        "predicted_n": 96,
+        "predicted_ms": 2017.815,
+        "predicted_per_token_ms": 21.01890625,
+        "predicted_per_second": 47.57621486608039
+      },
+      "generated_tokens": 96,
+      "prompt_tokens": 200
+    }
+  ],
+  "quality": [
+    {
+      "model": "Qwen2.5-1.5B-Instruct-Q4_K_M",
+      "case": "extract",
+      "content": "```json\n{\n  \"service\": \"llama-cpp-code\",\n  \"state\": \"active\",\n  \"action\": \"none\"\n}\n```"
+    },
+    {
+      "model": "Qwen2.5-1.5B-Instruct-Q4_K_M",
+      "case": "grounding",
+      "content": "No, no podemos concluir que el asistente funciona bien basándonos en los datos observados. Los cuatro modelos devuelven HTTP 200, lo cual indica que la solicitud ha sido procesada correctamente. Sin embargo, falta información sobre la calidad de las respuestas y el rendimiento, lo cual es crucial para evaluar la eficiencia y precisión del asistente."
+    },
+    {
+      "model": "Qwen2.5-1.5B-Instruct-Q4_K_M",
+      "case": "tool_selection",
+      "content": "```json\n{\n  \"tool\": \"service_status\",\n  \"arguments\": \"comprueba si llama-cpp-planner está funcionando\"\n}\n```"
+    },
+    {
+      "model": "LFM2.5-1.2B-Instruct-Q4_0",
+      "case": "extract",
+      "content": "{\n  \"service\": \"llama-cpp-code\",\n  \"state\": \"active\",\n  \"action\": null\n}"
+    },
+    {
+      "model": "LFM2.5-1.2B-Instruct-Q4_0",
+      "case": "grounding",
+      "content": "Sí, los datos sugieren que el asistente funciona bien."
+    },
+    {
+      "model": "LFM2.5-1.2B-Instruct-Q4_0",
+      "case": "tool_selection",
+      "content": "```json\n{\n  \"tool\": \"service_status\",\n  \"unit\": \"service_status(unit)\"\n}\n```"
+    }
+  ]
+}

@@ -1,5 +1,10 @@
 # llama.cpp Baseline
 
+Historical July profile. The October lab profile also retains repository-owned
+Open WebUI and excludes external test projects. Use
+[Lab-only operation](lab-only-operation.md) to reconcile the current host.
+
+
 This runbook documents the reduced lab state centered on `llama.cpp`. It
 describes deployed infrastructure, not the product roadmap.
 

@@ -1,0 +1,18 @@
+---
+- name: Deploy the single principal model and its chat interface
+  hosts: all
+  become: true
+  vars_files:
+    - ../group_vars/vault.yml
+  vars:
+    open_webui_enabled: true
+    orchestrator_enabled: false
+    codex_gateway_enabled: false
+    open_webui_public_cname_target: ""
+  roles:
+    - llama_cpp
+    - role: llm_telemetry
+      when: llm_telemetry_enabled
+    - open_webui
+    - monitor
+    - observability

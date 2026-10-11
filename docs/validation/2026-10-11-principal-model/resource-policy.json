@@ -1,0 +1,26 @@
+{
+  "previous_policy_violations": [
+    {
+      "resource": "ram",
+      "total": 12288,
+      "minimum": 15497,
+      "maximum": 27894,
+      "host_total": 30994
+    },
+    {
+      "resource": "vram",
+      "total": 0,
+      "minimum": 256,
+      "maximum": 460,
+      "host_total": 512
+    }
+  ],
+  "principal_policy_violations": [],
+  "principal_envelope": {
+    "host_ram_mb": 30994,
+    "host_threads": 16,
+    "host_vram_mb": 512,
+    "min_percent": 0,
+    "max_percent": 90
+  }
+}

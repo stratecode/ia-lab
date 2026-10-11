@@ -1,0 +1,19 @@
+{
+  "date": "2026-10-11",
+  "go_tests": "passed: scripts/test-orchestrator-go.sh",
+  "go_build": "passed: scripts/build-orchestrator-go.sh",
+  "llama_config_properties": "27 passed",
+  "retirement_tests": "4 passed",
+  "secret_pattern_scan": "78 changed/new paths checked, no matches; heuristic scan",
+  "host_checks": {
+    "llama-cpp-main": "active",
+    "llm-telemetry": "active",
+    "open_webui_health": true,
+    "open_webui_skill_modules": true
+  },
+  "limits": [
+    "Go tests do not establish a live PostgreSQL regression test for the preexisting recovery_actor edit.",
+    "No external assistant connector has been configured by this analysis.",
+    "Ansible evidence whitespace normalized for Git."
+  ]
+}

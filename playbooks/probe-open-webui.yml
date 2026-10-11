@@ -1,0 +1,55 @@
+---
+# Temporary browser testing only. No production chat volume or public proxy.
+# Connect with ssh -L 13081:127.0.0.1:3081, then http://127.0.0.1:13081.
+- name: Start an isolated Open WebUI probe without login
+  hosts: all
+  become: true
+  vars:
+    open_webui_probe_state: started
+  tasks:
+    - name: Start the loopback-only disposable probe
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - -d
+          - --name
+          - open-webui-probe
+          - --network
+          - host
+          - --env-file
+          - /srv/ai-lab/open-webui/open-webui.env
+          - -e
+          - HOST=127.0.0.1
+          - -e
+          - PORT=3081
+          - -e
+          - WEBUI_AUTH=False
+          - -e
+          - ENABLE_SIGNUP=False
+          - -e
+          - WEBUI_URL=http://127.0.0.1:13081
+          - -v
+          - /srv/ai-lab/open-webui-probe:/app/backend/data
+          - "ghcr.io/open-webui/open-webui:{{ open_webui_version }}"
+      when: open_webui_probe_state == 'started'
+
+    - name: Wait for the disposable probe
+      ansible.builtin.uri:
+        url: http://127.0.0.1:3081/health
+      register: probe_health
+      until: probe_health.status == 200
+      retries: 60
+      delay: 5
+      when: open_webui_probe_state == 'started'
+
+    - name: Remove the disposable probe container
+      ansible.builtin.command:
+        argv: [docker, rm, -f, open-webui-probe]
+      when: open_webui_probe_state == 'absent'
+
+    - name: Remove disposable probe data
+      ansible.builtin.file:
+        path: /srv/ai-lab/open-webui-probe
+        state: absent
+      when: open_webui_probe_state == 'absent'

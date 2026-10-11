@@ -16,11 +16,12 @@
           image: ghcr.io/open-webui/open-webui:{{ open_webui_version }}
           container_name: open-webui
           restart: unless-stopped
-          ports:
-            - "127.0.0.1:{{ open_webui_port }}:8080"
-          extra_hosts:
-            - "host.docker.internal:host-gateway"
-            - "{{ cockpit_domain }}:host-gateway"
+          # llama.cpp listens on host loopback; a bridge container cannot
+          # reach those endpoints through its own 127.0.0.1.
+          network_mode: host
+          environment:
+            HOST: "127.0.0.1"
+            PORT: "{{ open_webui_port }}"
           env_file:
             - /srv/ai-lab/open-webui/open-webui.env
           volumes:
@@ -35,6 +36,15 @@
     dest: /srv/ai-lab/open-webui/open-webui.env
     mode: "0600"
     content: |
+      WEBUI_AUTH=True
+      ENABLE_PERSISTENT_CONFIG=False
+      DEFAULT_MODELS={{ open_webui_default_model | default("main") }}
+      DEFAULT_MODEL_METADATA={"capabilities":{"builtin_tools":false,"vision":false}}
+      DEFAULT_INTERFACE_SETTINGS={"params":{"stream_response":true}}
+      DEFAULT_MODEL_PARAMS={"max_tokens":512,"temperature":0,"stream_response":true}
+      ENABLE_FOLLOW_UP_GENERATION=False
+      ENABLE_TAGS_GENERATION=False
+      ENABLE_TITLE_GENERATION=False
       WEBUI_NAME={{ open_webui_name }}
       WEBUI_URL=https://{{ open_webui_domain }}
       WEBUI_SECRET_KEY={{ open_webui_secret_key }}
@@ -46,6 +56,7 @@
       OPENAI_API_KEYS={{ open_webui_connections | map(attribute='api_key') | join(';') }}
       AIOHTTP_CLIENT_TIMEOUT={{ open_webui_request_timeout }}
       AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST={{ open_webui_model_list_timeout }}
+  no_log: true
   when: open_webui_enabled
 
 - name: Start Open WebUI stack
@@ -53,6 +64,32 @@
   args:
     chdir: /srv/ai-lab/open-webui
   when: open_webui_enabled
+
+- name: Wait for Open WebUI before reconciling principal settings
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ open_webui_port }}/health"
+    status_code: 200
+  register: open_webui_health
+  retries: 30
+  delay: 2
+  until: open_webui_health.status == 200
+  when: open_webui_enabled
+
+- name: Reconcile principal streaming and model capabilities
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - -i
+      - -e
+      - "PRINCIPAL_MODEL_NAME={{ open_webui_principal_model_name }}"
+      - open-webui
+      - python3
+    stdin: "{{ lookup('file', role_path ~ '/files/configure_principal.py') }}"
+  register: open_webui_principal_config
+  changed_when: (open_webui_principal_config.stdout | from_json).changed
+  no_log: true
+  when: open_webui_enabled and not ansible_check_mode
 
 - name: Publish Open WebUI DNS record through Route53
   ansible.builtin.shell: |

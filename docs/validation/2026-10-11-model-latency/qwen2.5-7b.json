@@ -1,0 +1,357 @@
+{
+  "blas_threads": 8,
+  "runs": [
+    {
+      "model": "Qwen2.5-7B-Instruct-Q4_K_M",
+      "case": "agenda",
+      "rep": 1,
+      "ttft_s": 2.198,
+      "total_s": 4.112,
+      "answer": "La reunión de Atlas es el martes a las 10.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 56,
+        "prompt_ms": 2192.146,
+        "prompt_per_token_ms": 39.14546428571429,
+        "prompt_per_second": 25.545743759767824,
+        "predicted_n": 16,
+        "predicted_ms": 1916.215,
+        "predicted_per_token_ms": 119.7634375,
+        "predicted_per_second": 8.349793734001665
+      },
+      "usage": {
+        "completion_tokens": 16,
+        "prompt_tokens": 56,
+        "total_tokens": 72,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rss_kib": 8872464
+    },
+    {
+      "model": "Qwen2.5-7B-Instruct-Q4_K_M",
+      "case": "agenda",
+      "rep": 2,
+      "ttft_s": 2.582,
+      "total_s": 4.5,
+      "answer": "La reunión de Atlas es el martes a las 10.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 56,
+        "prompt_ms": 2576.507,
+        "prompt_per_token_ms": 46.00905357142857,
+        "prompt_per_second": 21.734852651283305,
+        "predicted_n": 16,
+        "predicted_ms": 1918.89,
+        "predicted_per_token_ms": 119.930625,
+        "predicted_per_second": 8.338153828515443
+      },
+      "usage": {
+        "completion_tokens": 16,
+        "prompt_tokens": 56,
+        "total_tokens": 72,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rss_kib": 8872640
+    },
+    {
+      "model": "Qwen2.5-7B-Instruct-Q4_K_M",
+      "case": "agenda",
+      "rep": 3,
+      "ttft_s": 2.519,
+      "total_s": 4.446,
+      "answer": "La reunión de Atlas es el martes a las 10.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 56,
+        "prompt_ms": 2511.666,
+        "prompt_per_token_ms": 44.851178571428576,
+        "prompt_per_second": 22.295958140931155,
+        "predicted_n": 16,
+        "predicted_ms": 1928.992,
+        "predicted_per_token_ms": 120.562,
+        "predicted_per_second": 8.294487483618388
+      },
+      "usage": {
+        "completion_tokens": 16,
+        "prompt_tokens": 56,
+        "total_tokens": 72,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rss_kib": 8872812
+    },
+    {
+      "model": "Qwen2.5-7B-Instruct-Q4_K_M",
+      "case": "summary",
+      "rep": 1,
+      "ttft_s": 3.005,
+      "total_s": 7.1,
+      "answer": "1. Revisar Jira.\n2. Preparar la reunión con Marta.\n3. Comprobar el espacio libre del laboratorio.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 65,
+        "prompt_ms": 2999.256,
+        "prompt_per_token_ms": 46.142399999999995,
+        "prompt_per_second": 21.67204133291723,
+        "predicted_n": 33,
+        "predicted_ms": 4095.505,
+        "predicted_per_token_ms": 124.10621212121212,
+        "predicted_per_second": 8.057614384550867
+      },
+      "usage": {
+        "completion_tokens": 33,
+        "prompt_tokens": 65,
+        "total_tokens": 98,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rss_kib": 8875432
+    },
+    {
+      "model": "Qwen2.5-7B-Instruct-Q4_K_M",
+      "case": "summary",
+      "rep": 2,
+      "ttft_s": 2.902,
+      "total_s": 6.993,
+      "answer": "1. Revisar Jira.\n2. Preparar la reunión con Marta.\n3. Comprobar el espacio libre del laboratorio.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 65,
+        "prompt_ms": 2896.356,
+        "prompt_per_token_ms": 44.55932307692308,
+        "prompt_per_second": 22.44199262797805,
+        "predicted_n": 33,
+        "predicted_ms": 4091.697,
+        "predicted_per_token_ms": 123.99081818181818,
+        "predicted_per_second": 8.065113325840109
+      },
+      "usage": {
+        "completion_tokens": 33,
+        "prompt_tokens": 65,
+        "total_tokens": 98,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rss_kib": 8875612
+    },
+    {
+      "model": "Qwen2.5-7B-Instruct-Q4_K_M",
+      "case": "summary",
+      "rep": 3,
+      "ttft_s": 3.0,
+      "total_s": 7.096,
+      "answer": "1. Revisar Jira.\n2. Preparar la reunión con Marta.\n3. Comprobar el espacio libre del laboratorio.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 65,
+        "prompt_ms": 2994.907,
+        "prompt_per_token_ms": 46.07549230769231,
+        "prompt_per_second": 21.70351199553108,
+        "predicted_n": 33,
+        "predicted_ms": 4095.296,
+        "predicted_per_token_ms": 124.09987878787878,
+        "predicted_per_second": 8.058025598149682
+      },
+      "usage": {
+        "completion_tokens": 33,
+        "prompt_tokens": 65,
+        "total_tokens": 98,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rss_kib": 8875792
+    },
+    {
+      "model": "Qwen2.5-7B-Instruct-Q4_K_M",
+      "case": "grounding",
+      "rep": 1,
+      "ttft_s": 3.034,
+      "total_s": 11.049,
+      "answer": "No podemos afirmar que el asistente funcione bien basándonos solo en que devuelve HTTP 200, ya que esto solo indica que el servicio está disponible y no ha habido errores inmediatos. Es necesario medir la calidad y el rendimiento para una evaluación completa.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 70,
+        "prompt_ms": 3029.685,
+        "prompt_per_token_ms": 43.281214285714285,
+        "prompt_per_second": 23.104712206054426,
+        "predicted_n": 63,
+        "predicted_ms": 8014.661,
+        "predicted_per_token_ms": 127.21684126984127,
+        "predicted_per_second": 7.860594478044673
+      },
+      "usage": {
+        "completion_tokens": 63,
+        "prompt_tokens": 70,
+        "total_tokens": 133,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rss_kib": 8877364
+    },
+    {
+      "model": "Qwen2.5-7B-Instruct-Q4_K_M",
+      "case": "grounding",
+      "rep": 2,
+      "ttft_s": 3.016,
+      "total_s": 10.959,
+      "answer": "No podemos afirmar que el asistente funcione bien basándonos solo en que devuelve HTTP 200, ya que esto solo indica que el servicio está disponible y no ha habido errores inmediatos. Es necesario medir la calidad y el rendimiento para una evaluación completa.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 70,
+        "prompt_ms": 3010.851,
+        "prompt_per_token_ms": 43.01215714285714,
+        "prompt_per_second": 23.24924082925392,
+        "predicted_n": 63,
+        "predicted_ms": 7943.19,
+        "predicted_per_token_ms": 126.08238095238094,
+        "predicted_per_second": 7.931322302500633
+      },
+      "usage": {
+        "completion_tokens": 63,
+        "prompt_tokens": 70,
+        "total_tokens": 133,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rss_kib": 8877536
+    },
+    {
+      "model": "Qwen2.5-7B-Instruct-Q4_K_M",
+      "case": "grounding",
+      "rep": 3,
+      "ttft_s": 3.012,
+      "total_s": 10.956,
+      "answer": "No podemos afirmar que el asistente funcione bien basándonos solo en que devuelve HTTP 200, ya que esto solo indica que el servicio está disponible y no ha habido errores inmediatos. Es necesario medir la calidad y el rendimiento para una evaluación completa.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 70,
+        "prompt_ms": 3005.936,
+        "prompt_per_token_ms": 42.94194285714286,
+        "prompt_per_second": 23.287255616886053,
+        "predicted_n": 63,
+        "predicted_ms": 7945.047,
+        "predicted_per_token_ms": 126.11185714285713,
+        "predicted_per_second": 7.929468510381374
+      },
+      "usage": {
+        "completion_tokens": 63,
+        "prompt_tokens": 70,
+        "total_tokens": 133,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rss_kib": 8877712
+    },
+    {
+      "model": "Qwen2.5-7B-Instruct-Q4_K_M",
+      "case": "context",
+      "rep": 1,
+      "ttft_s": 29.531,
+      "total_s": 31.056,
+      "answer": "ALAMEDA-73",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 769,
+        "prompt_ms": 29501.553,
+        "prompt_per_token_ms": 38.363527958387515,
+        "prompt_per_second": 26.06642436755787,
+        "predicted_n": 7,
+        "predicted_ms": 1546.559,
+        "predicted_per_token_ms": 220.93699999999998,
+        "predicted_per_second": 4.526177145521121
+      },
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 769,
+        "total_tokens": 776,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rss_kib": 9013832
+    },
+    {
+      "model": "Qwen2.5-7B-Instruct-Q4_K_M",
+      "case": "context",
+      "rep": 2,
+      "ttft_s": 45.772,
+      "total_s": 46.801,
+      "answer": "ALAMEDA-73",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 769,
+        "prompt_ms": 45760.476,
+        "prompt_per_token_ms": 59.50647074122237,
+        "prompt_per_second": 16.804895123905617,
+        "predicted_n": 7,
+        "predicted_ms": 1027.969,
+        "predicted_per_token_ms": 146.85271428571428,
+        "predicted_per_second": 6.8095438675679905
+      },
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 769,
+        "total_tokens": 776,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rss_kib": 9014216
+    },
+    {
+      "model": "Qwen2.5-7B-Instruct-Q4_K_M",
+      "case": "context",
+      "rep": 3,
+      "ttft_s": 45.775,
+      "total_s": 46.74,
+      "answer": "ALAMEDA-73",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 769,
+        "prompt_ms": 45762.434,
+        "prompt_per_token_ms": 59.509016905071526,
+        "prompt_per_second": 16.804176106541885,
+        "predicted_n": 7,
+        "predicted_ms": 964.855,
+        "predicted_per_token_ms": 137.83642857142857,
+        "predicted_per_second": 7.2549761363106375
+      },
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 769,
+        "total_tokens": 776,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "rss_kib": 9014504
+    }
+  ],
+  "files": [
+    {
+      "path": "qwen2.5-7b-instruct-q4_k_m-00001-of-00002.gguf",
+      "size": 3993201344,
+      "sha256": "dfce12e3862a5283ccfb88221b48480e58745165de856439950d0f22590580db"
+    },
+    {
+      "path": "qwen2.5-7b-instruct-q4_k_m-00002-of-00002.gguf",
+      "size": 689872288,
+      "sha256": "539cf93f78e887edea1c04e2d7d8cdaca9d01dae9c9025bcb8accbe29df3d72a"
+    }
+  ],
+  "revision": "bb5d59e06d9551d752d08b292a50eb208b07ab1f",
+  "context": 16384,
+  "threads": 8,
+  "cache_prompt": false
+}

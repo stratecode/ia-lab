@@ -1,0 +1,52 @@
+{
+  "chat_elapsed_s": 0.572,
+  "chat": "La reunión del proyecto Atlas es el martes a las 10 horas.",
+  "usage": {
+    "completion_tokens": 16,
+    "prompt_tokens": 55,
+    "total_tokens": 71,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    }
+  },
+  "timings": {
+    "cache_n": 0,
+    "prompt_n": 55,
+    "prompt_ms": 245.158,
+    "prompt_per_token_ms": 4.4574181818181815,
+    "prompt_per_second": 224.34511621077021,
+    "predicted_n": 16,
+    "predicted_ms": 324.51,
+    "predicted_per_token_ms": 20.281875,
+    "predicted_per_second": 49.3051061600567
+  },
+  "stream": "Hola. ¡Hola! ¿En qué puedo ayudarte?",
+  "tool_call": {
+    "name": "service_status",
+    "arguments": "{\"unit\":\"llama-cpp-main\"}"
+  },
+  "long_context": {
+    "input_tokens": 11228,
+    "answer": "ALAMEDA-73",
+    "elapsed_s": 62.216,
+    "usage": {
+      "completion_tokens": 7,
+      "prompt_tokens": 11237,
+      "total_tokens": 11244,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "timings": {
+      "cache_n": 0,
+      "prompt_n": 11237,
+      "prompt_ms": 61971.347,
+      "prompt_per_token_ms": 5.514936993859571,
+      "prompt_per_second": 181.32573429459262,
+      "predicted_n": 7,
+      "predicted_ms": 230.991,
+      "predicted_per_token_ms": 32.998714285714286,
+      "predicted_per_second": 30.30421098657523
+    }
+  }
+}

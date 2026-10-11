@@ -1,0 +1,32 @@
+
+PLAY [Start an isolated Open WebUI probe without login] ************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [lab]
+
+TASK [Start the loopback-only disposable probe] ********************************
+changed: [lab]
+
+TASK [Wait for the disposable probe] *******************************************
+FAILED - RETRYING: [lab]: Wait for the disposable probe (60 retries left).
+FAILED - RETRYING: [lab]: Wait for the disposable probe (59 retries left).
+FAILED - RETRYING: [lab]: Wait for the disposable probe (58 retries left).
+FAILED - RETRYING: [lab]: Wait for the disposable probe (57 retries left).
+FAILED - RETRYING: [lab]: Wait for the disposable probe (56 retries left).
+FAILED - RETRYING: [lab]: Wait for the disposable probe (55 retries left).
+FAILED - RETRYING: [lab]: Wait for the disposable probe (54 retries left).
+FAILED - RETRYING: [lab]: Wait for the disposable probe (53 retries left).
+FAILED - RETRYING: [lab]: Wait for the disposable probe (52 retries left).
+FAILED - RETRYING: [lab]: Wait for the disposable probe (51 retries left).
+FAILED - RETRYING: [lab]: Wait for the disposable probe (50 retries left).
+FAILED - RETRYING: [lab]: Wait for the disposable probe (49 retries left).
+ok: [lab]
+
+TASK [Remove the disposable probe container] ***********************************
+skipping: [lab]
+
+TASK [Remove disposable probe data] ********************************************
+skipping: [lab]
+
+PLAY RECAP *********************************************************************
+lab                        : ok=3    changed=1    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0

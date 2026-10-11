@@ -1,0 +1,21 @@
+---
+- name: Reconcile repository-owned lab chat, monitoring and HTTPS access
+  hosts: all
+  become: true
+
+  vars_files:
+    - ../group_vars/vault.yml
+
+  vars:
+    open_webui_enabled: true
+    # Keep the July-retired control plane out of the running lab baseline.
+    codex_gateway_enabled: false
+    orchestrator_enabled: false
+    open_webui_public_cname_target: ""
+
+  roles:
+    - role: llm_telemetry
+      when: llm_telemetry_enabled
+    - open_webui
+    - monitor
+    - observability

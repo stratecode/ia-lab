@@ -27,6 +27,7 @@ from validate_config import (
     identify_stale_instances,
     validate_context_limits,
     validate_ram_budget,
+    validate_resource_envelope,
     validate_thread_budget,
     validate_vram_budget,
 )
@@ -816,3 +817,34 @@ class TestVramBudgetValidation:
         assert ok is False
         assert total_mb == over_budget_total
         assert total_mb > available_mb
+
+
+class TestResourceEnvelope:
+    """The configured AI allocation stays between 50% and 90% per resource."""
+
+    HOST_RESOURCES = {
+        "host_ram_mb": 30994,
+        "host_threads": 16,
+        "host_vram_mb": 512,
+        "min_percent": 50,
+        "max_percent": 90,
+    }
+
+    def test_lab_profile_is_within_envelope(self):
+        instances = [
+            {"memory_max_mb": 8192, "threads": 6, "n_gpu_layers": 8, "vram_reservation_mb": 220},
+            {"memory_max_mb": 6144, "threads": 4, "n_gpu_layers": 4, "vram_reservation_mb": 110},
+            {"memory_max_mb": 4096, "threads": 2, "n_gpu_layers": 2, "vram_reservation_mb": 70},
+            {"memory_max_mb": 3072, "threads": 2, "n_gpu_layers": 0, "vram_reservation_mb": 0},
+        ]
+
+        assert validate_resource_envelope(instances, self.HOST_RESOURCES) == []
+
+    def test_envelope_reports_each_resource_outside_bounds(self):
+        instances = [
+            {"memory_max_mb": 12000, "threads": 8, "n_gpu_layers": 8, "vram_reservation_mb": 500},
+        ]
+
+        violations = validate_resource_envelope(instances, self.HOST_RESOURCES)
+
+        assert {entry["resource"] for entry in violations} == {"ram", "vram"}

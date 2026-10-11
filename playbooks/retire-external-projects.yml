@@ -1,0 +1,17 @@
+---
+- name: Retire external test projects from the lab without deleting data
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Retire containers owned by Oraculo and SRL
+      ansible.builtin.script:
+        cmd: "../scripts/retire-external-lab-projects.py {{ '--apply' if not ansible_check_mode else '' }}"
+        executable: /usr/bin/python3
+      register: external_retirement
+      changed_when: "'Retirement complete' in external_retirement.stdout"
+      check_mode: false
+
+    - name: Show retirement summary
+      ansible.builtin.debug:
+        var: external_retirement.stdout_lines

@@ -1,8 +1,19 @@
+> Métricas de llamadas y tiempos: [operación LLM](llm-telemetry-operation.md),
+> [panel Grafana](https://monitor.stratecode.com/d/lab-llm-latency).
+
 # System Usage Guide
 
-This guide explains how to use the platform through its primary operating model: the orchestrator HTTP API, `lab-agent`, `lab-agentd`, Telegram, and the capability layer exposed behind them. Codex through the lab gateway remains supported as a complementary slice.
+Current host profile: one principal local model, repository-owned chat,
+monitoring and VPN. Start a new chat at `https://chat.stratecode.com` and use
+`main` (LFM2.5-1.2B Instruct Q4_0). Conversation history is persisted in the existing
+Open WebUI volume. See [Principal model operation](principal-model-operation.md).
 
-This document describes operational usage. For the canonical product definition, MVP boundaries, and roadmap, use the [Master Plan](architecture/master-plan.md).
+Telegram, WhatsApp and Slack voice are future channel adapters. They are not
+active interfaces today. The orchestrator and Codex gateway remain retired.
+The remainder of this guide is historical control-plane reference; its model
+names, commands and API endpoints must not be interpreted as active services.
+
+Product direction is defined in the [Master Plan](architecture/master-plan.md).
 
 ## Entry points
 
@@ -270,7 +281,7 @@ The bot is access-restricted to the Telegram user IDs configured in `LAB_TELEGRA
 
 ## Open WebUI
 
-Open WebUI is exposed at `https://<chat_domain>` and connected to the local `llama.cpp` endpoints plus an OpenAI-compatible backend exposed by the orchestrator.
+Open WebUI is exposed at `https://<chat_domain>` and connected to the local `llama.cpp` endpoints plus an OpenAI-compatible backend exposed by the orchestrator. The shared Let's Encrypt certificate includes `<chat_domain>` as a SAN.
 
 ### What it is good for
 
@@ -673,23 +684,11 @@ Full operator behavior, views, and keybindings live in:
 
 - [TUI Operator Guide](tui.md)
 
-## MINECO SRL local access
+## Deployment boundary
 
-The lab terminates TLS for the local SRL deployment and forwards only to
-loopback-bound Docker ports:
-
-- `https://srl.stratecode.com` -> OpenSearch Dashboards on `127.0.0.1:5601`
-- `https://opensearch.stratecode.com` -> OpenSearch API on `127.0.0.1:9200`
-
-The host certificate is issued with the Route53 DNS challenge and includes
-both names. On a Mac without local DNS entries, map both names to the lab IP in
-`/etc/hosts`; do not expose the Docker ports directly on the LAN.
-
-Deploy or reconcile this access layer with:
-
-```bash
-ansible-playbook playbooks/deploy-srl-access.yml
-```
+The lab owns inference, chat, monitoring and private access. Oráculo and
+SRL/OpenSearch are separate projects and are no longer deployed here. See
+[Lab-only operation](lab-only-operation.md) for retirement and data recovery.
 
 ## Research mode notes
 

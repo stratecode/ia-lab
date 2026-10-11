@@ -84,7 +84,7 @@
         content: |
           [Unit]
           Description=Codex local OpenAI-compatible gateway
-          After=network-online.target llama-cpp-code.service
+          After=network-online.target llama-cpp-main.service
           Wants=network-online.target
 
           [Service]

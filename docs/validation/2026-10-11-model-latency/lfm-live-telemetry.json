@@ -1,0 +1,41 @@
+{
+  "calls": [
+    {
+      "port": 8080,
+      "stream": true,
+      "authenticated": true,
+      "status": 200,
+      "ttft_s": 0.0779068719712086,
+      "total_s": 0.368875557964202,
+      "answer": "Hola. ¡Hola! ¿En qué puedo ayudarte?"
+    },
+    {
+      "port": 8081,
+      "stream": true,
+      "authenticated": true,
+      "status": 200,
+      "ttft_s": 0.07296027702977881,
+      "total_s": 0.36365057103103027,
+      "answer": "Hola. ¡Hola! ¿En qué puedo ayudarte?"
+    },
+    {
+      "port": 8081,
+      "stream": false,
+      "authenticated": true,
+      "status": 200,
+      "ttft_s": null,
+      "total_s": 0.3630913409870118,
+      "answer": "Hola. ¡Hola! ¿En qué puedo ayudarte?"
+    },
+    {
+      "port": 8081,
+      "stream": false,
+      "authenticated": false,
+      "status": 401,
+      "ttft_s": null,
+      "total_s": 0.0007009849650785327,
+      "answer": ""
+    }
+  ],
+  "metrics": "# HELP lab_llm_request_duration_seconds Inference duration through end of response body, including queue and failed calls.\n# TYPE lab_llm_request_duration_seconds histogram\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"0.05\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"0.1\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"0.25\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"0.5\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"1\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"2\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"5\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"10\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"20\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"30\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"60\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"120\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"300\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"600\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"900\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",le=\"+Inf\"} 1\nlab_llm_request_duration_seconds_sum{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\"} 0.000221622\nlab_llm_request_duration_seconds_count{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\"} 1\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"0.05\"} 0\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"0.1\"} 0\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"0.25\"} 0\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"0.5\"} 2\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"1\"} 2\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"2\"} 2\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"5\"} 2\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"10\"} 2\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"20\"} 2\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"30\"} 2\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"60\"} 2\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"120\"} 2\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"300\"} 2\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"600\"} 2\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"900\"} 2\nlab_llm_request_duration_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",le=\"+Inf\"} 2\nlab_llm_request_duration_seconds_sum{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\"} 0.72559595\nlab_llm_request_duration_seconds_count{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\"} 2\n# HELP lab_llm_requests_in_flight Inference calls currently forwarding.\n# TYPE lab_llm_requests_in_flight gauge\nlab_llm_requests_in_flight 0\n# HELP lab_llm_requests_total Completed inference calls, including errors and cancellations.\n# TYPE lab_llm_requests_total counter\nlab_llm_requests_total{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"http_error\",status=\"401\"} 1\nlab_llm_requests_total{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",outcome=\"ok\",status=\"200\"} 2\n# HELP lab_llm_ttft_seconds Streaming time to first nonempty content, reasoning or tool output; excludes role-only events.\n# TYPE lab_llm_ttft_seconds histogram\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"0.05\"} 0\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"0.1\"} 1\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"0.25\"} 1\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"0.5\"} 1\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"1\"} 1\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"2\"} 1\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"5\"} 1\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"10\"} 1\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"20\"} 1\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"30\"} 1\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"60\"} 1\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"120\"} 1\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"300\"} 1\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"600\"} 1\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"900\"} 1\nlab_llm_ttft_seconds_bucket{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\",le=\"+Inf\"} 1\nlab_llm_ttft_seconds_sum{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\"} 0.072270202\nlab_llm_ttft_seconds_count{endpoint=\"chat\",model=\"LFM2.5-1.2B-Instruct-Q4_0\"} 1\n"
+}

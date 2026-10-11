@@ -9,7 +9,7 @@ Exit codes:
   0 = all validations pass (no warnings, no errors)
   1 = warnings only (thread over-subscription, RAM soft limit, VRAM over-subscription)
   2 = fatal errors (missing fields, context limit violations, RAM hard limit exceeded,
-      no always-on instance)
+      resource-envelope violations, no always-on instance)
 
 RAM estimation formula:
   estimated_ram_mb = (model_size_mb + kv_cache_mb) * safety_margin
@@ -152,6 +152,51 @@ def validate_vram_budget(instances, vram_total_mb):
             total_mb += int(inst.get("vram_reservation_mb", 0))
     ok = total_mb <= vram_total_mb
     return (ok, total_mb, vram_total_mb)
+
+
+def validate_resource_envelope(instances, host_resources):
+    """Validate the aggregate AI allocation against host resource limits.
+
+    ``min_percent`` is a reservation floor for the AI slice. It does not
+    force the models to burn CPU or RAM when idle. ``max_percent`` is the
+    hard allocation ceiling used by the systemd slice and cgroup limits.
+
+    Returns a list of violations. An empty list means every configured
+    resource is between the requested floor and ceiling.
+    """
+    host_ram_mb = int(host_resources.get("host_ram_mb", 0))
+    host_threads = int(host_resources.get("host_threads", 0))
+    host_vram_mb = int(host_resources.get("host_vram_mb", 0))
+    min_percent = int(host_resources.get("min_percent", 50))
+    max_percent = int(host_resources.get("max_percent", 90))
+
+    if not (0 <= min_percent <= max_percent <= 100):
+        return [{
+            "resource": "envelope",
+            "total": None,
+            "minimum": None,
+            "maximum": None,
+            "message": "min_percent/max_percent must satisfy 0 <= min <= max <= 100",
+        }]
+
+    resources = [
+        ("ram", sum(int(inst.get("memory_max_mb", 0)) for inst in instances), host_ram_mb),
+        ("cpu", sum(int(inst.get("threads", 0)) for inst in instances), host_threads),
+        ("vram", validate_vram_budget(instances, host_vram_mb)[1], host_vram_mb),
+    ]
+    violations = []
+    for resource, total, host_total in resources:
+        minimum = (host_total * min_percent + 99) // 100
+        maximum = (host_total * max_percent) // 100
+        if total < minimum or total > maximum:
+            violations.append({
+                "resource": resource,
+                "total": total,
+                "minimum": minimum,
+                "maximum": maximum,
+                "host_total": host_total,
+            })
+    return violations
 
 
 def identify_stale_instances(discovered_services, configured_services):
@@ -330,6 +375,7 @@ def main():
     thread_budget = int(config.get("thread_budget", 12))
     vram_total_mb = int(config.get("vram_total_mb", 4096))
     estimation_factors = config.get("ram_estimation_factors", {"default": {"safety_margin": 1.20, "bytes_per_token_q4": 0.6, "bytes_per_token_q8": 1.1}})
+    resource_envelope = config.get("resource_envelope")
     discovered_services = config.get("discovered_services", [])
 
     errors = []
@@ -397,7 +443,21 @@ def main():
             )
         )
 
-    # 7. Identify stale instances
+    # 7. Validate the aggregate AI allocation envelope.
+    resource_violations = []
+    if resource_envelope:
+        resource_violations = validate_resource_envelope(instances, resource_envelope)
+        for violation in resource_violations:
+            errors.append(
+                "Resource envelope violation for {}: allocation {} outside [{}, {}]".format(
+                    violation["resource"],
+                    violation["total"],
+                    violation["minimum"],
+                    violation["maximum"],
+                )
+            )
+
+    # 8. Identify stale instances
     configured_names = [inst.get("service_name", "") for inst in instances]
     stale = identify_stale_instances(discovered_services, configured_names)
 
@@ -429,6 +489,10 @@ def main():
                 "ok": vram_ok,
                 "total_mb": vram_total,
                 "available_mb": vram_available,
+            },
+            "resource_envelope": {
+                "ok": not resource_violations,
+                "violations": resource_violations,
             },
             "context_violations": context_violations,
             "missing_fields": missing_fields,

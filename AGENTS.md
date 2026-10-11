@@ -2,11 +2,12 @@
 
 ## Purpose
 
-This repository provisions and operates the StrateCode lab. The current validated operating model is initiative-driven execution through the Go orchestrator, `lab-agent`, and `lab-agentd`.
+This repository provisions and operates the StrateCode lab. The active host profile is a single CPU-only principal model and Open WebUI. The personal work assistant direction is defined in the master plan. The Go orchestrator, `lab-agent`, and `lab-agentd` remain in source as the legacy governed execution foundation; the orchestrator and Codex gateway are retired on the host.
 
 Product truth lives in `docs/architecture/master-plan.md`.
 Operational bridge usage lives in `docs/local-bridge.md`.
 System entry points live in `docs/system-usage.md`.
+Current deployment and evidence live in `docs/principal-model-operation.md`; reproduce with `playbooks/deploy-principal-model.yml`.
 
 ## Work Rules For Codex
 

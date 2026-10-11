@@ -1,0 +1,656 @@
+{
+  "runs": [
+    {
+      "model": "Qwen3.5-4B-Q4_K_M",
+      "case": "agenda",
+      "rep": 1,
+      "ttft_s": 1.704,
+      "total_s": 2.95,
+      "answer": "La reunión de Atlas es el martes a las 10.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 36,
+        "prompt_ms": 1691.464,
+        "prompt_per_token_ms": 46.98511111111111,
+        "prompt_per_second": 21.283337984136818,
+        "predicted_n": 14,
+        "predicted_ms": 1246.42,
+        "predicted_per_token_ms": 89.03,
+        "predicted_per_second": 11.232168931820734
+      },
+      "usage": {
+        "completion_tokens": 14,
+        "prompt_tokens": 36,
+        "total_tokens": 50,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "Qwen3.5-4B-Q4_K_M",
+      "case": "agenda",
+      "rep": 2,
+      "ttft_s": 1.823,
+      "total_s": 3.097,
+      "answer": "La reunión de Atlas es el martes a las 10.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 36,
+        "prompt_ms": 1810.299,
+        "prompt_per_token_ms": 50.28608333333333,
+        "prompt_per_second": 19.886217691110694,
+        "predicted_n": 14,
+        "predicted_ms": 1273.29,
+        "predicted_per_token_ms": 90.94928571428571,
+        "predicted_per_second": 10.995138578014435
+      },
+      "usage": {
+        "completion_tokens": 14,
+        "prompt_tokens": 36,
+        "total_tokens": 50,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "Qwen3.5-4B-Q4_K_M",
+      "case": "agenda",
+      "rep": 3,
+      "ttft_s": 2.124,
+      "total_s": 3.385,
+      "answer": "La reunión de Atlas es el martes a las 10.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 36,
+        "prompt_ms": 2108.834,
+        "prompt_per_token_ms": 58.57872222222222,
+        "prompt_per_second": 17.071044947112956,
+        "predicted_n": 14,
+        "predicted_ms": 1260.818,
+        "predicted_per_token_ms": 90.05842857142856,
+        "predicted_per_second": 11.103902387180385
+      },
+      "usage": {
+        "completion_tokens": 14,
+        "prompt_tokens": 36,
+        "total_tokens": 50,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "Qwen3.5-4B-Q4_K_M",
+      "case": "summary",
+      "rep": 1,
+      "ttft_s": 2.247,
+      "total_s": 7.676,
+      "answer": "- Revisar Jira para identificar tareas pendientes o actualizaciones necesarias.  \n- Preparar los materiales y agenda de la reunión con Marta.  \n- Comprobar el espacio libre disponible en el laboratorio.  \n\nNo se ejecutarán ninguna de estas acciones en este momento.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 42,
+        "prompt_ms": 2231.599,
+        "prompt_per_token_ms": 53.13330952380953,
+        "prompt_per_second": 18.82058559803979,
+        "predicted_n": 57,
+        "predicted_ms": 5428.724,
+        "predicted_per_token_ms": 95.24077192982456,
+        "predicted_per_second": 10.499704903030619
+      },
+      "usage": {
+        "completion_tokens": 57,
+        "prompt_tokens": 42,
+        "total_tokens": 99,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "Qwen3.5-4B-Q4_K_M",
+      "case": "summary",
+      "rep": 2,
+      "ttft_s": 25.491,
+      "total_s": 30.896,
+      "answer": "- Revisar Jira para identificar tareas pendientes o actualizaciones necesarias.  \n- Preparar los materiales y agenda de la reunión con Marta.  \n- Comprobar el espacio libre disponible en el laboratorio.  \n\nNo se ejecutarán ninguna de estas acciones en este momento.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 42,
+        "prompt_ms": 2202.024,
+        "prompt_per_token_ms": 52.42914285714286,
+        "prompt_per_second": 19.073361598238712,
+        "predicted_n": 57,
+        "predicted_ms": 5404.913,
+        "predicted_per_token_ms": 94.82303508771929,
+        "predicted_per_second": 10.545960684288536
+      },
+      "usage": {
+        "completion_tokens": 57,
+        "prompt_tokens": 42,
+        "total_tokens": 99,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "Qwen3.5-4B-Q4_K_M",
+      "case": "summary",
+      "rep": 3,
+      "ttft_s": 2.219,
+      "total_s": 7.614,
+      "answer": "- Revisar Jira para identificar tareas pendientes o actualizaciones necesarias.  \n- Preparar los materiales y agenda de la reunión con Marta.  \n- Comprobar el espacio libre disponible en el laboratorio.  \n\nNo se ejecutarán ninguna de estas acciones en este momento.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 42,
+        "prompt_ms": 2203.322,
+        "prompt_per_token_ms": 52.46004761904762,
+        "prompt_per_second": 19.06212528173367,
+        "predicted_n": 57,
+        "predicted_ms": 5394.556,
+        "predicted_per_token_ms": 94.64133333333332,
+        "predicted_per_second": 10.566207858440992
+      },
+      "usage": {
+        "completion_tokens": 57,
+        "prompt_tokens": 42,
+        "total_tokens": 99,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "Qwen3.5-4B-Q4_K_M",
+      "case": "grounding",
+      "rep": 1,
+      "ttft_s": 2.478,
+      "total_s": 7.606,
+      "answer": "No, no podemos afirmar que funcione bien. Un estado **HTTP 200** solo indica que la solicitud fue aceptada y se procesó sin errores de sintaxis; no garantiza que los datos sean correctos, rápidos o útiles para el usuario.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 49,
+        "prompt_ms": 2462.654,
+        "prompt_per_token_ms": 50.25824489795918,
+        "prompt_per_second": 19.897232822800117,
+        "predicted_n": 54,
+        "predicted_ms": 5128.126,
+        "predicted_per_token_ms": 94.9652962962963,
+        "predicted_per_second": 10.530162480407073
+      },
+      "usage": {
+        "completion_tokens": 54,
+        "prompt_tokens": 49,
+        "total_tokens": 103,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "Qwen3.5-4B-Q4_K_M",
+      "case": "grounding",
+      "rep": 2,
+      "ttft_s": 2.391,
+      "total_s": 7.503,
+      "answer": "No, no podemos afirmar que funcione bien. Un estado **HTTP 200** solo indica que la solicitud fue aceptada y se procesó sin errores de sintaxis; no garantiza que los datos sean correctos, rápidos o útiles para el usuario.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 49,
+        "prompt_ms": 2376.034,
+        "prompt_per_token_ms": 48.49048979591837,
+        "prompt_per_second": 20.62260051834275,
+        "predicted_n": 54,
+        "predicted_ms": 5112.182,
+        "predicted_per_token_ms": 94.67003703703703,
+        "predicted_per_second": 10.563004212291347
+      },
+      "usage": {
+        "completion_tokens": 54,
+        "prompt_tokens": 49,
+        "total_tokens": 103,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "Qwen3.5-4B-Q4_K_M",
+      "case": "grounding",
+      "rep": 3,
+      "ttft_s": 2.424,
+      "total_s": 7.719,
+      "answer": "No, no podemos afirmar que funcione bien. Un estado **HTTP 200** solo indica que la solicitud fue aceptada y se procesó sin errores de sintaxis; no garantiza que los datos sean correctos, rápidos o útiles para el usuario.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 49,
+        "prompt_ms": 2409.039,
+        "prompt_per_token_ms": 49.1640612244898,
+        "prompt_per_second": 20.340060912255883,
+        "predicted_n": 54,
+        "predicted_ms": 5294.631,
+        "predicted_per_token_ms": 98.04872222222222,
+        "predicted_per_second": 10.199011035896552
+      },
+      "usage": {
+        "completion_tokens": 54,
+        "prompt_tokens": 49,
+        "total_tokens": 103,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "Qwen3.5-4B-Q4_K_M",
+      "case": "context",
+      "rep": 1,
+      "ttft_s": 19.196,
+      "total_s": 19.804,
+      "answer": "ALAMEDA-73",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 832,
+        "prompt_ms": 19179.945,
+        "prompt_per_token_ms": 23.052818509615385,
+        "prompt_per_second": 43.37864368224205,
+        "predicted_n": 7,
+        "predicted_ms": 607.918,
+        "predicted_per_token_ms": 86.84542857142857,
+        "predicted_per_second": 11.514710865610166
+      },
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 832,
+        "total_tokens": 839,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "Qwen3.5-4B-Q4_K_M",
+      "case": "context",
+      "rep": 2,
+      "ttft_s": 49.337,
+      "total_s": 49.957,
+      "answer": "ALAMEDA-73",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 832,
+        "prompt_ms": 19242.977,
+        "prompt_per_token_ms": 23.128578124999997,
+        "prompt_per_second": 43.23655326304241,
+        "predicted_n": 7,
+        "predicted_ms": 620.225,
+        "predicted_per_token_ms": 88.60357142857143,
+        "predicted_per_second": 11.286226772542221
+      },
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 832,
+        "total_tokens": 839,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "Qwen3.5-4B-Q4_K_M",
+      "case": "context",
+      "rep": 3,
+      "ttft_s": 19.351,
+      "total_s": 19.961,
+      "answer": "ALAMEDA-73",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 832,
+        "prompt_ms": 19332.548,
+        "prompt_per_token_ms": 23.236235576923075,
+        "prompt_per_second": 43.03623092000082,
+        "predicted_n": 7,
+        "predicted_ms": 609.556,
+        "predicted_per_token_ms": 87.07942857142858,
+        "predicted_per_second": 11.483768513475383
+      },
+      "usage": {
+        "completion_tokens": 7,
+        "prompt_tokens": 832,
+        "total_tokens": 839,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "LFM2.5-1.2B-Q4_0",
+      "case": "agenda",
+      "rep": 1,
+      "ttft_s": 0.139,
+      "total_s": 0.408,
+      "answer": "La reunión de Atlas es el martes a las 10.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 35,
+        "prompt_ms": 137.129,
+        "prompt_per_token_ms": 3.917971428571428,
+        "prompt_per_second": 255.2341226144725,
+        "predicted_n": 14,
+        "predicted_ms": 269.519,
+        "predicted_per_token_ms": 19.25135714285714,
+        "predicted_per_second": 51.94438982038372
+      },
+      "usage": {
+        "completion_tokens": 14,
+        "prompt_tokens": 35,
+        "total_tokens": 49,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "LFM2.5-1.2B-Q4_0",
+      "case": "agenda",
+      "rep": 2,
+      "ttft_s": 0.155,
+      "total_s": 0.425,
+      "answer": "La reunión de Atlas es el martes a las 10.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 35,
+        "prompt_ms": 153.201,
+        "prompt_per_token_ms": 4.377171428571429,
+        "prompt_per_second": 228.45803878564763,
+        "predicted_n": 14,
+        "predicted_ms": 269.716,
+        "predicted_per_token_ms": 19.265428571428572,
+        "predicted_per_second": 51.90644974714144
+      },
+      "usage": {
+        "completion_tokens": 14,
+        "prompt_tokens": 35,
+        "total_tokens": 49,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "LFM2.5-1.2B-Q4_0",
+      "case": "agenda",
+      "rep": 3,
+      "ttft_s": 0.159,
+      "total_s": 0.43,
+      "answer": "La reunión de Atlas es el martes a las 10.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 35,
+        "prompt_ms": 157.176,
+        "prompt_per_token_ms": 4.490742857142857,
+        "prompt_per_second": 222.68030742607016,
+        "predicted_n": 14,
+        "predicted_ms": 271.074,
+        "predicted_per_token_ms": 19.362428571428573,
+        "predicted_per_second": 51.64641389436095
+      },
+      "usage": {
+        "completion_tokens": 14,
+        "prompt_tokens": 35,
+        "total_tokens": 49,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "LFM2.5-1.2B-Q4_0",
+      "case": "summary",
+      "rep": 1,
+      "ttft_s": 0.196,
+      "total_s": 0.843,
+      "answer": "- Revisar el sistema Jira hoy.  \n- Preparar la reunión con Marta.  \n- Verificar el espacio libre en el laboratorio.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 45,
+        "prompt_ms": 194.239,
+        "prompt_per_token_ms": 4.316422222222222,
+        "prompt_per_second": 231.67335087186405,
+        "predicted_n": 32,
+        "predicted_ms": 647.054,
+        "predicted_per_token_ms": 20.2204375,
+        "predicted_per_second": 49.4549141184507
+      },
+      "usage": {
+        "completion_tokens": 32,
+        "prompt_tokens": 45,
+        "total_tokens": 77,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "LFM2.5-1.2B-Q4_0",
+      "case": "summary",
+      "rep": 2,
+      "ttft_s": 0.199,
+      "total_s": 0.846,
+      "answer": "- Revisar el sistema Jira hoy.  \n- Preparar la reunión con Marta.  \n- Verificar el espacio libre en el laboratorio.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 45,
+        "prompt_ms": 197.074,
+        "prompt_per_token_ms": 4.379422222222223,
+        "prompt_per_second": 228.3406233191593,
+        "predicted_n": 32,
+        "predicted_ms": 647.155,
+        "predicted_per_token_ms": 20.22359375,
+        "predicted_per_second": 49.44719580316926
+      },
+      "usage": {
+        "completion_tokens": 32,
+        "prompt_tokens": 45,
+        "total_tokens": 77,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "LFM2.5-1.2B-Q4_0",
+      "case": "summary",
+      "rep": 3,
+      "ttft_s": 0.2,
+      "total_s": 0.846,
+      "answer": "- Revisar el sistema Jira hoy.  \n- Preparar la reunión con Marta.  \n- Verificar el espacio libre en el laboratorio.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 45,
+        "prompt_ms": 197.833,
+        "prompt_per_token_ms": 4.396288888888889,
+        "prompt_per_second": 227.46457871032638,
+        "predicted_n": 32,
+        "predicted_ms": 646.631,
+        "predicted_per_token_ms": 20.20721875,
+        "predicted_per_second": 49.487265534748566
+      },
+      "usage": {
+        "completion_tokens": 32,
+        "prompt_tokens": 45,
+        "total_tokens": 77,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "LFM2.5-1.2B-Q4_0",
+      "case": "grounding",
+      "rep": 1,
+      "ttft_s": 0.235,
+      "total_s": 0.724,
+      "answer": "No, no podemos afirmar que el asistente funcione bien solo con que devuelva HTTP 200.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 51,
+        "prompt_ms": 232.661,
+        "prompt_per_token_ms": 4.561980392156863,
+        "prompt_per_second": 219.20304649253632,
+        "predicted_n": 24,
+        "predicted_ms": 489.401,
+        "predicted_per_token_ms": 20.391708333333334,
+        "predicted_per_second": 49.03954017257831
+      },
+      "usage": {
+        "completion_tokens": 24,
+        "prompt_tokens": 51,
+        "total_tokens": 75,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "LFM2.5-1.2B-Q4_0",
+      "case": "grounding",
+      "rep": 2,
+      "ttft_s": 0.229,
+      "total_s": 0.709,
+      "answer": "No, no podemos afirmar que el asistente funcione bien solo con que devuelva HTTP 200.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 51,
+        "prompt_ms": 227.518,
+        "prompt_per_token_ms": 4.461137254901961,
+        "prompt_per_second": 224.15808859079283,
+        "predicted_n": 24,
+        "predicted_ms": 479.748,
+        "predicted_per_token_ms": 19.9895,
+        "predicted_per_second": 50.026263788488954
+      },
+      "usage": {
+        "completion_tokens": 24,
+        "prompt_tokens": 51,
+        "total_tokens": 75,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "LFM2.5-1.2B-Q4_0",
+      "case": "grounding",
+      "rep": 3,
+      "ttft_s": 0.231,
+      "total_s": 0.711,
+      "answer": "No, no podemos afirmar que el asistente funcione bien solo con que devuelva HTTP 200.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 51,
+        "prompt_ms": 229.317,
+        "prompt_per_token_ms": 4.496411764705883,
+        "prompt_per_second": 222.39956043380994,
+        "predicted_n": 24,
+        "predicted_ms": 479.642,
+        "predicted_per_token_ms": 19.985083333333332,
+        "predicted_per_second": 50.03731950079434
+      },
+      "usage": {
+        "completion_tokens": 24,
+        "prompt_tokens": 51,
+        "total_tokens": 75,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "LFM2.5-1.2B-Q4_0",
+      "case": "context",
+      "rep": 1,
+      "ttft_s": 4.268,
+      "total_s": 4.533,
+      "answer": "La clave es **ALAMEDA-73**.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 988,
+        "prompt_ms": 4265.006,
+        "prompt_per_token_ms": 4.316807692307693,
+        "prompt_per_second": 231.65266356014504,
+        "predicted_n": 13,
+        "predicted_ms": 264.555,
+        "predicted_per_token_ms": 20.350384615384616,
+        "predicted_per_second": 49.13912040974466
+      },
+      "usage": {
+        "completion_tokens": 13,
+        "prompt_tokens": 988,
+        "total_tokens": 1001,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "LFM2.5-1.2B-Q4_0",
+      "case": "context",
+      "rep": 2,
+      "ttft_s": 4.209,
+      "total_s": 4.498,
+      "answer": "La clave es **ALAMEDA-73**.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 988,
+        "prompt_ms": 4205.647,
+        "prompt_per_token_ms": 4.2567277327935225,
+        "prompt_per_second": 234.92223669746892,
+        "predicted_n": 13,
+        "predicted_ms": 288.456,
+        "predicted_per_token_ms": 22.18892307692308,
+        "predicted_per_second": 45.06753196328036
+      },
+      "usage": {
+        "completion_tokens": 13,
+        "prompt_tokens": 988,
+        "total_tokens": 1001,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    },
+    {
+      "model": "LFM2.5-1.2B-Q4_0",
+      "case": "context",
+      "rep": 3,
+      "ttft_s": 4.261,
+      "total_s": 4.526,
+      "answer": "La clave es **ALAMEDA-73**.",
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 988,
+        "prompt_ms": 4258.017,
+        "prompt_per_token_ms": 4.309733805668016,
+        "prompt_per_second": 232.0328923064422,
+        "predicted_n": 13,
+        "predicted_ms": 264.794,
+        "predicted_per_token_ms": 20.368769230769228,
+        "predicted_per_second": 49.09476800833856
+      },
+      "usage": {
+        "completion_tokens": 13,
+        "prompt_tokens": 988,
+        "total_tokens": 1001,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      }
+    }
+  ],
+  "sha256": "2ea801949d760cdf1a2cc04a54262c22c3c0c54f0769d57760c9adeb0e59233f",
+  "context": 16384,
+  "threads": 8,
+  "cache_prompt": false
+}

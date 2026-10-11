@@ -155,31 +155,31 @@
                 description: A hardware sensor is reporting above 80C.
 
             - alert: LlamaCppDown
-              expr: up{job="llama-cpp-code"} != 1 or absent(up{job="llama-cpp-code"})
+              expr: up{job="llama-cpp-main"} != 1 or absent(up{job="llama-cpp-main"})
               for: 2m
               labels:
                 severity: critical
               annotations:
-                summary: llama.cpp code server is down
-                description: Prometheus cannot scrape llama-cpp-code.
+                summary: llama.cpp principal server is down
+                description: Prometheus cannot scrape llama-cpp-main.
 
             - alert: LlamaCppMemoryHigh
-              expr: max(llama_cpp_memory_usage_percent{instance="llama-cpp-code"}) > 90
+              expr: max(llama_cpp_memory_usage_percent{instance="llama-cpp-main"}) > 90
               for: 5m
               labels:
                 severity: warning
               annotations:
                 summary: llama.cpp memory usage is high
-                description: llama-cpp-code is using more than 90% of its systemd MemoryMax.
+                description: llama-cpp-main is using more than 90% of its systemd MemoryMax.
 
             - alert: LlamaCppQueueBacklog
-              expr: max(llama_cpp_queue_depth{instance="llama-cpp-code"}) > 2
+              expr: max(llama_cpp_queue_depth{instance="llama-cpp-main"}) > 2
               for: 5m
               labels:
                 severity: warning
               annotations:
                 summary: llama.cpp queue backlog detected
-                description: llama-cpp-code has more than two pending requests for five minutes.
+                description: llama-cpp-main has more than two pending requests for five minutes.
 
             - alert: GrafanaDown
               expr: up{job="grafana"} != 1 or absent(up{job="grafana"})
@@ -245,7 +245,13 @@
           static_configs:
             - targets: ["127.0.0.1:{{ grafana_port }}"]
 
-        - job_name: "llama-cpp-code"
+      {% if llm_telemetry_enabled | default(false) %}
+        - job_name: "llm-telemetry"
+          static_configs:
+            - targets: ["127.0.0.1:{{ llm_telemetry_port }}"]
+      {% endif %}
+
+        - job_name: "llama-cpp-main"
           metrics_path: /metrics
           authorization:
             credentials: "{{ (llama_cpp_instances | first).api_key }}"
@@ -310,9 +316,9 @@
             "title": "llama.cpp Memory / KV / Queue",
             "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
             "targets": [
-              {"expr": "llama_cpp_memory_usage_percent{instance=\"llama-cpp-code\"}", "legendFormat": "memory %"},
-              {"expr": "llama_cpp_kv_cache_usage_percent{instance=\"llama-cpp-code\"}", "legendFormat": "kv cache %"},
-              {"expr": "llama_cpp_queue_depth{instance=\"llama-cpp-code\"}", "legendFormat": "queue"}
+              {"expr": "llama_cpp_memory_usage_percent{instance=\"llama-cpp-main\"}", "legendFormat": "memory %"},
+              {"expr": "llama_cpp_kv_cache_usage_percent{instance=\"llama-cpp-main\"}", "legendFormat": "kv cache %"},
+              {"expr": "llama_cpp_queue_depth{instance=\"llama-cpp-main\"}", "legendFormat": "queue"}
             ]
           },
           {
@@ -320,7 +326,7 @@
             "title": "Service Status",
             "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
             "targets": [
-              {"expr": "up{job=~\"prometheus|llama-cpp-code|node\"}", "legendFormat": "{% raw %}{{job}}{% endraw %}"}
+              {"expr": "up{job=~\"prometheus|llama-cpp-main|node\"}", "legendFormat": "{% raw %}{{job}}{% endraw %}"}
             ]
           },
           {
@@ -401,6 +407,13 @@
         "uid": "lab-baseline",
         "version": 1
       }
+  when: grafana_enabled
+
+- name: Install LLM latency dashboard
+  ansible.builtin.copy:
+    src: llm-latency.json
+    dest: /srv/ai-lab/observability/grafana/dashboards/llm-latency.json
+    mode: "0644"
   when: grafana_enabled
 
 - name: Install Grafana compose file

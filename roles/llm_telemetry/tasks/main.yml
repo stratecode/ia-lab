@@ -1,0 +1,50 @@
+- name: Install LLM telemetry binary
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../dist/llm-telemetry-linux-amd64"
+    dest: /usr/local/bin/llm-telemetry
+    mode: "0755"
+  notify: Restart LLM telemetry
+
+- name: Install LLM telemetry service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/llm-telemetry.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Transparent LLM metrics proxy
+      After=network.target llama-cpp-main.service
+
+      [Service]
+      DynamicUser=yes
+      ExecStart=/usr/local/bin/llm-telemetry --listen 127.0.0.1:{{ llm_telemetry_port }} --upstream http://127.0.0.1:{{ (llama_cpp_instances | first).port }} --model {{ llm_telemetry_model_label }}
+      Restart=on-failure
+      RestartSec=3
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      ProtectHome=yes
+      PrivateTmp=yes
+      MemoryMax=128M
+      LimitNOFILE=4096
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart LLM telemetry
+
+- name: Apply telemetry service changes before routing chat
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable LLM telemetry
+  ansible.builtin.systemd:
+    name: llm-telemetry
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Verify model health through telemetry proxy
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ llm_telemetry_port }}/health"
+    status_code: 200
+  register: llm_telemetry_health
+  retries: 10
+  delay: 2
+  until: llm_telemetry_health.status == 200

@@ -73,10 +73,7 @@
         - snap.prometheus.prometheus.service
         - prometheus-alertmanager.service
         - prometheus-node-exporter.service
-        - llama-cpp-code.service
-        - llama-cpp-planner.service
-        - llama-cpp-utility.service
-        - llama-cpp-embeddings.service
+        - llama-cpp-main.service
       changed_when: false
 
   tasks:
@@ -242,10 +239,7 @@
         - snap.prometheus.prometheus.service
         - prometheus-alertmanager.service
         - prometheus-node-exporter.service
-        - llama-cpp-code.service
-        - llama-cpp-planner.service
-        - llama-cpp-utility.service
-        - llama-cpp-embeddings.service
+        - llama-cpp-main.service
       changed_when: false
 
     - name: Verify WireGuard remains enabled across reboots
@@ -265,9 +259,6 @@
         - http://127.0.0.1:3000/api/health
         - http://127.0.0.1:9090/prometheus/-/ready
         - http://127.0.0.1:8080/health
-        - http://127.0.0.1:8082/health
-        - http://127.0.0.1:8083/health
-        - http://127.0.0.1:8084/health
 
     - name: Verify retired ports are closed
       ansible.builtin.wait_for:

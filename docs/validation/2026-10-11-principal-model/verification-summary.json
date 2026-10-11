@@ -1,0 +1,30 @@
+{
+  "date": "2026-10-11",
+  "deploy_principal_model": {
+    "ok": 89,
+    "changed": 18,
+    "failed": 0,
+    "unreachable": 0
+  },
+  "deploy_final_webui_config": {
+    "ok": 5,
+    "changed": 2,
+    "failed": 0
+  },
+  "resource_tests_passed": 27,
+  "go_test_harness": "passed",
+  "go_build_harness": "passed",
+  "ansible_syntax_checks": "passed",
+  "git_diff_check": "passed",
+  "post_restart_health": {
+    "llama_main": 200,
+    "open_webui": 200
+  },
+  "probe_cleanup": {
+    "container_removed": true,
+    "disposable_data_removed": true,
+    "port_3081_closed": true,
+    "ssh_tunnel_stopped": true
+  },
+  "voice_channels": "not deployed"
+}

@@ -1,0 +1,74 @@
+[
+  {
+    "model": "Qwen2.5-1.5B-Instruct-Q4_K_M",
+    "expected_unit": "llama-cpp-planner",
+    "message": {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "type": "function",
+          "function": {
+            "name": "service_status",
+            "arguments": "{\"unit\": \"llama-cpp-planner\"}"
+          },
+          "id": "35eh4G97JGtgiTKqnGFqP0OEd1Jo6DEo"
+        }
+      ]
+    }
+  },
+  {
+    "model": "Qwen2.5-1.5B-Instruct-Q4_K_M",
+    "expected_unit": "llama-cpp-code",
+    "message": {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "type": "function",
+          "function": {
+            "name": "service_status",
+            "arguments": "{\"unit\": \"llama-cpp-code\"}"
+          },
+          "id": "PLXBmIJYMH6n1fQnKdf9VsHGoQXX9OMA"
+        }
+      ]
+    }
+  },
+  {
+    "model": "LFM2.5-1.2B-Instruct-Q4_0",
+    "expected_unit": "llama-cpp-planner",
+    "message": {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "type": "function",
+          "function": {
+            "name": "service_status",
+            "arguments": "{\"unit\":\"llama-cpp-planner\"}"
+          },
+          "id": "Z3hNklZDou1zoMNNfDW3glo8KVlf7e9W"
+        }
+      ]
+    }
+  },
+  {
+    "model": "LFM2.5-1.2B-Instruct-Q4_0",
+    "expected_unit": "llama-cpp-code",
+    "message": {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "type": "function",
+          "function": {
+            "name": "service_status",
+            "arguments": "{\"unit\":\"llama-cpp-code\"}"
+          },
+          "id": "grq0W6DRHjqvUJ0pPb6HA1nlwLvx9gB8"
+        }
+      ]
+    }
+  }
+]

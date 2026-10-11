@@ -4,9 +4,13 @@ Ansible-managed homelab infrastructure. Provisions and configures an Ubuntu serv
 
 ## Operating summary
 
-- Observed host state on June 24, 2026 before reconciliation: `codex-local-gateway`, `llama-cpp-code`, `nginx`, `wg-quick`, `prometheus`, `alertmanager`, and `grafana` were active; `orchestrator`, `aider`, and `open-webui` were absent.
-- Repo target after this cleanup: `orchestrator + lab-agent + lab-agentd` return as the primary operating model.
-- `Codex gateway` remains supported as a complementary slice for direct repo work, not the primary source of operational truth.
+- Current direction: a personal work assistant with one local principal LLM.
+- LFM2.5-1.2B Instruct Q4_0 on CPU, 16k context, Open WebUI for browser conversation.
+- Reproduce the current profile with `playbooks/deploy-principal-model.yml`.
+- Monitoring, HTTPS access and WireGuard remain active; the orchestrator and
+  Codex gateway remain retired. External Oráculo/OpenSearch projects are excluded.
+- See [Principal model operation](docs/principal-model-operation.md) for actual
+  validation and [Master Plan](docs/architecture/master-plan.md) for direction.
 
 ## Prerequisites
 
@@ -21,7 +25,7 @@ Ansible-managed homelab infrastructure. Provisions and configures an Ubuntu serv
 ### Target host
 
 - **Ubuntu Server 22.04 or 24.04** — the playbooks use `apt`, `systemd`, `netplan`, and LVM tooling specific to Debian/Ubuntu. Other distributions are not supported.
-- AMD GPU with Vulkan drivers (for llama.cpp inference). NVIDIA/CUDA is not currently configured.
+- AVX2-capable CPU for inference. The current build retains Vulkan support, but the principal model uses CPU only.
 - At least 16 GB RAM recommended (AI models + Docker services)
 - AWS CLI profile `route53-dns` configured for DDNS and Let's Encrypt DNS challenge (only needed if `route53_ddns_enabled` and `monitor_tls_mode` are active)
 

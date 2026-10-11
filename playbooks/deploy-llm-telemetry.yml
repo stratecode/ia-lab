@@ -1,0 +1,13 @@
+---
+- name: Instrument all Open WebUI model calls
+  hosts: all
+  become: true
+  vars_files:
+    - ../group_vars/vault.yml
+  vars:
+    open_webui_enabled: true
+    open_webui_public_cname_target: ""
+  roles:
+    - llm_telemetry
+    - open_webui
+    - observability

@@ -1,0 +1,10 @@
+---
+- name: Deploy the lab llama.cpp runtime
+  hosts: all
+  become: true
+
+  vars_files:
+    - ../group_vars/vault.yml
+
+  roles:
+    - llama_cpp

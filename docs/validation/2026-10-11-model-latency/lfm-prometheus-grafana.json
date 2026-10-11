@@ -1,0 +1,303 @@
+{
+  "up{job=\"llm-telemetry\"}": {
+    "status": "success",
+    "data": {
+      "resultType": "vector",
+      "result": [
+        {
+          "metric": {
+            "__name__": "up",
+            "instance": "127.0.0.1:8081",
+            "job": "llm-telemetry"
+          },
+          "value": [
+            1791741995.498,
+            "1"
+          ]
+        }
+      ]
+    }
+  },
+  "lab_llm_requests_total": {
+    "status": "success",
+    "data": {
+      "resultType": "vector",
+      "result": [
+        {
+          "metric": {
+            "__name__": "lab_llm_requests_total",
+            "endpoint": "chat",
+            "instance": "127.0.0.1:8081",
+            "job": "llm-telemetry",
+            "model": "LFM2.5-1.2B-Instruct-Q4_0",
+            "outcome": "http_error",
+            "status": "401"
+          },
+          "value": [
+            1791741995.499,
+            "1"
+          ]
+        },
+        {
+          "metric": {
+            "__name__": "lab_llm_requests_total",
+            "endpoint": "chat",
+            "instance": "127.0.0.1:8081",
+            "job": "llm-telemetry",
+            "model": "LFM2.5-1.2B-Instruct-Q4_0",
+            "outcome": "ok",
+            "status": "200"
+          },
+          "value": [
+            1791741995.499,
+            "2"
+          ]
+        }
+      ]
+    }
+  },
+  "lab_llm_ttft_seconds_count": {
+    "status": "success",
+    "data": {
+      "resultType": "vector",
+      "result": [
+        {
+          "metric": {
+            "__name__": "lab_llm_ttft_seconds_count",
+            "endpoint": "chat",
+            "instance": "127.0.0.1:8081",
+            "job": "llm-telemetry",
+            "model": "LFM2.5-1.2B-Instruct-Q4_0"
+          },
+          "value": [
+            1791741995.499,
+            "1"
+          ]
+        }
+      ]
+    }
+  },
+  "lab_llm_request_duration_seconds_count": {
+    "status": "success",
+    "data": {
+      "resultType": "vector",
+      "result": [
+        {
+          "metric": {
+            "__name__": "lab_llm_request_duration_seconds_count",
+            "endpoint": "chat",
+            "instance": "127.0.0.1:8081",
+            "job": "llm-telemetry",
+            "model": "LFM2.5-1.2B-Instruct-Q4_0",
+            "outcome": "http_error"
+          },
+          "value": [
+            1791741995.5,
+            "1"
+          ]
+        },
+        {
+          "metric": {
+            "__name__": "lab_llm_request_duration_seconds_count",
+            "endpoint": "chat",
+            "instance": "127.0.0.1:8081",
+            "job": "llm-telemetry",
+            "model": "LFM2.5-1.2B-Instruct-Q4_0",
+            "outcome": "ok"
+          },
+          "value": [
+            1791741995.5,
+            "2"
+          ]
+        }
+      ]
+    }
+  },
+  "grafana": {
+    "uid": "lab-llm-latency",
+    "title": "Lab · LLM: llamadas y latencia",
+    "panels": 12,
+    "url": "/d/lab-llm-latency"
+  },
+  "panel_queries": [
+    {
+      "title": "Llamadas de inferencia / minuto",
+      "result": [
+        {
+          "metric": {
+            "model": "LFM2.5-1.2B-Instruct-Q4_0"
+          },
+          "value": [
+            1791741995.517,
+            "0"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Llamadas fallidas / minuto",
+      "result": [
+        {
+          "metric": {
+            "model": "LFM2.5-1.2B-Instruct-Q4_0"
+          },
+          "value": [
+            1791741995.517,
+            "0"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Primer token p50 (solo streaming)",
+      "result": [
+        {
+          "metric": {
+            "model": "LFM2.5-1.2B-Instruct-Q4_0"
+          },
+          "value": [
+            1791741995.518,
+            "NaN"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Primer token p95 (solo streaming)",
+      "result": [
+        {
+          "metric": {
+            "model": "LFM2.5-1.2B-Instruct-Q4_0"
+          },
+          "value": [
+            1791741995.518,
+            "NaN"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Duración total p50 (llamadas correctas)",
+      "result": [
+        {
+          "metric": {
+            "model": "LFM2.5-1.2B-Instruct-Q4_0"
+          },
+          "value": [
+            1791741995.519,
+            "NaN"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Duración total p95 (llamadas correctas)",
+      "result": [
+        {
+          "metric": {
+            "model": "LFM2.5-1.2B-Instruct-Q4_0"
+          },
+          "value": [
+            1791741995.519,
+            "NaN"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Generación tokens/s (tiempo activo del modelo)",
+      "result": [
+        {
+          "metric": {},
+          "value": [
+            1791741995.52,
+            "48.567870485678704"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Carga del contexto tokens/s (tiempo activo del modelo)",
+      "result": [
+        {
+          "metric": {},
+          "value": [
+            1791741995.52,
+            "185.68368941032375"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Llamadas en curso",
+      "result": [
+        {
+          "metric": {
+            "__name__": "lab_llm_requests_in_flight",
+            "instance": "127.0.0.1:8081",
+            "job": "llm-telemetry"
+          },
+          "value": [
+            1791741995.521,
+            "0"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Cola del modelo",
+      "result": [
+        {
+          "metric": {
+            "__name__": "llamacpp:requests_deferred",
+            "instance": "127.0.0.1:8080",
+            "job": "llama-cpp-main"
+          },
+          "value": [
+            1791741995.521,
+            "0"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Llamadas completadas desde arranque",
+      "result": [
+        {
+          "metric": {
+            "model": "LFM2.5-1.2B-Instruct-Q4_0",
+            "outcome": "http_error"
+          },
+          "value": [
+            1791741995.522,
+            "1"
+          ]
+        },
+        {
+          "metric": {
+            "model": "LFM2.5-1.2B-Instruct-Q4_0",
+            "outcome": "ok"
+          },
+          "value": [
+            1791741995.522,
+            "2"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Mediciones de primer token desde arranque",
+      "result": [
+        {
+          "metric": {
+            "model": "LFM2.5-1.2B-Instruct-Q4_0"
+          },
+          "value": [
+            1791741995.522,
+            "1"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "principal_service": [
+    "ActiveState=active",
+    "NRestarts=0",
+    "MemoryCurrent=2286788608"
+  ],
+  "context": 16384,
+  "models": [
+    "main"
+  ],
+  "weights": [
+    "/srv/ai-lab/llama.cpp/models/Qwen_Qwen3.5-4B-Q4_K_M.gguf"
+  ],
+  "closed_ports": {
+    "8082": true,
+    "8083": true,
+    "8084": true,
+    "18089": true
+  },
+  "webui_version": "v0.12.0",
+  "webui_image_digest": "sha256:1565038903151ced924b5a3226f73f40f16963df4b910441f6391f10144afdaa",
+  "webui_auth": "True",
+  "webui_default_model": "main",
+  "webui_timeout": "900",
+  "builtin_tools": false,
+  "prometheus_targets": [
+    {
+      "job": "alertmanager",
+      "health": "up"
+    },
+    {
+      "job": "grafana",
+      "health": "up"
+    },
+    {
+      "job": "llama-cpp-main",
+      "health": "up"
+    },
+    {
+      "job": "node",
+      "health": "up"
+    },
+    {
+      "job": "prometheus",
+      "health": "up"
+    }
+  ],
+  "active_llama_units": [
+    "  llama-cpp-main.service loaded active running llama.cpp inference server (main)"
+  ]
+}

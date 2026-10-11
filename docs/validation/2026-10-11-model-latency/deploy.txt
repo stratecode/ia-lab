@@ -1,0 +1,101 @@
+
+PLAY [Instrument all Open WebUI model calls] ***********************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [lab]
+
+TASK [llm_telemetry : Install LLM telemetry binary] ****************************
+changed: [lab]
+
+TASK [llm_telemetry : Install LLM telemetry service] ***************************
+ok: [lab]
+
+TASK [llm_telemetry : Apply telemetry service changes before routing chat] *****
+
+RUNNING HANDLER [llm_telemetry : Restart LLM telemetry] ************************
+changed: [lab]
+
+TASK [llm_telemetry : Enable LLM telemetry] ************************************
+ok: [lab]
+
+TASK [llm_telemetry : Verify model health through telemetry proxy] *************
+ok: [lab]
+
+TASK [open_webui : Ensure Open WebUI directories exist] ************************
+ok: [lab] => (item=/srv/ai-lab/open-webui)
+
+TASK [open_webui : Install Open WebUI compose file] ****************************
+ok: [lab]
+
+TASK [open_webui : Install Open WebUI environment file] ************************
+ok: [lab]
+
+TASK [open_webui : Start Open WebUI stack] *************************************
+changed: [lab]
+
+TASK [open_webui : Publish Open WebUI DNS record through Route53] **************
+skipping: [lab]
+
+TASK [observability : Ensure observability directories exist] ******************
+ok: [lab] => (item=/srv/ai-lab/observability)
+ok: [lab] => (item=/srv/ai-lab/observability/grafana)
+ok: [lab] => (item=/srv/ai-lab/observability/grafana/provisioning)
+ok: [lab] => (item=/srv/ai-lab/observability/grafana/provisioning/datasources)
+ok: [lab] => (item=/srv/ai-lab/observability/grafana/provisioning/dashboards)
+ok: [lab] => (item=/srv/ai-lab/observability/grafana/dashboards)
+ok: [lab] => (item=/etc/alertmanager)
+ok: [lab] => (item=/var/snap/prometheus/current/promreg)
+
+TASK [observability : Bind Alertmanager to loopback and disable single-node clustering] ***
+ok: [lab]
+
+TASK [observability : Bind node-exporter to loopback] **************************
+ok: [lab]
+
+TASK [observability : Configure Alertmanager] **********************************
+ok: [lab]
+
+TASK [observability : Configure Prometheus alert rules] ************************
+ok: [lab]
+
+TASK [observability : Configure Prometheus for alertmanager and rules] *********
+ok: [lab]
+
+TASK [observability : Configure Prometheus web external URL] *******************
+ok: [lab]
+
+TASK [observability : Provision Grafana datasource] ****************************
+ok: [lab]
+
+TASK [observability : Provision Grafana dashboards provider] *******************
+ok: [lab]
+
+TASK [observability : Install Grafana dashboard] *******************************
+ok: [lab]
+
+TASK [observability : Install LLM latency dashboard] ***************************
+ok: [lab]
+
+TASK [observability : Install Grafana compose file] ****************************
+ok: [lab]
+
+TASK [observability : Check existing Grafana environment file] *****************
+ok: [lab]
+
+TASK [observability : Require an existing Grafana environment when its vault password is unavailable] ***
+ok: [lab] => {
+    "changed": false,
+    "msg": "All assertions passed"
+}
+
+TASK [observability : Install Grafana environment file from vault] *************
+skipping: [lab]
+
+TASK [observability : Start Grafana stack] *************************************
+ok: [lab]
+
+TASK [observability : Enable and start alertmanager] ***************************
+ok: [lab]
+
+PLAY RECAP *********************************************************************
+lab                        : ok=26   changed=3    unreachable=0    failed=0    skipped=2    rescued=0    ignored=0

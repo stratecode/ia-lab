@@ -4,6 +4,33 @@ This document is the canonical product and execution roadmap for the platform. I
 
 If another document disagrees on product direction, roadmap, MVP boundaries, or the meaning of "validated", this document wins.
 
+## Active direction — October 11, 2026
+
+The operator has selected a personal work assistant as the current product
+objective: one principal local LLM, persistent work context, later read access
+to Jira, Granola and email, and controlled everyday task agents. Conversation
+should ultimately support voice through Telegram, WhatsApp and Slack without
+requiring the operator to remain on the lab VPN or LAN.
+
+The first approved increment is one CPU-only LFM2.5-1.2B Instruct Q4_0 endpoint,
+16,384 tokens of context, and repository-managed Open WebUI at
+`https://chat.stratecode.com`. Previous role-specific models and their unused
+weights are removed after principal-model validation. Reproduction:
+`playbooks/deploy-principal-model.yml`.
+
+This increment provides browser conversation and persisted chat history.
+Cross-conversation work memory, external connectors, speech recognition,
+speech synthesis and messaging-channel adapters are future increments;
+none is claimed deployed. Later channel adapters should share this model
+and conversation/memory layer. The channel boundary must authenticate the
+operator and preserve action permissions; a public inference endpoint is
+not required.
+
+The legacy initiative control plane remains in source as a possible governed
+execution foundation, but is retired on the host. The sections below preserve
+its historical architecture and validation; they do not describe active host
+services. Current host truth lives in `../principal-model-operation.md`.
+
 ## Positioning
 
 The platform is an `initiative-driven` execution system for governed AI-assisted work.

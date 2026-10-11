@@ -1,0 +1,261 @@
+
+PLAY [Deploy the single principal model and its chat interface] ****************
+
+TASK [Gathering Facts] *********************************************************
+ok: [lab]
+
+TASK [llama_cpp : Install llama.cpp build dependencies] ************************
+ok: [lab]
+
+TASK [llama_cpp : Ensure llama.cpp group exists] *******************************
+ok: [lab]
+
+TASK [llama_cpp : Ensure llama.cpp user exists] ********************************
+ok: [lab]
+
+TASK [llama_cpp : Ensure llama.cpp directories exist] **************************
+ok: [lab] => (item={'path': '/opt/llama.cpp', 'owner': 'root', 'group': 'root', 'mode': '0755'})
+ok: [lab] => (item={'path': '/srv/ai-lab/llama.cpp/cache', 'owner': 'llama-cpp', 'group': 'llama-cpp', 'mode': '0755'})
+
+TASK [llama_cpp : Check existing llama.cpp source checkout health] *************
+ok: [lab]
+
+TASK [llama_cpp : Remove corrupted llama.cpp source checkout] ******************
+skipping: [lab]
+
+TASK [llama_cpp : Clone llama.cpp source] **************************************
+ok: [lab]
+
+TASK [llama_cpp : Check if llama-server binary exists] *************************
+ok: [lab]
+
+TASK [llama_cpp : Validate llama-server runtime linkage] ***********************
+ok: [lab]
+
+TASK [llama_cpp : Detect zero-byte llama.cpp shared libraries] *****************
+ok: [lab]
+
+TASK [llama_cpp : Compute whether llama.cpp rebuild is required] ***************
+ok: [lab]
+
+TASK [llama_cpp : Remove corrupted llama.cpp build directory before rebuild] ***
+skipping: [lab]
+
+TASK [llama_cpp : Configure llama.cpp build] ***********************************
+skipping: [lab]
+
+TASK [llama_cpp : Build llama.cpp] *********************************************
+skipping: [lab]
+
+TASK [llama_cpp : Validate Vulkan detection before service install] ************
+ok: [lab]
+
+TASK [llama_cpp : Build validation config JSON] ********************************
+ok: [lab]
+
+TASK [llama_cpp : Copy validation script to remote host] ***********************
+ok: [lab]
+
+TASK [llama_cpp : Run configuration validation] ********************************
+ok: [lab]
+
+TASK [llama_cpp : Fail on configuration validation errors] *********************
+skipping: [lab]
+
+TASK [llama_cpp : Emit configuration validation warnings] **********************
+skipping: [lab]
+
+TASK [llama_cpp : Ensure pinned model directory exists] ************************
+ok: [lab]
+
+TASK [llama_cpp : Download pinned principal weights] ***************************
+ok: [lab] => (item=llama-cpp-main)
+
+TASK [llama_cpp : Discover existing llama-cpp service files] *******************
+ok: [lab]
+
+TASK [llama_cpp : Compute stale instance set] **********************************
+ok: [lab]
+
+TASK [llama_cpp : Stop stale llama.cpp instances] ******************************
+skipping: [lab]
+
+TASK [llama_cpp : Disable stale llama.cpp instances] ***************************
+skipping: [lab]
+
+TASK [llama_cpp : Remove stale llama.cpp unit files] ***************************
+skipping: [lab]
+
+TASK [llama_cpp : Reload systemd daemon after stale cleanup] *******************
+skipping: [lab]
+
+TASK [llama_cpp : Create llama.cpp log directory] ******************************
+ok: [lab]
+
+TASK [llama_cpp : Deploy llama.cpp logrotate configuration] ********************
+ok: [lab]
+
+TASK [llama_cpp : Install llama.cpp aggregate resource slice] ******************
+ok: [lab]
+
+TASK [llama_cpp : Install llama.cpp systemd service] ***************************
+ok: [lab] => (item=llama-cpp-main)
+
+TASK [llama_cpp : Stop legacy llama.cpp service when present] ******************
+ok: [lab]
+
+TASK [llama_cpp : Remove legacy llama.cpp unit] ********************************
+ok: [lab]
+
+TASK [llama_cpp : Flush llama.cpp handlers before service validation] **********
+
+TASK [llama_cpp : Enable and start llama.cpp instance] *************************
+ok: [lab] => (item=llama-cpp-main)
+
+TASK [llama_cpp : Wait for llama.cpp instance API] *****************************
+ok: [lab] => (item=llama-cpp-main)
+
+TASK [llama_cpp : Validate embeddings endpoint availability] *******************
+skipping: [lab]
+
+TASK [llama_cpp : Validate principal chat generation before deleting retired weights] ***
+ok: [lab]
+
+TASK [llama_cpp : Restrict retired weight removal to explicit lab model paths] ***
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/models/Qwen_Qwen3.5-4B-Q4_K_M.gguf) => {
+    "ansible_loop_var": "item",
+    "changed": false,
+    "item": "/srv/ai-lab/llama.cpp/models/Qwen_Qwen3.5-4B-Q4_K_M.gguf",
+    "msg": "All assertions passed"
+}
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-Coder-7B-Instruct-GGUF) => {
+    "ansible_loop_var": "item",
+    "changed": false,
+    "item": "/srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-Coder-7B-Instruct-GGUF",
+    "msg": "All assertions passed"
+}
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-Coder-3B-Instruct-GGUF) => {
+    "ansible_loop_var": "item",
+    "changed": false,
+    "item": "/srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-Coder-3B-Instruct-GGUF",
+    "msg": "All assertions passed"
+}
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-3B-Instruct-GGUF) => {
+    "ansible_loop_var": "item",
+    "changed": false,
+    "item": "/srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-3B-Instruct-GGUF",
+    "msg": "All assertions passed"
+}
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-1.5B-Instruct-GGUF) => {
+    "ansible_loop_var": "item",
+    "changed": false,
+    "item": "/srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-1.5B-Instruct-GGUF",
+    "msg": "All assertions passed"
+}
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/cache/hub/models--nomic-ai--nomic-embed-text-v1.5-GGUF) => {
+    "ansible_loop_var": "item",
+    "changed": false,
+    "item": "/srv/ai-lab/llama.cpp/cache/hub/models--nomic-ai--nomic-embed-text-v1.5-GGUF",
+    "msg": "All assertions passed"
+}
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/cache/hub/models--ggml-org--Qwen3-8B-GGUF) => {
+    "ansible_loop_var": "item",
+    "changed": false,
+    "item": "/srv/ai-lab/llama.cpp/cache/hub/models--ggml-org--Qwen3-8B-GGUF",
+    "msg": "All assertions passed"
+}
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/cache/hub/models--unsloth--gemma-3-12b-it-GGUF) => {
+    "ansible_loop_var": "item",
+    "changed": false,
+    "item": "/srv/ai-lab/llama.cpp/cache/hub/models--unsloth--gemma-3-12b-it-GGUF",
+    "msg": "All assertions passed"
+}
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/research/2026-10-11-cpu/LFM2.5-1.2B-Instruct-Q4_0.gguf) => {
+    "ansible_loop_var": "item",
+    "changed": false,
+    "item": "/srv/ai-lab/llama.cpp/research/2026-10-11-cpu/LFM2.5-1.2B-Instruct-Q4_0.gguf",
+    "msg": "All assertions passed"
+}
+
+TASK [llama_cpp : Remove retired model weights from disk] **********************
+changed: [lab] => (item=/srv/ai-lab/llama.cpp/models/Qwen_Qwen3.5-4B-Q4_K_M.gguf)
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-Coder-7B-Instruct-GGUF)
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-Coder-3B-Instruct-GGUF)
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-3B-Instruct-GGUF)
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-1.5B-Instruct-GGUF)
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/cache/hub/models--nomic-ai--nomic-embed-text-v1.5-GGUF)
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/cache/hub/models--ggml-org--Qwen3-8B-GGUF)
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/cache/hub/models--unsloth--gemma-3-12b-it-GGUF)
+ok: [lab] => (item=/srv/ai-lab/llama.cpp/research/2026-10-11-cpu/LFM2.5-1.2B-Instruct-Q4_0.gguf)
+
+TASK [llama_cpp : Create Prometheus textfile collector directory] **************
+ok: [lab]
+
+TASK [llama_cpp : Deploy llama.cpp monitoring config] **************************
+ok: [lab]
+
+TASK [llama_cpp : Deploy llama.cpp resource monitoring script] *****************
+ok: [lab]
+
+TASK [llama_cpp : Deploy llama-cpp-monitor systemd service] ********************
+ok: [lab]
+
+TASK [llama_cpp : Deploy llama-cpp-monitor systemd timer] **********************
+ok: [lab]
+
+TASK [llama_cpp : Flush handlers before enabling monitoring timer] *************
+
+TASK [llama_cpp : Enable and start llama-cpp-monitor timer] ********************
+ok: [lab]
+
+TASK [llm_telemetry : Install LLM telemetry binary] ****************************
+ok: [lab]
+
+TASK [llm_telemetry : Install LLM telemetry service] ***************************
+changed: [lab]
+
+TASK [llm_telemetry : Apply telemetry service changes before routing chat] *****
+
+RUNNING HANDLER [llm_telemetry : Restart LLM telemetry] ************************
+changed: [lab]
+
+TASK [llm_telemetry : Enable LLM telemetry] ************************************
+ok: [lab]
+
+TASK [llm_telemetry : Verify model health through telemetry proxy] *************
+ok: [lab]
+
+TASK [open_webui : Ensure Open WebUI directories exist] ************************
+ok: [lab] => (item=/srv/ai-lab/open-webui)
+
+TASK [open_webui : Install Open WebUI compose file] ****************************
+ok: [lab]
+
+TASK [open_webui : Install Open WebUI environment file] ************************
+changed: [lab]
+
+TASK [open_webui : Start Open WebUI stack] *************************************
+changed: [lab]
+
+TASK [open_webui : Wait for Open WebUI before reconciling principal settings] ***
+FAILED - RETRYING: [lab]: Wait for Open WebUI before reconciling principal settings (30 retries left).
+FAILED - RETRYING: [lab]: Wait for Open WebUI before reconciling principal settings (29 retries left).
+FAILED - RETRYING: [lab]: Wait for Open WebUI before reconciling principal settings (28 retries left).
+FAILED - RETRYING: [lab]: Wait for Open WebUI before reconciling principal settings (27 retries left).
+FAILED - RETRYING: [lab]: Wait for Open WebUI before reconciling principal settings (26 retries left).
+FAILED - RETRYING: [lab]: Wait for Open WebUI before reconciling principal settings (25 retries left).
+ok: [lab]
+
+TASK [open_webui : Reconcile principal streaming and model capabilities] *******
+[ERROR]: Task failed: Module failed: non-zero return code
+Origin: /Users/fran.lopez/Development/StrateCode/lab/roles/open_webui/tasks/main.yml:77:3
+
+75   when: open_webui_enabled
+76
+77 - name: Reconcile principal streaming and model capabilities
+     ^ column 3
+
+fatal: [lab]: FAILED! => {"censored": "the output has been hidden due to the fact that 'no_log: true' was specified for this result", "changed": true}
+
+PLAY RECAP *********************************************************************
+lab                        : ok=46   changed=5    unreachable=0    failed=1    skipped=11   rescued=0    ignored=0

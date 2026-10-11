@@ -41,8 +41,6 @@ server_packages:
 cockpit_domain: "{{ lookup('env', 'LAB_COCKPIT_DOMAIN') | default('lab.localhost', true) }}"
 observability_domain: "{{ lookup('env', 'LAB_OBSERVABILITY_DOMAIN') | default('monitor.localhost', true) }}"
 open_webui_domain: "{{ lookup('env', 'LAB_CHAT_DOMAIN') | default('chat.localhost', true) }}"
-srl_dashboard_domain: "{{ lookup('env', 'LAB_SRL_DASHBOARD_DOMAIN') | default('srl.' ~ (cockpit_domain.split('.', 1) | last), true) }}"
-srl_opensearch_domain: "{{ lookup('env', 'LAB_SRL_OPENSEARCH_DOMAIN') | default('opensearch.' ~ (cockpit_domain.split('.', 1) | last), true) }}"
 
 # ─── Monitor / Nginx / TLS ──────────────────────────────────────────────────
 monitor_backend_port: 9091
@@ -50,9 +48,6 @@ monitor_tls_mode: "{{ lookup('env', 'LAB_TLS_MODE') | default('selfsigned', true
 monitor_letsencrypt_email: "{{ lookup('env', 'LAB_LETSENCRYPT_EMAIL') | default('', true) }}"
 monitor_letsencrypt_challenge: "{{ lookup('env', 'LAB_LETSENCRYPT_CHALLENGE') | default('dns-route53', true) }}"
 monitor_letsencrypt_aws_profile: "{{ lookup('env', 'LAB_LETSENCRYPT_AWS_PROFILE') | default('route53-dns', true) }}"
-srl_access_enabled: "{{ lookup('env', 'LAB_SRL_ACCESS_ENABLED') | default('true', true) | bool }}"
-srl_dashboard_port: 5601
-srl_opensearch_port: 9200
 monitor_absent_packages:
   - openipmi
 monitor_pcp_services:
@@ -94,32 +89,43 @@ llama_cpp_git_version: "{{ lookup('env', 'LAB_LLAMA_GIT_VERSION') | default('6ea
 llama_cpp_build_jobs: "{{ lookup('env', 'LAB_LLAMA_BUILD_JOBS') | default('1', true) | int }}"
 llama_cpp_build_async_seconds: "{{ lookup('env', 'LAB_LLAMA_BUILD_ASYNC_SECONDS') | default('14400', true) | int }}"
 llama_cpp_build_poll_seconds: "{{ lookup('env', 'LAB_LLAMA_BUILD_POLL_SECONDS') | default('30', true) | int }}"
+# One principal model; the previous role-specific weights are retired.
+llama_cpp_model_dir: /srv/ai-lab/llama.cpp/models
 llama_cpp_instances:
-  - service_name: llama-cpp-code
+  - service_name: llama-cpp-main
     host: "{{ llama_cpp_host }}"
-    port: "{{ lookup('env', 'LAB_LLAMA_CODE_PORT') | default('8080', true) | int }}"
-    hf_repo: "{{ lookup('env', 'LAB_LLAMA_CODE_MODEL') | default('Qwen/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M', true) }}"
-    alias: coder
-    ctx_size: "{{ lookup('env', 'LAB_LLAMA_CODE_CTX_SIZE') | default('16384', true) | int }}"
+    port: "{{ lookup('env', 'LAB_LLAMA_MAIN_PORT') | default('8080', true) | int }}"
+    hf_repo: LiquidAI/LFM2.5-1.2B-Instruct-GGUF:Q4_0
+    model_url: https://huggingface.co/LiquidAI/LFM2.5-1.2B-Instruct-GGUF/resolve/8ed288026e23958ad9dfa92d53ed773a8eee7125/LFM2.5-1.2B-Instruct-Q4_0.gguf
+    model_sha256: 2ea801949d760cdf1a2cc04a54262c22c3c0c54f0769d57760c9adeb0e59233f
+    model_path: "{{ llama_cpp_model_dir }}/LFM2.5-1.2B-Instruct-Q4_0.gguf"
+    alias: main
+    ctx_size: "{{ lookup('env', 'LAB_LLAMA_MAIN_CTX_SIZE') | default('16384', true) | int }}"
     recommended_ctx_size: 16384
     max_ctx_size: 32768
-    threads: "{{ lookup('env', 'LAB_LLAMA_CODE_THREADS') | default('6', true) | int }}"
-    parallel: "{{ lookup('env', 'LAB_LLAMA_CODE_PARALLEL') | default('1', true) | int }}"
-    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_CODE_GPU_LAYERS') | default('24', true) | int }}"
-    api_key: "{{ lookup('env', 'LAB_LLAMA_CODE_API_KEY') | default('local-code', true) }}"
-    instance_lifecycle: "always-on"
+    threads: "{{ lookup('env', 'LAB_LLAMA_MAIN_THREADS') | default('8', true) | int }}"
+    parallel: 1
+    n_gpu_layers: 0
+    # Compatibility fallback reuses the existing key without editing secrets.
+    api_key: "{{ lookup('env', 'LAB_LLAMA_MAIN_API_KEY') | default(lookup('env', 'LAB_LLAMA_CODE_API_KEY'), true) | default('local-main', true) }}"
+    instance_lifecycle: always-on
     priority: 1
-    model_size_mb: 4100
-    ram_estimation_override_mb: null
-    vram_reservation_mb: 1800
-    memory_max_mb: 8192
+    model_size_mb: 664
+    ram_estimation_override_mb: 3072
+    vram_reservation_mb: 0
+    memory_max_mb: 4096
     extra_args:
+      - "--device"
+      - "none"
+      - "--no-kv-offload"
       - "--cache-ram"
       - "0"
-    gpu_fallback_policy: "reduce-layers"
+      - "--threads-batch"
+      - "8"
+    gpu_fallback_policy: reduce-layers
     max_queued_requests: 4
-    request_timeout_seconds: 180
-    overload_policy: "queue"
+    request_timeout_seconds: 900
+    overload_policy: queue
     ram_suspend_threshold_percent: 90
     vram_suspend_threshold_percent: 95
     idle_timeout_seconds: 0
@@ -129,111 +135,22 @@ llama_cpp_instances:
       supports_reasoning: false
       supports_embeddings: false
     recommended_parallelism: 1
-    recommended_context: 24576
+    recommended_context: 16384
     safe_max_context: 32768
     embedding_mode: false
-  - service_name: llama-cpp-planner
-    host: "{{ llama_cpp_host }}"
-    port: "{{ lookup('env', 'LAB_LLAMA_PLANNER_PORT') | default('8082', true) | int }}"
-    hf_repo: "{{ lookup('env', 'LAB_LLAMA_PLANNER_MODEL') | default('Qwen/Qwen2.5-3B-Instruct-GGUF:Q4_K_M', true) }}"
-    alias: planner
-    ctx_size: "{{ lookup('env', 'LAB_LLAMA_PLANNER_CTX_SIZE') | default('16384', true) | int }}"
-    recommended_ctx_size: 16384
-    max_ctx_size: 24576
-    threads: "{{ lookup('env', 'LAB_LLAMA_PLANNER_THREADS') | default('4', true) | int }}"
-    parallel: "{{ lookup('env', 'LAB_LLAMA_PLANNER_PARALLEL') | default('2', true) | int }}"
-    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_PLANNER_GPU_LAYERS') | default('14', true) | int }}"
-    api_key: "{{ lookup('env', 'LAB_LLAMA_PLANNER_API_KEY') | default('local-planner', true) }}"
-    instance_lifecycle: "always-on"
-    priority: 2
-    model_size_mb: 1900
-    ram_estimation_override_mb: null
-    vram_reservation_mb: 800
-    memory_max_mb: 6144
-    gpu_fallback_policy: "reduce-layers"
-    max_queued_requests: 4
-    request_timeout_seconds: 180
-    overload_policy: "queue"
-    ram_suspend_threshold_percent: 90
-    vram_suspend_threshold_percent: 95
-    idle_timeout_seconds: 0
-    capabilities:
-      supports_tools: false
-      supports_json_mode: true
-      supports_reasoning: true
-      supports_embeddings: false
-    recommended_parallelism: 2
-    recommended_context: 16384
-    safe_max_context: 24576
-    embedding_mode: false
-  - service_name: llama-cpp-utility
-    host: "{{ llama_cpp_host }}"
-    port: "{{ lookup('env', 'LAB_LLAMA_UTILITY_PORT') | default('8083', true) | int }}"
-    hf_repo: "{{ lookup('env', 'LAB_LLAMA_UTILITY_MODEL') | default('Qwen/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M', true) }}"
-    alias: utility
-    ctx_size: "{{ lookup('env', 'LAB_LLAMA_UTILITY_CTX_SIZE') | default('8192', true) | int }}"
-    recommended_ctx_size: 8192
-    max_ctx_size: 16384
-    threads: "{{ lookup('env', 'LAB_LLAMA_UTILITY_THREADS') | default('3', true) | int }}"
-    parallel: "{{ lookup('env', 'LAB_LLAMA_UTILITY_PARALLEL') | default('1', true) | int }}"
-    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_UTILITY_GPU_LAYERS') | default('10', true) | int }}"
-    api_key: "{{ lookup('env', 'LAB_LLAMA_UTILITY_API_KEY') | default('local-utility', true) }}"
-    instance_lifecycle: "always-on"
-    priority: 3
-    model_size_mb: 1200
-    ram_estimation_override_mb: null
-    vram_reservation_mb: 500
-    memory_max_mb: 4096
-    gpu_fallback_policy: "reduce-layers"
-    max_queued_requests: 4
-    request_timeout_seconds: 180
-    overload_policy: "queue"
-    ram_suspend_threshold_percent: 90
-    vram_suspend_threshold_percent: 95
-    idle_timeout_seconds: 0
-    capabilities:
-      supports_tools: false
-      supports_json_mode: true
-      supports_reasoning: false
-      supports_embeddings: false
-    recommended_parallelism: 1
-    recommended_context: 8192
-    safe_max_context: 16384
-    embedding_mode: false
-  - service_name: llama-cpp-embeddings
-    host: "{{ llama_cpp_host }}"
-    port: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_PORT') | default('8084', true) | int }}"
-    hf_repo: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_MODEL') | default('nomic-ai/nomic-embed-text-v1.5-GGUF:Q8_0', true) }}"
-    alias: embeddings
-    ctx_size: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_CTX_SIZE') | default('8192', true) | int }}"
-    recommended_ctx_size: 8192
-    max_ctx_size: 8192
-    threads: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_THREADS') | default('2', true) | int }}"
-    parallel: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_PARALLEL') | default('2', true) | int }}"
-    n_gpu_layers: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_GPU_LAYERS') | default('99', true) | int }}"
-    api_key: "{{ lookup('env', 'LAB_LLAMA_EMBEDDINGS_API_KEY') | default('local-embeddings', true) }}"
-    instance_lifecycle: "always-on"
-    priority: 4
-    model_size_mb: 600
-    ram_estimation_override_mb: null
-    vram_reservation_mb: 512
-    memory_max_mb: 3072
-    gpu_fallback_policy: "reduce-layers"
-    max_queued_requests: 8
-    request_timeout_seconds: 180
-    overload_policy: "queue"
-    ram_suspend_threshold_percent: 90
-    vram_suspend_threshold_percent: 95
-    idle_timeout_seconds: 0
-    capabilities:
-      supports_tools: false
-      supports_json_mode: false
-      supports_reasoning: false
-      supports_embeddings: true
-    recommended_parallelism: 2
-    recommended_context: 8192
-    safe_max_context: 8192
-    embedding_mode: true
+
+# Explicit lab-owned weights to remove after the principal endpoint is healthy.
+# Never prune unrelated project volumes or llama.cpp vocabulary fixtures.
+llama_cpp_retired_model_paths:
+  - /srv/ai-lab/llama.cpp/models/Qwen_Qwen3.5-4B-Q4_K_M.gguf
+  - /srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-Coder-7B-Instruct-GGUF
+  - /srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-Coder-3B-Instruct-GGUF
+  - /srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-3B-Instruct-GGUF
+  - /srv/ai-lab/llama.cpp/cache/hub/models--Qwen--Qwen2.5-1.5B-Instruct-GGUF
+  - /srv/ai-lab/llama.cpp/cache/hub/models--nomic-ai--nomic-embed-text-v1.5-GGUF
+  - /srv/ai-lab/llama.cpp/cache/hub/models--ggml-org--Qwen3-8B-GGUF
+  - /srv/ai-lab/llama.cpp/cache/hub/models--unsloth--gemma-3-12b-it-GGUF
+  - /srv/ai-lab/llama.cpp/research/2026-10-11-cpu/LFM2.5-1.2B-Instruct-Q4_0.gguf
 
 # ─── llama.cpp Resource Budget & RAM Estimation ─────────────────────────────
 # RAM estimation formula:
@@ -255,37 +172,32 @@ llama_cpp_instances:
 #   budget < total <= budget*1.10 → warning (non-fatal)
 #   total > budget*1.10          → fail (fatal)
 
-llama_cpp_ram_budget_mb: "{{ lookup('env', 'LAB_LLAMA_RAM_BUDGET_MB') | default('22937', true) | int }}"              # ~22.4GiB = 28GiB total with 20% reserved
-llama_cpp_ram_budget_hard_limit_percent: "{{ lookup('env', 'LAB_LLAMA_RAM_HARD_LIMIT_PERCENT') | default('110', true) | int }}"  # Fail if exceeds budget by >10%
-llama_cpp_thread_budget: "{{ lookup('env', 'LAB_LLAMA_THREAD_BUDGET') | default('16', true) | int }}"                 # Matches the 16 logical CPUs on the host
-llama_cpp_vram_total_mb: "{{ lookup('env', 'LAB_LLAMA_VRAM_TOTAL_MB') | default('4096', true) | int }}"              # AMD iGPU VRAM
+# Resource envelope measured on stratecode: 31,738,464 kB RAM, 16 logical
+# CPUs, and 512 MiB local AMD iGPU VRAM. The floor is a reservation/protection
+# target; it does not force idle inference work to consume resources.
+llama_cpp_host_ram_mb: "{{ lookup('env', 'LAB_LLAMA_HOST_RAM_MB') | default('30994', true) | int }}"
+llama_cpp_host_threads: "{{ lookup('env', 'LAB_LLAMA_HOST_THREADS') | default('16', true) | int }}"
+# CPU-only principal profile needs no minimum GPU/RAM reservation.
+llama_cpp_resource_min_percent: 0
+llama_cpp_resource_max_percent: "{{ lookup('env', 'LAB_LLAMA_RESOURCE_MAX_PERCENT') | default('90', true) | int }}"
+llama_cpp_ram_min_mb: "{{ ((llama_cpp_host_ram_mb | int) * (llama_cpp_resource_min_percent | int) / 100) | int }}"
+llama_cpp_ram_max_mb: "{{ ((llama_cpp_host_ram_mb | int) * (llama_cpp_resource_max_percent | int) / 100) | int }}"
+llama_cpp_cpu_quota_percent: "{{ (llama_cpp_host_threads | int) * (llama_cpp_resource_max_percent | int) }}"
+llama_cpp_ram_budget_mb: "{{ lookup('env', 'LAB_LLAMA_RAM_BUDGET_MB') | default('27894', true) | int }}"
+llama_cpp_ram_budget_hard_limit_percent: "{{ lookup('env', 'LAB_LLAMA_RAM_HARD_LIMIT_PERCENT') | default('100', true) | int }}"
+llama_cpp_thread_budget: "{{ lookup('env', 'LAB_LLAMA_THREAD_BUDGET') | default('14', true) | int }}"
+llama_cpp_vram_total_mb: "{{ lookup('env', 'LAB_LLAMA_VRAM_TOTAL_MB') | default('512', true) | int }}"
 
 # Per-model-family safety margin factors
 llama_cpp_ram_estimation_factors:
-  qwen2.5:
-    safety_margin: 1.15                    # 15% safety margin
-    bytes_per_token_q4: 0.5
-    bytes_per_token_q8: 1.0
-  nomic:
-    safety_margin: 1.10                    # 10% safety margin
-    bytes_per_token_q8: 0.8
-  bge:
-    safety_margin: 1.15
-    bytes_per_token_q8: 1.0
-  qwen3-embedding:
-    safety_margin: 1.15
-    bytes_per_token_q8: 1.0
   default:
-    safety_margin: 1.20                    # 20% for unknown models
+    safety_margin: 1.20
     bytes_per_token_q4: 0.6
     bytes_per_token_q8: 1.1
 
 # GPU scheduling priority (highest VRAM priority first)
 llama_cpp_gpu_priority_order:
-  - llama-cpp-code
-  - llama-cpp-planner
-  - llama-cpp-utility
-  - llama-cpp-embeddings
+  - llama-cpp-main
 # Runtime resource monitoring thresholds
 # Used by the monitoring timer to detect resource pressure and trigger
 # suspension or degradation policies (Requirements 15.1, 15.2, 23.4)
@@ -339,10 +251,10 @@ aider_max_workspace_size: "{{ lookup('env', 'LAB_AIDER_MAX_WORKSPACE_SIZE') | de
 aider_edit_format: "{{ lookup('env', 'LAB_AIDER_EDIT_FORMAT') | default('whole', true) }}"
 aider_map_tokens: "{{ lookup('env', 'LAB_AIDER_MAP_TOKENS') | default('1024', true) | int }}"
 aider_max_chat_history_tokens: "{{ lookup('env', 'LAB_AIDER_MAX_CHAT_HISTORY_TOKENS') | default('2048', true) | int }}"
-aider_model_name: "{{ lookup('env', 'LAB_AIDER_MODEL_NAME') | default('coder', true) }}"
+aider_model_name: "{{ lookup('env', 'LAB_AIDER_MODEL_NAME') | default('main', true) }}"
 aider_default_mode: "{{ lookup('env', 'LAB_AIDER_DEFAULT_MODE') | default('autonomous', true) }}"
-aider_api_base: "http://127.0.0.1:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'coder') | map(attribute='port') | first) }}/v1"
-aider_api_key: "{{ llama_cpp_instances | selectattr('alias', 'equalto', 'coder') | map(attribute='api_key') | first }}"
+aider_api_base: "http://127.0.0.1:{{ (llama_cpp_instances | map(attribute='port') | first) }}/v1"
+aider_api_key: "{{ llama_cpp_instances | map(attribute='api_key') | first }}"
 aider_protected_branches:
   - main
   - master
@@ -353,21 +265,20 @@ aider_repositories: []
 open_webui_name: StrateCode Lab
 open_webui_port: "{{ lookup('env', 'LAB_OPEN_WEBUI_PORT') | default('3001', true) | int }}"
 open_webui_secret_key: "{{ lookup('env', 'LAB_OPEN_WEBUI_SECRET_KEY') | default('replace-with-random-hex', true) }}"
-open_webui_version: "{{ lookup('env', 'LAB_OPEN_WEBUI_VERSION') | default('v0.9.5', true) }}"
+open_webui_version: v0.12.0
 open_webui_enable_signup: "{{ lookup('env', 'LAB_OPEN_WEBUI_ENABLE_SIGNUP') | default('true', true) | bool }}"
-open_webui_request_timeout: "{{ lookup('env', 'LAB_OPEN_WEBUI_REQUEST_TIMEOUT') | default('300', true) | int }}"
+open_webui_request_timeout: "{{ [lookup('env', 'LAB_OPEN_WEBUI_REQUEST_TIMEOUT') | default('900', true) | int, 900] | max }}"
 open_webui_model_list_timeout: "{{ lookup('env', 'LAB_OPEN_WEBUI_MODEL_LIST_TIMEOUT') | default('30', true) | int }}"
 open_webui_public_cname_target: "{{ lookup('env', 'LAB_OPEN_WEBUI_PUBLIC_CNAME_TARGET') | default('', true) }}"
+llm_telemetry_enabled: true
+llm_telemetry_port: 8081
+llm_telemetry_model_label: LFM2.5-1.2B-Instruct-Q4_0
+open_webui_principal_model_name: LFM2.5 1.2B · Principal
+open_webui_default_model: main
 open_webui_connections:
-  - name: coder
-    url: "http://127.0.0.1:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'coder') | map(attribute='port') | first) }}/v1"
-    api_key: "{{ llama_cpp_instances | selectattr('alias', 'equalto', 'coder') | map(attribute='api_key') | first }}"
-  - name: planner
-    url: "http://127.0.0.1:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'planner') | map(attribute='port') | first) }}/v1"
-    api_key: "{{ llama_cpp_instances | selectattr('alias', 'equalto', 'planner') | map(attribute='api_key') | first }}"
-  - name: utility
-    url: "http://127.0.0.1:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'utility') | map(attribute='port') | first) }}/v1"
-    api_key: "{{ llama_cpp_instances | selectattr('alias', 'equalto', 'utility') | map(attribute='api_key') | first }}"
+  - name: main
+    url: "http://127.0.0.1:{{ llm_telemetry_port if llm_telemetry_enabled else (llama_cpp_instances | first).port }}/v1"
+    api_key: "{{ (llama_cpp_instances | first).api_key }}"
 
 # ─── Orchestrator Platform ──────────────────────────────────────────────────
 orchestrator_mode: "{{ lookup('env', 'LAB_ORCHESTRATOR_MODE') | default('all', true) }}"
@@ -448,10 +359,10 @@ codex_gateway_addr: "{{ lookup('env', 'LAB_CODEX_GATEWAY_ADDR') | default('127.0
 codex_gateway_public_base_url: "https://{{ codex_gateway_domain }}/v1"
 codex_gateway_client_max_body_size: "{{ lookup('env', 'LAB_CODEX_GATEWAY_CLIENT_MAX_BODY_SIZE') | default('8m', true) }}"
 codex_gateway_api_key: "{{ lookup('env', 'LAB_CODEX_GATEWAY_API_KEY') | default(vault_codex_gateway_api_key | default(lookup('password', lookup('env', 'HOME') ~ '/.config/stratecode-lab/codex_gateway_api_key length=48 chars=ascii_letters,digits'), true), true) }}"
-codex_gateway_upstream_base_url: "http://127.0.0.1:{{ (llama_cpp_instances | selectattr('alias', 'equalto', 'coder') | map(attribute='port') | first) }}/v1"
-codex_gateway_upstream_api_key: "{{ llama_cpp_instances | selectattr('alias', 'equalto', 'coder') | map(attribute='api_key') | first }}"
+codex_gateway_upstream_base_url: "http://127.0.0.1:{{ (llama_cpp_instances | map(attribute='port') | first) }}/v1"
+codex_gateway_upstream_api_key: "{{ llama_cpp_instances | map(attribute='api_key') | first }}"
 codex_gateway_model: "{{ lookup('env', 'LAB_CODEX_GATEWAY_MODEL') | default('qwen-local-code', true) }}"
-codex_gateway_upstream_model: "{{ lookup('env', 'LAB_CODEX_GATEWAY_UPSTREAM_MODEL') | default('coder', true) }}"
+codex_gateway_upstream_model: "{{ lookup('env', 'LAB_CODEX_GATEWAY_UPSTREAM_MODEL') | default('main', true) }}"
 codex_gateway_request_timeout_seconds: "{{ lookup('env', 'LAB_CODEX_GATEWAY_REQUEST_TIMEOUT_SECONDS') | default('180', true) | int }}"
 codex_gateway_max_body_bytes: "{{ lookup('env', 'LAB_CODEX_GATEWAY_MAX_BODY_BYTES') | default('2097152', true) | int }}"
 codex_gateway_rate_limit_rpm: "{{ lookup('env', 'LAB_CODEX_GATEWAY_RATE_LIMIT_RPM') | default('120', true) | int }}"

@@ -1,0 +1,13 @@
+---
+- name: Reconcile the repository-managed principal chat interface
+  hosts: all
+  become: true
+  vars_files:
+    - ../group_vars/vault.yml
+  vars:
+    open_webui_enabled: true
+    open_webui_public_cname_target: ""
+  roles:
+    - role: llm_telemetry
+      when: llm_telemetry_enabled
+    - open_webui

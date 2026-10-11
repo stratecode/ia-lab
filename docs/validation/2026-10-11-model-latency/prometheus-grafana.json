@@ -1,0 +1,303 @@
+{
+  "up{job=\"llm-telemetry\"}": {
+    "status": "success",
+    "data": {
+      "resultType": "vector",
+      "result": [
+        {
+          "metric": {
+            "__name__": "up",
+            "instance": "127.0.0.1:8081",
+            "job": "llm-telemetry"
+          },
+          "value": [
+            1791741161.608,
+            "1"
+          ]
+        }
+      ]
+    }
+  },
+  "lab_llm_requests_total": {
+    "status": "success",
+    "data": {
+      "resultType": "vector",
+      "result": [
+        {
+          "metric": {
+            "__name__": "lab_llm_requests_total",
+            "endpoint": "chat",
+            "instance": "127.0.0.1:8081",
+            "job": "llm-telemetry",
+            "model": "Qwen3.5-4B-Q4_K_M",
+            "outcome": "cancelled",
+            "status": "499"
+          },
+          "value": [
+            1791741161.609,
+            "2"
+          ]
+        },
+        {
+          "metric": {
+            "__name__": "lab_llm_requests_total",
+            "endpoint": "chat",
+            "instance": "127.0.0.1:8081",
+            "job": "llm-telemetry",
+            "model": "Qwen3.5-4B-Q4_K_M",
+            "outcome": "ok",
+            "status": "200"
+          },
+          "value": [
+            1791741161.609,
+            "2"
+          ]
+        }
+      ]
+    }
+  },
+  "lab_llm_ttft_seconds_count": {
+    "status": "success",
+    "data": {
+      "resultType": "vector",
+      "result": [
+        {
+          "metric": {
+            "__name__": "lab_llm_ttft_seconds_count",
+            "endpoint": "chat",
+            "instance": "127.0.0.1:8081",
+            "job": "llm-telemetry",
+            "model": "Qwen3.5-4B-Q4_K_M"
+          },
+          "value": [
+            1791741161.609,
+            "2"
+          ]
+        }
+      ]
+    }
+  },
+  "lab_llm_request_duration_seconds_count": {
+    "status": "success",
+    "data": {
+      "resultType": "vector",
+      "result": [
+        {
+          "metric": {
+            "__name__": "lab_llm_request_duration_seconds_count",
+            "endpoint": "chat",
+            "instance": "127.0.0.1:8081",
+            "job": "llm-telemetry",
+            "model": "Qwen3.5-4B-Q4_K_M",
+            "outcome": "cancelled"
+          },
+          "value": [
+            1791741161.61,
+            "2"
+          ]
+        },
+        {
+          "metric": {
+            "__name__": "lab_llm_request_duration_seconds_count",
+            "endpoint": "chat",
+            "instance": "127.0.0.1:8081",
+            "job": "llm-telemetry",
+            "model": "Qwen3.5-4B-Q4_K_M",
+            "outcome": "ok"
+          },
+          "value": [
+            1791741161.61,
+            "2"
+          ]
+        }
+      ]
+    }
+  },
+  "grafana": {
+    "uid": "lab-llm-latency",
+    "title": "Lab · LLM: llamadas y latencia",
+    "panels": 12,
+    "url": "/d/lab-llm-latency"
+  },
+  "panel_queries": [
+    {
+      "title": "Llamadas de inferencia / minuto",
+      "result": [
+        {
+          "metric": {
+            "model": "Qwen3.5-4B-Q4_K_M"
+          },
+          "value": [
+            1791741161.658,
+            "0.41909508417508423"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Llamadas fallidas / minuto",
+      "result": [
+        {
+          "metric": {
+            "model": "Qwen3.5-4B-Q4_K_M"
+          },
+          "value": [
+            1791741161.659,
+            "0.2118533333333333"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Primer token p50 (solo streaming)",
+      "result": [
+        {
+          "metric": {
+            "model": "Qwen3.5-4B-Q4_K_M"
+          },
+          "value": [
+            1791741161.663,
+            "210"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Primer token p95 (solo streaming)",
+      "result": [
+        {
+          "metric": {
+            "model": "Qwen3.5-4B-Q4_K_M"
+          },
+          "value": [
+            1791741161.664,
+            "291"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Duración total p50 (llamadas correctas)",
+      "result": [
+        {
+          "metric": {
+            "model": "Qwen3.5-4B-Q4_K_M"
+          },
+          "value": [
+            1791741161.666,
+            "210"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Duración total p95 (llamadas correctas)",
+      "result": [
+        {
+          "metric": {
+            "model": "Qwen3.5-4B-Q4_K_M"
+          },
+          "value": [
+            1791741161.667,
+            "291"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Generación tokens/s (tiempo activo del modelo)",
+      "result": [
+        {
+          "metric": {},
+          "value": [
+            1791741161.668,
+            "8.259171521864396"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Carga del contexto tokens/s (tiempo activo del modelo)",
+      "result": [
+        {
+          "metric": {},
+          "value": [
+            1791741161.669,
+            "33.508818823821095"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Llamadas en curso",
+      "result": [
+        {
+          "metric": {
+            "__name__": "lab_llm_requests_in_flight",
+            "instance": "127.0.0.1:8081",
+            "job": "llm-telemetry"
+          },
+          "value": [
+            1791741161.67,
+            "1"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Cola del modelo",
+      "result": [
+        {
+          "metric": {
+            "__name__": "llamacpp:requests_deferred",
+            "instance": "127.0.0.1:8080",
+            "job": "llama-cpp-main"
+          },
+          "value": [
+            1791741161.671,
+            "0"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Llamadas completadas desde arranque",
+      "result": [
+        {
+          "metric": {
+            "model": "Qwen3.5-4B-Q4_K_M",
+            "outcome": "cancelled"
+          },
+          "value": [
+            1791741161.672,
+            "2"
+          ]
+        },
+        {
+          "metric": {
+            "model": "Qwen3.5-4B-Q4_K_M",
+            "outcome": "ok"
+          },
+          "value": [
+            1791741161.672,
+            "2"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Mediciones de primer token desde arranque",
+      "result": [
+        {
+          "metric": {
+            "model": "Qwen3.5-4B-Q4_K_M"
+          },
+          "value": [
+            1791741161.673,
+            "2"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "post_restart_health_ports": [
+    8080,
+    3080,
+    3081
+  ],
+  "production_history_unchanged": {
+    "users": 1,
+    "chats": 1,
+    "chat_hash": "db8615a33d5615bdef09c578ac4a8ab6a24feb1e3d7818cd210c78563c77442d",
+    "auth": "True"
+  },
+  "isolated_probe_history": {
+    "auth": "False",
+    "completed_answers": [
+      "La clave era ALAMEDA-73 y la reunión era el martes a las 10."
+    ]
+  }
+}
