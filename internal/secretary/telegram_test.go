@@ -13,6 +13,262 @@ import (
 	"time"
 )
 
+func TestVoiceUpdateUnmarshalsTelegramVoice(t *testing.T) {
+	var update Update
+	if err := json.Unmarshal([]byte(`{"update_id":4,"message":{"message_id":3,"from":{"id":7},"chat":{"id":7,"type":"private"},"voice":{"file_id":"file-1","duration":8,"file_size":1234}}}`), &update); err != nil {
+		t.Fatal(err)
+	}
+	if update.Message == nil || update.Message.Voice == nil || update.Message.Voice.FileID != "file-1" || update.Message.Voice.Duration != 8 || update.Message.Voice.FileSize != 1234 {
+		t.Fatalf("voice update not decoded: %+v", update)
+	}
+}
+
+type voiceTestSpeech struct {
+	transcript string
+	wav        []byte
+	transErr   error
+	synthErr   error
+	events     *[]string
+	transCalls int
+	synthCalls int
+}
+
+func (s *voiceTestSpeech) Transcribe(context.Context, []byte) (string, error) {
+	s.transCalls++
+	if s.transErr != nil {
+		return "", s.transErr
+	}
+	return s.transcript, nil
+}
+
+func (s *voiceTestSpeech) Synthesize(context.Context, string) ([]byte, error) {
+	s.synthCalls++
+	if s.events != nil {
+		*s.events = append(*s.events, "synthesize")
+	}
+	if s.synthErr != nil {
+		return nil, s.synthErr
+	}
+	return s.wav, nil
+}
+
+type voiceTestAudio struct {
+	toWAVErr   error
+	toOGGErr   error
+	toWAVCalls int
+	toOGGCalls int
+}
+
+func (a *voiceTestAudio) ToWAV(context.Context, []byte) ([]byte, error) {
+	a.toWAVCalls++
+	if a.toWAVErr != nil {
+		return nil, a.toWAVErr
+	}
+	return []byte("wav-input"), nil
+}
+
+func (a *voiceTestAudio) ToOGGOpus(context.Context, []byte) ([]byte, error) {
+	a.toOGGCalls++
+	if a.toOGGErr != nil {
+		return nil, a.toOGGErr
+	}
+	return []byte("ogg-reply"), nil
+}
+
+type voiceTestState struct {
+	events       []string
+	modelCalls   int
+	getFileCalls int
+	downloads    int
+	textReplies  []string
+	voiceReplies int
+}
+
+type voiceTestConfig struct {
+	voiceEnabled bool
+	fileBytes    []byte
+	fileSize     int64
+	duration     int
+	apiFailure   string
+	transErr     error
+	synthErr     error
+	convertErr   error
+}
+
+func newVoiceTestBot(t *testing.T, cfg voiceTestConfig) (*Bot, *voiceTestSpeech, *voiceTestAudio, *voiceTestState) {
+	t.Helper()
+	state := &voiceTestState{}
+	speech := &voiceTestSpeech{transcript: "¿Qué tengo pendiente hoy?", wav: []byte("RIFF\x00\x00\x00\x00WAVErespuesta"), transErr: cfg.transErr, synthErr: cfg.synthErr, events: &state.events}
+	audio := &voiceTestAudio{}
+	if cfg.convertErr != nil {
+		audio.toWAVErr = cfg.convertErr
+	}
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		state.modelCalls++
+		var payload struct {
+			Messages []struct {
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode model request: %v", err)
+		}
+		if len(payload.Messages) == 0 || payload.Messages[len(payload.Messages)-1].Content != speech.transcript {
+			t.Errorf("transcript was not passed to model: %+v", payload.Messages)
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"Respuesta de prueba"}}]}`)
+	}))
+	t.Cleanup(model.Close)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if cfg.apiFailure != "" && strings.HasSuffix(r.URL.Path, "/"+cfg.apiFailure) {
+			http.Error(w, "private api detail", http.StatusInternalServerError)
+			return
+		}
+		switch r.Method + " " + strings.TrimPrefix(r.URL.Path, "/botsecret-token/") {
+		case "POST getFile":
+			state.getFileCalls++
+			state.events = append(state.events, "getFile")
+			io.WriteString(w, `{"ok":true,"result":{"file_path":"voice/file_1.oga"}}`)
+		case "GET /file/botsecret-token/voice/file_1.oga":
+			state.downloads++
+			state.events = append(state.events, "download")
+			w.Write(cfg.fileBytes)
+		case "POST sendMessage":
+			var body struct {
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode sendMessage: %v", err)
+			}
+			state.textReplies = append(state.textReplies, body.Text)
+			state.events = append(state.events, "sendMessage")
+			io.WriteString(w, `{"ok":true,"result":{}}`)
+		case "POST sendVoice":
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Errorf("parse sendVoice multipart: %v", err)
+			}
+			file, header, err := r.FormFile("voice")
+			if err != nil {
+				t.Errorf("sendVoice file: %v", err)
+			} else {
+				data, readErr := io.ReadAll(file)
+				file.Close()
+				if readErr != nil || string(data) != "ogg-reply" || header.Filename != "voice.ogg" {
+					t.Errorf("unexpected voice payload %q, filename %q, err %v", data, header.Filename, readErr)
+				}
+			}
+			state.voiceReplies++
+			state.events = append(state.events, "sendVoice")
+			io.WriteString(w, `{"ok":true,"result":{}}`)
+		default:
+			t.Errorf("unexpected Telegram request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(api.Close)
+	service := New(model.URL, "model-key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	bot := &Bot{Base: api.URL, Token: "secret-token", Client: api.Client(), Service: service, Speech: speech, Audio: audio, VoiceEnabled: cfg.voiceEnabled}
+	return bot, speech, audio, state
+}
+
+func TestUnauthorizedVoiceDoesNotDownloadFile(t *testing.T) {
+	bot, speech, _, state := newVoiceTestBot(t, voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg"), fileSize: 3, duration: 3})
+	message := &Message{From: User{ID: 9}, Chat: Chat{ID: 9, Type: "private"}, Voice: &Voice{FileID: "unauthorized", Duration: 3, FileSize: 3}}
+	if err := bot.processVoice(context.Background(), message); err == nil {
+		t.Fatal("unauthorized message was accepted")
+	}
+	if state.getFileCalls != 0 || state.downloads != 0 || speech.transCalls != 0 || state.modelCalls != 0 {
+		t.Fatalf("unauthorized voice triggered work: state=%+v transcript calls=%d", state, speech.transCalls)
+	}
+}
+
+func TestVoiceDisabledDoesNotDownloadOrCallInference(t *testing.T) {
+	bot, speech, _, state := newVoiceTestBot(t, voiceTestConfig{fileBytes: []byte("ogg"), fileSize: 3, duration: 3})
+	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: 3, FileSize: 3}}
+	if err := bot.processVoice(context.Background(), message); err != nil {
+		t.Fatal(err)
+	}
+	if state.getFileCalls != 0 || state.downloads != 0 || speech.transCalls != 0 || state.modelCalls != 0 || len(state.textReplies) != 1 || !strings.Contains(state.textReplies[0], "desactivada") {
+		t.Fatalf("disabled voice did not fail closed with a notice: state=%+v speech=%d", state, speech.transCalls)
+	}
+}
+
+func TestVoiceRejectsOversizedAndOverDurationUpdates(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  voiceTestConfig
+	}{
+		{name: "oversized metadata", cfg: voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg"), fileSize: 20*1024*1024 + 1, duration: 3}},
+		{name: "oversized downloaded body", cfg: voiceTestConfig{voiceEnabled: true, fileBytes: make([]byte, 20*1024*1024+1), fileSize: 0, duration: 3}},
+		{name: "over duration", cfg: voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg"), fileSize: 3, duration: 121}},
+		{name: "duration integer overflow", cfg: voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg"), fileSize: 3, duration: int(^uint(0) >> 1)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bot, speech, _, state := newVoiceTestBot(t, tt.cfg)
+			message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: tt.cfg.duration, FileSize: tt.cfg.fileSize}}
+			if err := bot.processVoice(context.Background(), message); err != nil {
+				t.Fatal(err)
+			}
+			if speech.transCalls != 0 || state.modelCalls != 0 || state.voiceReplies != 0 {
+				t.Fatalf("rejected voice triggered inference: state=%+v speech calls=%d", state, speech.transCalls)
+			}
+			if len(state.textReplies) != 1 {
+				t.Fatalf("expected a rejection notice: %+v", state)
+			}
+		})
+	}
+}
+
+func TestVoiceTranscribesRepliesTextThenVoice(t *testing.T) {
+	bot, speech, audio, state := newVoiceTestBot(t, voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg-input"), fileSize: 9, duration: 4})
+	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: 4, FileSize: 9}}
+	if err := bot.processVoice(context.Background(), message); err != nil {
+		t.Fatal(err)
+	}
+	wantEvents := []string{"getFile", "download", "sendMessage", "synthesize", "sendVoice"}
+	if strings.Join(state.events, ",") != strings.Join(wantEvents, ",") {
+		t.Fatalf("flow events = %v, want %v", state.events, wantEvents)
+	}
+	if speech.transCalls != 1 || speech.synthCalls != 1 || audio.toWAVCalls != 1 || audio.toOGGCalls != 1 || state.modelCalls != 1 || state.voiceReplies != 1 {
+		t.Fatalf("unexpected flow counts: state=%+v speech=%+v audio=%+v", state, speech, audio)
+	}
+	if len(state.textReplies) != 1 || state.textReplies[0] != "Respuesta de prueba" {
+		t.Fatalf("text answer was not delivered first: %+v", state.textReplies)
+	}
+}
+
+func TestVoiceSTTFailureDoesNotCallModel(t *testing.T) {
+	bot, speech, _, state := newVoiceTestBot(t, voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg"), fileSize: 3, duration: 3, transErr: io.ErrUnexpectedEOF})
+	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: 3, FileSize: 3}}
+	if err := bot.processVoice(context.Background(), message); err != nil {
+		t.Fatal(err)
+	}
+	if state.modelCalls != 0 || speech.synthCalls != 0 || len(state.textReplies) != 1 || !strings.Contains(strings.ToLower(state.textReplies[0]), "no he podido entender") {
+		t.Fatalf("failed transcription did not stop cleanly: state=%+v speech=%+v", state, speech)
+	}
+}
+
+func TestVoiceTTSFailureKeepsTextReply(t *testing.T) {
+	bot, speech, _, state := newVoiceTestBot(t, voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg"), fileSize: 3, duration: 3, synthErr: io.ErrUnexpectedEOF})
+	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: 3, FileSize: 3}}
+	if err := bot.processVoice(context.Background(), message); err == nil {
+		t.Fatal("expected a TTS failure after the text reply was sent")
+	}
+	if len(state.textReplies) != 1 || state.textReplies[0] != "Respuesta de prueba" || speech.synthCalls != 1 || state.voiceReplies != 0 {
+		t.Fatalf("TTS failure suppressed text or sent a voice: state=%+v speech=%+v", state, speech)
+	}
+}
+
+func TestVoiceTransportErrorsNeverContainBotToken(t *testing.T) {
+	bot, _, _, _ := newVoiceTestBot(t, voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg"), fileSize: 3, duration: 3, apiFailure: "getFile"})
+	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: 3, FileSize: 3}}
+	err := bot.processVoice(context.Background(), message)
+	if err == nil || strings.Contains(err.Error(), "secret-token") {
+		t.Fatalf("unsafe Telegram voice error: %v", err)
+	}
+}
+
 func TestPollingPersistsOffsetRejectsOtherUsersAndDeliversReply(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()

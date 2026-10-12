@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -21,11 +24,17 @@ type Chat struct {
 	ID   int64  `json:"id"`
 	Type string `json:"type"`
 }
+type Voice struct {
+	FileID   string `json:"file_id"`
+	Duration int    `json:"duration"`
+	FileSize int64  `json:"file_size"`
+}
 type Message struct {
-	ID   int64  `json:"message_id"`
-	From User   `json:"from"`
-	Chat Chat   `json:"chat"`
-	Text string `json:"text"`
+	ID    int64  `json:"message_id"`
+	From  User   `json:"from"`
+	Chat  Chat   `json:"chat"`
+	Text  string `json:"text"`
+	Voice *Voice `json:"voice,omitempty"`
 }
 type Update struct {
 	ID      int64    `json:"update_id"`
@@ -37,11 +46,22 @@ func (s *Service) Permitted(m Message) bool {
 }
 
 type Bot struct {
-	Base, Token string
-	Client      *http.Client
-	Service     *Service
-	OnEvent     func(string)
+	Base, Token      string
+	Client           *http.Client
+	Service          *Service
+	OnEvent          func(string)
+	Speech           SpeechProcessor
+	Audio            AudioConverter
+	VoiceEnabled     bool
+	VoiceMaxDuration time.Duration
 }
+
+const (
+	maxTelegramFileBytes  = 20 * 1024 * 1024
+	maxTelegramVoiceBytes = 49_000_000
+)
+
+var telegramFilePathSegment = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
 func (b *Bot) call(ctx context.Context, method string, payload any, out any) error {
 	data, _ := json.Marshal(payload)
@@ -140,6 +160,12 @@ func (b *Bot) Run(ctx context.Context) error {
 				continue
 			}
 			m := update.Message
+			if m.Voice != nil {
+				if err := b.processVoice(ctx, m); err != nil {
+					b.event("telegram_voice_error")
+				}
+				continue
+			}
 			if strings.TrimSpace(m.Text) == "" {
 				if err = b.send(ctx, m.Chat.ID, "Por ahora recibo texto. La voz se incorporará después."); err != nil {
 					b.event("telegram_send_error")
@@ -158,6 +184,154 @@ func (b *Bot) Run(ctx context.Context) error {
 				b.event("telegram_reply_sent")
 			}
 		}
+	}
+	return nil
+}
+
+func (b *Bot) processVoice(ctx context.Context, message *Message) error {
+	if message == nil || message.Voice == nil || !b.Service.Permitted(*message) {
+		return errors.New("unauthorized voice message")
+	}
+	if !b.VoiceEnabled {
+		return b.send(ctx, message.Chat.ID, "La recepción de notas de voz está desactivada.")
+	}
+	if b.Speech == nil || b.Audio == nil {
+		return b.send(ctx, message.Chat.ID, "La voz no está disponible ahora mismo; puedes escribirme por texto.")
+	}
+	voice := message.Voice
+	maxDuration := b.VoiceMaxDuration
+	if maxDuration <= 0 {
+		maxDuration = 120 * time.Second
+	}
+	if voice.FileID == "" || voice.Duration <= 0 || time.Duration(voice.Duration) > maxDuration/time.Second || voice.FileSize < 0 || voice.FileSize > maxTelegramFileBytes {
+		return b.send(ctx, message.Chat.ID, "La nota de voz supera el límite permitido o no tiene metadatos válidos.")
+	}
+	var file struct {
+		FilePath string `json:"file_path"`
+	}
+	if err := b.call(ctx, "getFile", map[string]any{"file_id": voice.FileID}, &file); err != nil {
+		return errors.New("telegram voice download failed")
+	}
+	fileURL, err := telegramFileURL(b.Base, b.Token, file.FilePath)
+	if err != nil {
+		return errors.New("telegram voice download failed")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		return errors.New("telegram voice download failed")
+	}
+	client := *b.Client
+	baseURL, _ := url.Parse(b.Base)
+	client.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if len(via) >= 5 || request.URL.Scheme != baseURL.Scheme || !strings.EqualFold(request.URL.Host, baseURL.Host) {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return errors.New("telegram voice download failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.ContentLength > maxTelegramFileBytes {
+		return errors.New("telegram voice download failed")
+	}
+	ogg, err := io.ReadAll(io.LimitReader(response.Body, maxTelegramFileBytes+1))
+	if len(ogg) > maxTelegramFileBytes {
+		return b.send(ctx, message.Chat.ID, "La nota de voz supera el límite permitido de 20 MB.")
+	}
+	if err != nil || len(ogg) == 0 {
+		return errors.New("telegram voice download failed")
+	}
+	wav, err := b.Audio.ToWAV(ctx, ogg)
+	if err != nil {
+		_ = b.send(ctx, message.Chat.ID, "No he podido entender la nota de voz. ¿Puedes enviar otra con más claridad?")
+		return nil
+	}
+	transcript, err := b.Speech.Transcribe(ctx, wav)
+	if err != nil || strings.TrimSpace(transcript) == "" {
+		if sendErr := b.send(ctx, message.Chat.ID, "No he podido entender la nota de voz. ¿Puedes enviar otra con más claridad?"); sendErr != nil {
+			return errors.New("telegram voice reply failed")
+		}
+		return nil
+	}
+	answer, err := b.Service.Reply(ctx, message.From.ID, transcript)
+	if err != nil {
+		answer = "No he podido completar la respuesta. Reenvía tu consulta por texto; no he ejecutado acciones externas."
+	}
+	if err := b.send(ctx, message.Chat.ID, answer); err != nil {
+		return errors.New("telegram text reply failed")
+	}
+	wavReply, err := b.Speech.Synthesize(ctx, answer)
+	if err != nil {
+		return errors.New("telegram speech synthesis failed")
+	}
+	oggReply, err := b.Audio.ToOGGOpus(ctx, wavReply)
+	if err != nil {
+		return errors.New("telegram audio conversion failed")
+	}
+	if err := b.sendVoice(ctx, message.Chat.ID, oggReply); err != nil {
+		return err
+	}
+	return nil
+}
+
+func telegramFileURL(base, token, filePath string) (string, error) {
+	parts := strings.Split(filePath, "/")
+	if filePath == "" || strings.HasPrefix(filePath, "/") {
+		return "", errors.New("invalid Telegram file path")
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." || !telegramFilePathSegment.MatchString(part) {
+			return "", errors.New("invalid Telegram file path")
+		}
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || token == "" {
+		return "", errors.New("invalid Telegram file endpoint")
+	}
+	components := []string{"file", "bot" + token}
+	components = append(components, parts...)
+	return u.JoinPath(components...).String(), nil
+}
+
+func (b *Bot) sendVoice(ctx context.Context, chat int64, audio []byte) error {
+	if len(audio) == 0 || len(audio) > maxTelegramVoiceBytes {
+		return errors.New("telegram voice upload failed")
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("chat_id", fmt.Sprint(chat)); err != nil {
+		return errors.New("telegram voice upload failed")
+	}
+	file, err := writer.CreateFormFile("voice", "voice.ogg")
+	if err != nil {
+		return errors.New("telegram voice upload failed")
+	}
+	if _, err := file.Write(audio); err != nil {
+		return errors.New("telegram voice upload failed")
+	}
+	if err := writer.Close(); err != nil {
+		return errors.New("telegram voice upload failed")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.Base+"/bot"+b.Token+"/sendVoice", &body)
+	if err != nil {
+		return errors.New("telegram voice upload failed")
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := b.Client.Do(req)
+	if err != nil {
+		return errors.New("telegram voice upload failed")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return errors.New("telegram voice upload failed")
+	}
+	var envelope struct {
+		OK bool `json:"ok"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&envelope) != nil || !envelope.OK {
+		return errors.New("telegram voice upload failed")
 	}
 	return nil
 }
