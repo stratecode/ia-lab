@@ -1,0 +1,33 @@
+---
+lab_speech_root: /srv/ai-lab/lab-speech
+lab_speech_model_dir: "{{ lab_speech_root }}/models"
+lab_speech_whisper_source: /opt/lab-speech/whisper.cpp
+lab_speech_whisper_build: "{{ lab_speech_whisper_source }}/build"
+lab_speech_piper_venv: /opt/lab-speech/piper-venv
+
+lab_whisper_version: v1.9.5
+lab_whisper_commit: d1be6fde11ac6e0407606b4e42fe72d34add8037
+lab_whisper_model_name: ggml-small-q5_1.bin
+lab_whisper_model_url: https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small-q5_1.bin
+lab_whisper_model_sha256: ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb
+lab_whisper_model_size_bytes: 190085487
+lab_whisper_host: 127.0.0.1
+lab_whisper_port: 8083
+lab_whisper_threads: 4
+lab_whisper_build_jobs: 4
+lab_whisper_memory_max: 2G
+lab_whisper_cpu_quota: 400%
+lab_whisper_user: lab-whisper
+
+lab_piper_package: "piper-tts[http]==1.8.0"
+lab_piper_voice_name: es_ES-sharvard-medium
+lab_piper_voice_url: https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_ES/sharvard/medium/es_ES-sharvard-medium.onnx
+lab_piper_voice_sha256: 40febfb1679c69a4505ff311dc136e121e3419a13a290ef264fdf43ddedd0fb1
+lab_piper_config_url: https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_ES/sharvard/medium/es_ES-sharvard-medium.onnx.json
+lab_piper_config_sha256: 7438c9b699c72b0c3388dae1b68d3f364dc66a2150fe554a1c11f03372957b2c
+lab_piper_host: 127.0.0.1
+lab_piper_port: 8084
+lab_piper_memory_max: 512M
+lab_piper_cpu_quota: 200%
+lab_piper_user: lab-piper
+lab_piper_state_dir: /var/lib/lab-piper

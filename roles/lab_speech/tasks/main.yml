@@ -1,0 +1,294 @@
+---
+- name: Inspect existing speech service units for rollback
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ item }}.service"
+  loop:
+    - lab-whisper
+    - lab-piper
+  register: lab_speech_unit_files
+  when: not (lab_secretary_voice_enabled | bool)
+
+- name: Stop and disable speech services when voice is disabled
+  ansible.builtin.systemd:
+    name: "{{ item.item }}"
+    daemon_reload: true
+    enabled: false
+    state: stopped
+  loop: "{{ lab_speech_unit_files.results | default([]) }}"
+  when:
+    - not (lab_secretary_voice_enabled | bool)
+    - item.stat.exists
+
+- name: Install local speech runtime dependencies
+  ansible.builtin.apt:
+    name:
+      - build-essential
+      - ca-certificates
+      - cmake
+      - ffmpeg
+      - git
+      - pkg-config
+      - python3
+      - python3-pip
+      - python3-venv
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: lab_secretary_voice_enabled | bool
+
+- name: Create dedicated speech users
+  ansible.builtin.user:
+    name: "{{ item }}"
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+    state: present
+  loop:
+    - "{{ lab_whisper_user }}"
+    - "{{ lab_piper_user }}"
+  when: lab_secretary_voice_enabled | bool
+
+- name: Create speech directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.group | default('root') }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /opt/lab-speech, mode: "0755" }
+    - { path: "{{ lab_speech_root }}", mode: "0755" }
+    - { path: "{{ lab_speech_model_dir }}", mode: "0755" }
+    - { path: "{{ lab_piper_state_dir }}", owner: "{{ lab_piper_user }}", group: "{{ lab_piper_user }}", mode: "0750" }
+  when: lab_secretary_voice_enabled | bool
+
+- name: Check out pinned whisper.cpp source
+  ansible.builtin.git:
+    repo: https://github.com/ggml-org/whisper.cpp.git
+    dest: "{{ lab_speech_whisper_source }}"
+    version: "{{ lab_whisper_commit }}"
+    update: true
+    force: false
+  register: lab_whisper_checkout
+  when: lab_secretary_voice_enabled | bool
+
+- name: Download pinned Whisper model
+  ansible.builtin.get_url:
+    url: "{{ lab_whisper_model_url }}"
+    dest: "{{ lab_speech_model_dir }}/{{ lab_whisper_model_name }}"
+    checksum: "sha256:{{ lab_whisper_model_sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+    timeout: 600
+  notify: Restart lab whisper
+  when: lab_secretary_voice_enabled | bool
+
+- name: Download pinned Piper voice model
+  ansible.builtin.get_url:
+    url: "{{ lab_piper_voice_url }}"
+    dest: "{{ lab_speech_model_dir }}/{{ lab_piper_voice_name }}.onnx"
+    checksum: "sha256:{{ lab_piper_voice_sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+    timeout: 600
+  notify: Restart lab piper
+  when: lab_secretary_voice_enabled | bool
+
+- name: Download pinned Piper voice configuration
+  ansible.builtin.get_url:
+    url: "{{ lab_piper_config_url }}"
+    dest: "{{ lab_speech_model_dir }}/{{ lab_piper_voice_name }}.onnx.json"
+    checksum: "sha256:{{ lab_piper_config_sha256 }}"
+    owner: root
+    group: root
+    mode: "0644"
+    timeout: 120
+  notify: Restart lab piper
+  when: lab_secretary_voice_enabled | bool
+
+- name: Check whether Whisper server binary already exists
+  ansible.builtin.stat:
+    path: "{{ lab_speech_whisper_build }}/bin/whisper-server"
+  register: lab_whisper_binary
+  when: lab_secretary_voice_enabled | bool
+
+- name: Configure CPU-only Whisper server build
+  ansible.builtin.command:
+    argv:
+      - cmake
+      - -S
+      - "{{ lab_speech_whisper_source }}"
+      - -B
+      - "{{ lab_speech_whisper_build }}"
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DWHISPER_BUILD_IS_DEV=OFF
+      - -DWHISPER_BUILD_TESTS=OFF
+      - -DWHISPER_BUILD_EXAMPLES=ON
+      - -DWHISPER_BUILD_SERVER=ON
+      - -DGGML_CUDA=OFF
+      - -DGGML_METAL=OFF
+  when:
+    - lab_secretary_voice_enabled | bool
+    - lab_whisper_checkout.changed or not lab_whisper_binary.stat.exists
+
+- name: Build only the Whisper server target
+  ansible.builtin.command:
+    argv:
+      - cmake
+      - --build
+      - "{{ lab_speech_whisper_build }}"
+      - --target
+      - whisper-server
+      - --parallel
+      - "{{ lab_whisper_build_jobs | string }}"
+  when:
+    - lab_secretary_voice_enabled | bool
+    - lab_whisper_checkout.changed or not lab_whisper_binary.stat.exists
+  notify: Restart lab whisper
+
+- name: Create Piper virtual environment
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -m
+      - venv
+      - "{{ lab_speech_piper_venv }}"
+    creates: "{{ lab_speech_piper_venv }}/bin/python"
+  when: lab_secretary_voice_enabled | bool
+
+- name: Install pinned Piper HTTP package
+  ansible.builtin.pip:
+    name: "{{ lab_piper_package }}"
+    virtualenv: "{{ lab_speech_piper_venv }}"
+    state: present
+  notify: Restart lab piper
+  when: lab_secretary_voice_enabled | bool
+
+- name: Install Whisper systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/lab-whisper.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Local CPU Whisper speech recognition service
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User={{ lab_whisper_user }}
+      Group={{ lab_whisper_user }}
+      ExecStart={{ lab_speech_whisper_build }}/bin/whisper-server --host {{ lab_whisper_host }} --port {{ lab_whisper_port }} --model {{ lab_speech_model_dir }}/{{ lab_whisper_model_name }} --threads {{ lab_whisper_threads }} --no-gpu --tmp-dir /tmp
+      Restart=on-failure
+      RestartSec=5
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      ProtectHome=yes
+      PrivateTmp=yes
+      PrivateDevices=yes
+      ProtectKernelTunables=yes
+      ProtectKernelModules=yes
+      ProtectControlGroups=yes
+      LockPersonality=yes
+      RestrictRealtime=yes
+      RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+      ReadOnlyPaths={{ lab_speech_whisper_build }} {{ lab_speech_model_dir }}
+      MemoryMax={{ lab_whisper_memory_max }}
+      CPUQuota={{ lab_whisper_cpu_quota }}
+      TasksMax=64
+      UMask=0077
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart lab whisper
+  when: lab_secretary_voice_enabled | bool
+
+- name: Install Piper systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/lab-piper.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Local Spanish Piper speech synthesis service
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=simple
+      User={{ lab_piper_user }}
+      Group={{ lab_piper_user }}
+      StateDirectory=lab-piper
+      StateDirectoryMode=0750
+      Environment=HOME={{ lab_piper_state_dir }}
+      ExecStart={{ lab_speech_piper_venv }}/bin/python -m piper.http_server --host {{ lab_piper_host }} --port {{ lab_piper_port }} --data-dir {{ lab_speech_model_dir }} -m {{ lab_piper_voice_name }}
+      Restart=on-failure
+      RestartSec=5
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      ProtectHome=yes
+      PrivateTmp=yes
+      PrivateDevices=yes
+      ProtectKernelTunables=yes
+      ProtectKernelModules=yes
+      ProtectControlGroups=yes
+      LockPersonality=yes
+      RestrictRealtime=yes
+      RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+      ReadOnlyPaths={{ lab_speech_piper_venv }} {{ lab_speech_model_dir }}
+      MemoryMax={{ lab_piper_memory_max }}
+      CPUQuota={{ lab_piper_cpu_quota }}
+      TasksMax=64
+      UMask=0077
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart lab piper
+  when: lab_secretary_voice_enabled | bool
+
+- name: Apply speech service changes
+  ansible.builtin.meta: flush_handlers
+  when: lab_secretary_voice_enabled | bool
+
+- name: Enable Whisper service
+  ansible.builtin.systemd:
+    name: lab-whisper
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: lab_secretary_voice_enabled | bool
+
+- name: Enable Piper service
+  ansible.builtin.systemd:
+    name: lab-piper
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: lab_secretary_voice_enabled | bool
+
+- name: Verify Whisper local health page
+  ansible.builtin.uri:
+    url: "http://{{ lab_whisper_host }}:{{ lab_whisper_port }}/"
+    method: GET
+    status_code: 200
+  register: lab_whisper_health
+  until: lab_whisper_health.status == 200
+  retries: 30
+  delay: 2
+  when: lab_secretary_voice_enabled | bool
+
+- name: Verify Piper local health endpoint
+  ansible.builtin.uri:
+    url: "http://{{ lab_piper_host }}:{{ lab_piper_port }}/info"
+    method: GET
+    status_code: 200
+  register: lab_piper_health
+  until: lab_piper_health.status == 200
+  retries: 30
+  delay: 2
+  when: lab_secretary_voice_enabled | bool

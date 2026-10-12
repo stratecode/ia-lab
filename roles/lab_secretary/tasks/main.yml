@@ -45,6 +45,11 @@
       LAB_SECRETARY_TELEGRAM_ENABLED={{ 'true' if lab_secretary_telegram_enabled else 'false' }}
       LAB_TELEGRAM_BOT_TOKEN={{ orchestrator_telegram_bot_token }}
       LAB_TELEGRAM_ALLOWED_USERS={{ orchestrator_telegram_allowed_users }}
+      LAB_SECRETARY_VOICE_ENABLED={{ 'true' if lab_secretary_voice_enabled | bool else 'false' }}
+      LAB_SECRETARY_VOICE_MAX_DURATION_SECONDS={{ lab_secretary_voice_max_duration_seconds }}
+      LAB_WHISPER_URL={{ lab_whisper_url }}
+      LAB_PIPER_URL={{ lab_piper_url }}
+      LAB_FFMPEG_BINARY=/usr/bin/ffmpeg
   no_log: true
   notify: Restart lab secretary
 
@@ -64,7 +69,7 @@
     content: |
       [Unit]
       Description=Shared personal secretary and Telegram adapter
-      After=network-online.target llm-telemetry.service
+      After=network-online.target llm-telemetry.service lab-whisper.service lab-piper.service
       Wants=network-online.target
 
       [Service]

@@ -1,0 +1,12 @@
+---
+- name: Restart lab whisper
+  ansible.builtin.systemd:
+    name: lab-whisper
+    daemon_reload: true
+    state: restarted
+
+- name: Restart lab piper
+  ansible.builtin.systemd:
+    name: lab-piper
+    daemon_reload: true
+    state: restarted
