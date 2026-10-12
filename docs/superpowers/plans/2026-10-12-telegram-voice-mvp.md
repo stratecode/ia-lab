@@ -145,6 +145,8 @@ git commit -m "Handle Telegram voice notes in secretary"
 - Create: `internal/secretary/voice_metrics_test.go`
 - Modify: `internal/secretary/service.go`
 - Modify: `internal/secretary/service_test.go`
+- Modify: `internal/secretary/telegram.go`
+- Modify: `internal/secretary/telegram_test.go`
 - Modify: `cmd/lab-secretary/main.go`
 - Modify: `group_vars/all.yml`
 - Modify: `playbooks/deploy-secretary.yml`
@@ -179,7 +181,7 @@ In `roles/observability/tasks/main.yml`, add job `lab-secretary` targeting `127.
 - [ ] **Step 6: Commit Task 3**
 
 ```bash
-git add internal/secretary/voice_metrics.go internal/secretary/voice_metrics_test.go internal/secretary/service.go internal/secretary/service_test.go cmd/lab-secretary/main.go group_vars/all.yml playbooks/deploy-secretary.yml roles/observability/tasks/main.yml
+git add internal/secretary/voice_metrics.go internal/secretary/voice_metrics_test.go internal/secretary/service.go internal/secretary/service_test.go internal/secretary/telegram.go internal/secretary/telegram_test.go cmd/lab-secretary/main.go group_vars/all.yml playbooks/deploy-secretary.yml roles/observability/tasks/main.yml docs/superpowers/plans/2026-10-12-telegram-voice-mvp.md
 git commit -m "Expose secretary voice performance metrics"
 ```
 

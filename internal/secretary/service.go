@@ -35,10 +35,21 @@ type Service struct {
 	mu                                    sync.Mutex
 	timerMu                               sync.Mutex
 	history                               map[int64][]Turn
+	voiceMetrics                          *VoiceMetrics
+	voiceMetricsOnce                      sync.Once
 }
 
 func New(upstream, key, instructions, stateDir string, allowed map[int64]bool) *Service {
 	return &Service{Upstream: strings.TrimRight(upstream, "/"), Key: key, Instructions: instructions, StateDir: stateDir, Allowed: allowed, Client: &http.Client{Timeout: 120 * time.Second}, history: map[int64][]Turn{}}
+}
+
+func (s *Service) VoiceMetrics() *VoiceMetrics {
+	s.voiceMetricsOnce.Do(func() {
+		if s.voiceMetrics == nil {
+			s.voiceMetrics = NewVoiceMetrics()
+		}
+	})
+	return s.voiceMetrics
 }
 func bounded(messages []Turn) []Turn {
 	n := 0
@@ -286,10 +297,19 @@ func (s *Service) Handler() http.Handler {
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 	proxy.FlushInterval = -1
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) { http.Error(w, "model unavailable", 502) }
+	metricsHandler := s.VoiceMetrics().Handler()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, `{"status":true}`)
+			return
+		}
+		if r.URL.Path == "/metrics" {
+			if r.Method != http.MethodGet {
+				http.Error(w, "GET required", http.StatusMethodNotAllowed)
+				return
+			}
+			metricsHandler.ServeHTTP(w, r)
 			return
 		}
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.Key)) != 1 || s.Key == "" {

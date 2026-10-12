@@ -251,6 +251,13 @@
             - targets: ["127.0.0.1:{{ llm_telemetry_port }}"]
       {% endif %}
 
+      {% if lab_secretary_enabled | default(false) %}
+        - job_name: "lab-secretary"
+          metrics_path: /metrics
+          static_configs:
+            - targets: ["127.0.0.1:{{ lab_secretary_port }}"]
+      {% endif %}
+
         - job_name: "llama-cpp-main"
           metrics_path: /metrics
           authorization:

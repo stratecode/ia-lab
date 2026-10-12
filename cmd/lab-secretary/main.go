@@ -49,7 +49,27 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	server := &http.Server{Addr: listen, Handler: service.Handler(), ReadHeaderTimeout: 10 * time.Second}
-	bot := &secretary.Bot{Base: "https://api.telegram.org", Token: os.Getenv("LAB_TELEGRAM_BOT_TOKEN"), Client: &http.Client{Timeout: 40 * time.Second}, Service: service, OnEvent: func(event string) { log.Print(event) }}
+	voiceMaxDuration := 120 * time.Second
+	voiceEnabled := env("LAB_SECRETARY_VOICE_ENABLED", "false") == "true"
+	if voiceEnabled {
+		seconds, err := strconv.Atoi(env("LAB_SECRETARY_VOICE_MAX_DURATION_SECONDS", "120"))
+		if err != nil || seconds < 1 || seconds > 3600 {
+			log.Fatal("valid voice duration required")
+		}
+		voiceMaxDuration = time.Duration(seconds) * time.Second
+	}
+	bot := &secretary.Bot{Base: "https://api.telegram.org", Token: os.Getenv("LAB_TELEGRAM_BOT_TOKEN"), Client: &http.Client{Timeout: 40 * time.Second}, Service: service, Metrics: service.VoiceMetrics(), VoiceMaxDuration: voiceMaxDuration, OnEvent: func(event string) { log.Print(event) }}
+	if voiceEnabled {
+		whisperURL := env("LAB_WHISPER_URL", "")
+		piperURL := env("LAB_PIPER_URL", "")
+		if whisperURL != "" && piperURL != "" {
+			bot.Speech = secretary.NewHTTPVoiceClient(whisperURL, piperURL, nil)
+			bot.Audio = secretary.FFmpegAudioConverter{Binary: env("LAB_FFMPEG_BINARY", "/usr/bin/ffmpeg")}
+			bot.VoiceEnabled = true
+		} else {
+			log.Print("secretary_voice_disabled_missing_endpoint")
+		}
+	}
 	if env("LAB_SECRETARY_TELEGRAM_ENABLED", "true") == "true" {
 		go func() {
 			if err := bot.Run(ctx); err != nil {

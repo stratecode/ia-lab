@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPrivateAllowlistAndNoLegacyCommands(t *testing.T) {
@@ -58,6 +59,17 @@ func TestSharedChatStreamingAndAuthentication(t *testing.T) {
 		if auth != "" && (w.Code != 200 || w.Body.String() != stream) {
 			t.Fatalf("stream changed: %d %q", w.Code, w.Body.String())
 		}
+	}
+}
+
+func TestSecretaryMetricsEndpointExposesVoiceMetrics(t *testing.T) {
+	service := New("http://127.0.0.1:1", "secret-key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	service.VoiceMetrics().ObservePhase(VoicePhaseSTT, VoiceResultOK, 250*time.Millisecond)
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	response := httptest.NewRecorder()
+	service.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `lab_secretary_voice_phase_calls_total{phase="stt",result="ok"}`) {
+		t.Fatalf("unauthenticated metrics endpoint unavailable: %d %s", response.Code, response.Body.String())
 	}
 }
 

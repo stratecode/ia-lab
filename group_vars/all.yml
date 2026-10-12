@@ -275,6 +275,10 @@ llm_telemetry_port: 8081
 llm_telemetry_model_label: LFM2.5-1.2B-Instruct-Q4_0
 lab_secretary_enabled: true
 lab_secretary_port: 8082
+lab_secretary_voice_enabled: false
+lab_secretary_voice_max_duration_seconds: 120
+lab_whisper_url: "http://127.0.0.1:8083"
+lab_piper_url: "http://127.0.0.1:8084"
 # Hermes gateway on the operator Mac was stopped after confirming its Telegram API connections.
 lab_secretary_telegram_enabled: true
 lab_secretary_connectors_file: "{{ lookup('env', 'LAB_SECRETARY_CONNECTORS_FILE') | default('', true) }}"
