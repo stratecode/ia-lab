@@ -58,5 +58,4 @@ TASK [open_webui : Publish Open WebUI DNS record through Route53] **************
 skipping: [lab]
 
 PLAY RECAP *********************************************************************
-lab                        : ok=17   changed=3    unreachable=0    failed=0    skipped=1    rescued=0    ignored=0   
-
+lab                        : ok=17   changed=3    unreachable=0    failed=0    skipped=1    rescued=0    ignored=0
