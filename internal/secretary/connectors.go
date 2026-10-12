@@ -190,7 +190,7 @@ func (c *Connectors) session(ctx context.Context, config OAuthConfig) (*mcpSessi
 	return s, err
 }
 
-var readTools = map[string]bool{"getAccessibleAtlassianResources": true, "searchJiraIssuesUsingJql": true, "list_meetings": true}
+var readTools = map[string]bool{"getAccessibleAtlassianResources": true, "searchJiraIssuesUsingJql": true, "list_meetings": true, "get_meetings": true}
 
 func (c *Connectors) tool(ctx context.Context, config OAuthConfig, name string, args map[string]any) (json.RawMessage, error) {
 	if !readTools[name] {
@@ -334,19 +334,19 @@ func (c *Connectors) Granola(ctx context.Context) (string, error) {
 		} `json:"tools"`
 	}
 	json.Unmarshal(raw, &tools)
-	found := false
+	found := map[string]bool{}
 	for _, tool := range tools.Tools {
-		if tool.Name == "list_meetings" {
-			found = true
+		if tool.Name == "list_meetings" || tool.Name == "get_meetings" {
+			found[tool.Name] = true
 			if len(tool.Schema.Required) > 0 {
-				return "", errors.New("Granola list schema needs explicit arguments")
+				return "", fmt.Errorf("Granola %s schema needs explicit arguments", tool.Name)
 			}
 		}
 	}
-	if !found {
-		return "", errors.New("Granola list_meetings unavailable")
+	if !found["list_meetings"] || !found["get_meetings"] {
+		return "", errors.New("Granola meeting summary tools unavailable")
 	}
-	raw, err = s.callTool(ctx, "list_meetings", map[string]any{})
+	raw, err = s.callTool(ctx, "list_meetings", map[string]any{"time_range": "last_7_days"})
 	if err != nil {
 		return "", err
 	}
@@ -354,10 +354,11 @@ func (c *Connectors) Granola(ctx context.Context) (string, error) {
 	if !valid {
 		return "", errors.New("unexpected Granola source schema")
 	}
-	lines := []string{"Granola · hasta 5 notas devueltas por la consulta (no es tu calendario):"}
+	lines := []string{"Notas de Granola (últimos 7 días; muestra de hasta 5 reuniones):"}
 	if len(meetings) == 0 {
-		lines = append(lines, "La consulta no devolvió notas; esto no verifica que no haya reuniones.")
+		return strings.Join(append(lines, "La consulta no devolvió notas; esto no verifica que no haya reuniones."), "\n"), nil
 	}
+	ids := make([]string, 0, 5)
 	for i, item := range meetings {
 		if i == 5 {
 			break
@@ -365,9 +366,30 @@ func (c *Connectors) Granola(ctx context.Context) (string, error) {
 		if item.ID == "" {
 			return "", errors.New("Granola source ID missing")
 		}
-		lines = append(lines, fmt.Sprintf("[%s] %s · %s", short(item.ID), short(item.Title), short(item.Date)))
+		ids = append(ids, item.ID)
 	}
-	return strings.Join(lines, "\n"), nil
+	raw, err = s.callTool(ctx, "get_meetings", map[string]any{"meeting_ids": ids})
+	if err != nil {
+		return "", err
+	}
+	summaries, valid := parseGranolaSummaries(raw)
+	if !valid {
+		return "", errors.New("unexpected Granola meeting detail schema")
+	}
+	for _, item := range meetings {
+		if len(ids) == 0 {
+			break
+		}
+		if !containsString(ids, item.ID) {
+			continue
+		}
+		summary := summaries[item.ID]
+		if summary == "" {
+			summary = "Sin resumen disponible en la nota."
+		}
+		lines = append(lines, fmt.Sprintf("%s · %s\n%s", short(item.Title), short(item.Date), summary))
+	}
+	return strings.Join(lines, "\n\n"), nil
 }
 
 type granolaMeeting struct {
@@ -377,10 +399,64 @@ type granolaMeeting struct {
 }
 
 var (
-	granolaMeetingsTag = regexp.MustCompile(`<meetings_data\b([^>]*)>`)
-	granolaMeetingTag  = regexp.MustCompile(`<meeting\b([^>]*)>`)
-	granolaAttribute   = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_-]*)="([^"]*)"`)
+	granolaMeetingsTag  = regexp.MustCompile(`<meetings_data\b([^>]*)>`)
+	granolaMeetingTag   = regexp.MustCompile(`<meeting\b([^>]*)>`)
+	granolaMeetingBlock = regexp.MustCompile(`(?s)<meeting\b([^>]*)>(.*?)</meeting>`)
+	granolaSummaryTag   = regexp.MustCompile(`(?s)<summary\b[^>]*>(.*?)</summary>`)
+	granolaMarkupTag    = regexp.MustCompile(`<[^>]*>`)
+	granolaAttribute    = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_-]*)="([^"]*)"`)
 )
+
+func parseGranolaSummaries(raw json.RawMessage) (map[string]string, bool) {
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return nil, false
+	}
+	matches := granolaMeetingBlock.FindAllStringSubmatch(text, 6)
+	if len(matches) == 0 {
+		return nil, false
+	}
+	summaries := make(map[string]string, len(matches))
+	for _, match := range matches {
+		attrs := map[string]string{}
+		for _, pair := range granolaAttribute.FindAllStringSubmatch(match[1], -1) {
+			attrs[pair[1]] = html.UnescapeString(pair[2])
+		}
+		if attrs["id"] == "" {
+			continue
+		}
+		summary := granolaSummaryTag.FindStringSubmatch(match[2])
+		if len(summary) != 2 {
+			continue
+		}
+		clean := html.UnescapeString(granolaMarkupTag.ReplaceAllString(summary[1], "\n"))
+		lines := []string{}
+		for _, line := range strings.Split(clean, "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				lines = append(lines, line)
+			}
+		}
+		summaries[attrs["id"]] = truncateGranolaSummary(strings.Join(lines, "\n"))
+	}
+	return summaries, true
+}
+
+func truncateGranolaSummary(text string) string {
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) > 1600 {
+		return string(runes[:1600]) + "…"
+	}
+	return string(runes)
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
 
 func parseGranolaMeetings(raw json.RawMessage) ([]granolaMeeting, bool) {
 	var fields map[string]json.RawMessage

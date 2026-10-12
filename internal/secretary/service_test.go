@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -152,5 +153,70 @@ func TestSourceCommandSurvivesRestartInConversationContext(t *testing.T) {
 	s = New(upstream.URL, "key", "instructions", dir, map[int64]bool{7: true})
 	if _, err := s.Reply(context.Background(), 7, "¿Qué falta conectar?"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+type executiveSummarySource struct{ granola string }
+
+func (s executiveSummarySource) Jira(context.Context) (string, error) {
+	return "Jira: no conectado", nil
+}
+func (s executiveSummarySource) Granola(context.Context) (string, error) { return s.granola, nil }
+func (s executiveSummarySource) Status() map[string]bool                 { return map[string]bool{"Granola": true} }
+
+func TestTelegramMeetingsCommandReturnsExecutiveSummaryAndPersistsNoRawNotes(t *testing.T) {
+	const source = "Notas de Granola (últimos 7 días; muestra de hasta 5 reuniones):\nPlanificación de lanzamiento · 2026-10-12\nAcordamos publicar el viernes. Ana preparará el anuncio."
+	const summary = "Resumen ejecutivo\n- El lanzamiento queda para el viernes.\n\nAcciones\n- Ana: preparar el anuncio."
+	modelCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
+		var body struct {
+			Messages []Turn `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Messages) != 2 || !strings.Contains(body.Messages[0].Content, "No inventes") || !strings.Contains(body.Messages[0].Content, "transcripciones") || !strings.Contains(body.Messages[1].Content, source) {
+			t.Errorf("missing source-grounded summarization prompt: %#v", body.Messages)
+		}
+		response, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": summary}}}})
+		w.Write(response)
+	}))
+	defer upstream.Close()
+	dir := t.TempDir()
+	s := New(upstream.URL, "key", "instrucciones compartidas", dir, map[int64]bool{7: true})
+	s.Sources = executiveSummarySource{granola: source}
+	reply, err := s.Reply(context.Background(), 7, "/reuniones")
+	if err != nil || reply != summary || modelCalls != 1 {
+		t.Fatalf("summary %q, calls %d, err %v", reply, modelCalls, err)
+	}
+	stored, err := os.ReadFile(s.historyPath(7))
+	if err != nil || strings.Contains(string(stored), "Acordamos publicar") || !strings.Contains(string(stored), "El lanzamiento queda para el viernes") {
+		t.Fatalf("history stored raw notes or lost summary: %s, %v", stored, err)
+	}
+}
+
+func TestWebUIReunionesUsesExecutiveSummaryModel(t *testing.T) {
+	const summary = "Resumen ejecutivo: la decisión principal es lanzar el viernes."
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []Turn `json:"messages"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if len(body.Messages) != 2 || !strings.Contains(body.Messages[1].Content, "Notas de Granola") {
+			t.Errorf("source context missing from model request: %#v", body.Messages)
+		}
+		response, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": summary}}}})
+		w.Write(response)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instrucciones compartidas", t.TempDir(), map[int64]bool{7: true})
+	s.Sources = executiveSummarySource{granola: "Notas de Granola (últimos 7 días; muestra de hasta 5 reuniones):\nLanzamiento · 2026-10-12\nAcordamos publicar el viernes."}
+	request := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"main","stream":false,"messages":[{"role":"user","content":"/reuniones"}]}`))
+	request.Header.Set("Authorization", "Bearer key")
+	result := httptest.NewRecorder()
+	s.Handler().ServeHTTP(result, request)
+	if result.Code != 200 || !strings.Contains(result.Body.String(), summary) || strings.Contains(result.Body.String(), "lanzamiento el viernes.") {
+		t.Fatalf("WebUI returned raw Granola data instead of a summary: %d %s", result.Code, result.Body.String())
 	}
 }

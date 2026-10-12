@@ -33,7 +33,7 @@ func TestReadOnlyMCPKeepsSourcesAndRejectsWrites(t *testing.T) {
 			return
 		}
 		if req.Method == "tools/list" {
-			io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"list_meetings","inputSchema":{"type":"object"}}]}}`)
+			io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"list_meetings","inputSchema":{"type":"object"}},{"name":"get_meetings","inputSchema":{"type":"object"}}]}}`)
 			return
 		}
 		calls = append(calls, req.Params.Name)
@@ -42,7 +42,10 @@ func TestReadOnlyMCPKeepsSourcesAndRejectsWrites(t *testing.T) {
 			result = `{"issues":[{"key":"STRAT-42","fields":{"summary":"Revisar propuesta","status":{"name":"En curso"}}}]}`
 		}
 		if req.Params.Name == "list_meetings" {
-			result = `<meetings_data count="1"><meeting id="meet-1" title="Atlas &amp; Team" date="2026-10-10"><transcript>private discussion details</transcript></meeting></meetings_data>`
+			result = `<meetings_data count="1"><meeting id="meet-1" title="Atlas &amp; Team" date="2026-10-10"/></meetings_data>`
+		}
+		if req.Params.Name == "get_meetings" {
+			result = `<meetings><meeting id="meet-1" title="Atlas &amp; Team" date="2026-10-10"><summary>Decidimos mantener el alcance actual. Ana preparará la propuesta.</summary><transcript>private discussion details</transcript></meeting></meetings>`
 		}
 		b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": result}}}})
 		w.Write(b)
@@ -54,14 +57,14 @@ func TestReadOnlyMCPKeepsSourcesAndRejectsWrites(t *testing.T) {
 		t.Fatalf("Jira %q %v", jira, err)
 	}
 	meetings, err := c.Granola(context.Background())
-	if err != nil || !strings.Contains(meetings, "meet-1") || !strings.Contains(meetings, "Atlas & Team") || !strings.Contains(meetings, "2026-10-10") || strings.Contains(meetings, "private discussion details") {
+	if err != nil || !strings.Contains(meetings, "Atlas & Team") || !strings.Contains(meetings, "2026-10-10") || !strings.Contains(meetings, "Ana preparará la propuesta") || strings.Contains(meetings, "private discussion details") {
 		t.Fatalf("Granola %q %v", meetings, err)
 	}
-	if len(calls) != 3 {
+	if len(calls) != 4 {
 		t.Fatalf("unexpected calls %v", calls)
 	}
 	_, err = c.tool(context.Background(), c.Config.Jira, "createJiraIssue", map[string]any{})
-	if err == nil || len(calls) != 3 {
+	if err == nil || len(calls) != 4 {
 		t.Fatal("write was sent to provider")
 	}
 }

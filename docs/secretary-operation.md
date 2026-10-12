@@ -30,15 +30,18 @@ bot and cause another polling conflict.
 | `/new` | Clear this operator's Telegram conversation; UI chats stay in Open WebUI |
 | `/status` | Connector configuration status; does not prove provider connectivity |
 | `/jira` | Up to five open issues assigned to the authorised Jira account |
-| `/reuniones` | Up to five Granola notes returned by the provider |
+| `/reuniones` | Executive summary of up to five Granola notes from the last seven days; uses note summaries, never transcripts |
 | `/resumen` | Source-labelled Jira and Granola results, with explicit missing coverage |
 | `Ponme un temporizador de 10 minutos` / `/timer 10m` | Persist a one-shot timer and notify this private Telegram chat when it expires |
 | `/timers` | List this operator's active timers and remaining time |
 | `/cancel ID` | Cancel one of this operator's active timers |
 
-Source commands also work in Open WebUI. They return IDs, dates and source fields
-directly, without asking the small model to rewrite them. This POC does not yet
-support natural-language tool selection. Telegram history is persisted as complete
+Source commands also work in Open WebUI. `/reuniones` asks the principal model to
+turn up to five recent Granola note summaries into an executive brief with decisions,
+actions and reminders. The source window is the last seven days, not a full calendar
+query; missing owners and dates are never inferred, and transcripts are excluded.
+Jira and `/resumen` still return source-labelled fields directly. This POC does not
+yet support natural-language tool selection. Telegram history is persisted as complete
 exchanges, bounded to eight turns / 4,000 characters; source command results enter
 that context when they fit the limit. Open WebUI owns its separate conversation
 history. Shared persona and tools do **not** imply cross-channel memory syncing.
