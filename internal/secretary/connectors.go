@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -226,6 +228,9 @@ func (s *mcpSession) callTool(ctx context.Context, name string, args map[string]
 		if item.Type == "text" && json.Valid([]byte(item.Text)) {
 			return json.RawMessage(item.Text), nil
 		}
+		if item.Type == "text" {
+			return json.Marshal(item.Text)
+		}
 	}
 	return nil, errors.New("structured source data required")
 }
@@ -345,22 +350,15 @@ func (c *Connectors) Granola(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var data struct {
-		Meetings []struct {
-			ID    string `json:"id"`
-			Title string `json:"title"`
-			Date  string `json:"date"`
-		} `json:"meetings"`
-	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil || len(fields["meetings"]) == 0 || string(fields["meetings"]) == "null" || json.Unmarshal(raw, &data) != nil {
+	meetings, valid := parseGranolaMeetings(raw)
+	if !valid {
 		return "", errors.New("unexpected Granola source schema")
 	}
 	lines := []string{"Granola · hasta 5 notas devueltas por la consulta (no es tu calendario):"}
-	if len(data.Meetings) == 0 {
+	if len(meetings) == 0 {
 		lines = append(lines, "La consulta no devolvió notas; esto no verifica que no haya reuniones.")
 	}
-	for i, item := range data.Meetings {
+	for i, item := range meetings {
 		if i == 5 {
 			break
 		}
@@ -371,6 +369,46 @@ func (c *Connectors) Granola(ctx context.Context) (string, error) {
 	}
 	return strings.Join(lines, "\n"), nil
 }
+
+type granolaMeeting struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Date  string `json:"date"`
+}
+
+var (
+	granolaMeetingsTag = regexp.MustCompile(`<meetings_data\b([^>]*)>`)
+	granolaMeetingTag  = regexp.MustCompile(`<meeting\b([^>]*)>`)
+	granolaAttribute   = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_-]*)="([^"]*)"`)
+)
+
+func parseGranolaMeetings(raw json.RawMessage) ([]granolaMeeting, bool) {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) == nil && len(fields["meetings"]) > 0 && string(fields["meetings"]) != "null" {
+		var meetings []granolaMeeting
+		if json.Unmarshal(fields["meetings"], &meetings) == nil {
+			return meetings, true
+		}
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return nil, false
+	}
+	root := granolaMeetingsTag.FindStringSubmatch(text)
+	if len(root) != 2 {
+		return nil, false
+	}
+	var meetings []granolaMeeting
+	for _, match := range granolaMeetingTag.FindAllStringSubmatch(text, 6) {
+		attrs := map[string]string{}
+		for _, pair := range granolaAttribute.FindAllStringSubmatch(match[1], -1) {
+			attrs[pair[1]] = html.UnescapeString(pair[2])
+		}
+		meetings = append(meetings, granolaMeeting{ID: attrs["id"], Title: attrs["title"], Date: attrs["date"]})
+	}
+	return meetings, true
+}
+
 func short(text string) string {
 	runes := []rune(strings.Join(strings.Fields(text), " "))
 	if len(runes) > 140 {

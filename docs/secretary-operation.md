@@ -80,8 +80,10 @@ Jira requests `read:me`, `read:jira:agent-interface`,
 `search:jira:agent-interface` and `offline_access`, without write scopes. If the
 account exposes multiple Jira sites, enroll with `--cloud-id <selected-site-id>`;
 the adapter refuses to guess. Granola exposes its general `mcp` OAuth scope;
-the adapter's hard allowlist permits `list_meetings` only. Remote tool/result
-schemas must be checked with the authorised account before POC acceptance.
+the adapter's hard allowlist permits `list_meetings` only. Its current response
+is markup rather than JSON, so the adapter extracts only meeting ID, title and
+date; it does not pass transcript or note bodies into chat. Verify remote tool
+and result schemas with the authorised account before POC acceptance.
 
 ```bash
 ./scripts/test-orchestrator-go.sh
@@ -93,8 +95,24 @@ export LAB_SECRETARY_CONNECTORS_FILE="$HOME/.config/stratecode-lab/secretary-con
 ansible-playbook playbooks/deploy-secretary.yml
 ```
 
+To update OAuth connectors without redeploying Telegram, the model or Open WebUI,
+use the narrow playbook below. It stores only the connector payload in a root-only
+environment file and restarts `lab-secretary`:
+
+```bash
+export LAB_HOSTNAME=lab.stratecode.com
+export LAB_USER=stratecode
+export LAB_SECRETARY_CONNECTORS_FILE="$HOME/.config/stratecode-lab/secretary-connectors.json"
+ansible-playbook playbooks/deploy-secretary-connectors.yml
+```
+
+The connector playbook does not load `group_vars/vault.yml` and does not change
+the main secretary environment. The full secretary deployment remains the
+authoritative path when binaries, Telegram settings, or model configuration
+change.
+
 Do not use `--diff` for secret-bearing deployment. The role loads the private JSON
-into a root-only environment file; refreshed tokens are stored privately under
+into `/etc/lab-secretary/connectors.env` with root-only permissions; refreshed tokens are stored privately under
 systemd's StateDirectory. Re-deployment needs the same private connector file;
 omitting `LAB_SECRETARY_CONNECTORS_FILE` intentionally deploys no OAuth accounts.
 The supplied token state must be refreshed/re-enrolled if the provider revokes it.

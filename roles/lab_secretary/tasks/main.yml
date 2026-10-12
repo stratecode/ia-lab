@@ -43,9 +43,17 @@
       LAB_SECRETARY_MODEL_KEY={{ (llama_cpp_instances | first).api_key }}
       LAB_SECRETARY_INSTRUCTIONS=/etc/lab-secretary/instructions.md
       LAB_SECRETARY_TELEGRAM_ENABLED={{ 'true' if lab_secretary_telegram_enabled else 'false' }}
-      LAB_SECRETARY_CONNECTORS={{ (lookup('ansible.builtin.file', lab_secretary_connectors_file) if lab_secretary_connectors_file | length > 0 else '{}') | b64encode }}
       LAB_TELEGRAM_BOT_TOKEN={{ orchestrator_telegram_bot_token }}
       LAB_TELEGRAM_ALLOWED_USERS={{ orchestrator_telegram_allowed_users }}
+  no_log: true
+  notify: Restart lab secretary
+
+- name: Install private secretary connector environment
+  ansible.builtin.copy:
+    dest: /etc/lab-secretary/connectors.env
+    mode: "0600"
+    content: >-
+      LAB_SECRETARY_CONNECTORS={{ (lookup('ansible.builtin.file', lab_secretary_connectors_file) if lab_secretary_connectors_file | length > 0 else '{}') | b64encode }}
   no_log: true
   notify: Restart lab secretary
 
@@ -64,6 +72,7 @@
       StateDirectory=lab-secretary
       StateDirectoryMode=0700
       EnvironmentFile=/etc/lab-secretary/secretary.env
+      EnvironmentFile=/etc/lab-secretary/connectors.env
       ExecStart=/usr/local/bin/lab-secretary
       Restart=always
       RestartSec=5

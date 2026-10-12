@@ -42,7 +42,7 @@ func TestReadOnlyMCPKeepsSourcesAndRejectsWrites(t *testing.T) {
 			result = `{"issues":[{"key":"STRAT-42","fields":{"summary":"Revisar propuesta","status":{"name":"En curso"}}}]}`
 		}
 		if req.Params.Name == "list_meetings" {
-			result = `{"meetings":[{"id":"meet-1","title":"Atlas","date":"2026-10-10"}]}`
+			result = `<meetings_data count="1"><meeting id="meet-1" title="Atlas &amp; Team" date="2026-10-10"><transcript>private discussion details</transcript></meeting></meetings_data>`
 		}
 		b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": result}}}})
 		w.Write(b)
@@ -54,7 +54,7 @@ func TestReadOnlyMCPKeepsSourcesAndRejectsWrites(t *testing.T) {
 		t.Fatalf("Jira %q %v", jira, err)
 	}
 	meetings, err := c.Granola(context.Background())
-	if err != nil || !strings.Contains(meetings, "meet-1") {
+	if err != nil || !strings.Contains(meetings, "meet-1") || !strings.Contains(meetings, "Atlas & Team") || !strings.Contains(meetings, "2026-10-10") || strings.Contains(meetings, "private discussion details") {
 		t.Fatalf("Granola %q %v", meetings, err)
 	}
 	if len(calls) != 3 {
