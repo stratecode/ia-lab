@@ -12,7 +12,9 @@ Telegram private chat ├─ lab-secretary :8082 ─ llm-telemetry :8081 ─ lla
 ```
 
 Telegram polling is enabled and active in the lab. The operator approved stopping
-Hermes. Its Mac launchd service `ai.hermes.gateway` is unloaded; afterwards, a
+Hermes. Its Mac launchd service `ai.hermes.gateway` is stopped and disabled
+from auto-start for this user. `launchctl enable gui/$(id -u)/ai.hermes.gateway`
+reverses the auto-start setting; `hermes gateway start` starts it again. Afterwards, a
 standalone `getUpdates` returned HTTP 200 with zero pending messages, and the lab
 service logged `telegram_ready` without another 409. The check `getMe` confirmed
 `@stratecode_bot`; no webhook is set. An actual private operator message and model

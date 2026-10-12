@@ -16,7 +16,9 @@
     "keep_alive": true,
     "observed_telegram_api_ip": "149.154.166.110",
     "established_connections": 2,
-    "same_bot_token_verified": false
+    "same_bot_token_verified": false,
+    "launchd_disabled": true,
+    "gateway_status": "not loaded"
   },
   "next_confirmation": "Send a private message to @stratecode_bot and verify model response",
   "credentials_rotated": false,
