@@ -32,6 +32,9 @@ bot and cause another polling conflict.
 | `/jira` | Up to five open issues assigned to the authorised Jira account |
 | `/reuniones` | Up to five Granola notes returned by the provider |
 | `/resumen` | Source-labelled Jira and Granola results, with explicit missing coverage |
+| `Ponme un temporizador de 10 minutos` / `/timer 10m` | Persist a one-shot timer and notify this private Telegram chat when it expires |
+| `/timers` | List this operator's active timers and remaining time |
+| `/cancel ID` | Cancel one of this operator's active timers |
 
 Source commands also work in Open WebUI. They return IDs, dates and source fields
 directly, without asking the small model to rewrite them. This POC does not yet
@@ -47,6 +50,15 @@ WhatsApp and Slack are later adapters. Poll offsets are checkpointed before
 processing; after a crash during a request, resend that message rather than
 expecting replay. Model calls continue through Prometheus telemetry. Source-only
 commands bypass inference and are not counted as LLM generations.
+
+Timers are handled deterministically by `lab-secretary`, not by the model. The
+first version accepts one duration in seconds, minutes or hours, up to 24 hours;
+it sends one Telegram message at expiry and supports up to ten active timers per
+operator. Timer state is stored in the service StateDirectory and survives
+restarts. If a timer expires while the service is down, its notification is sent
+after restart. Delivery is retried while Telegram is unavailable; because the
+send and local state update are separate operations, a crash between them can
+cause a duplicate notification.
 
 ## OAuth enrollment
 

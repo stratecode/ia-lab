@@ -33,6 +33,7 @@ type Service struct {
 	Sources                               SourceReader
 	Client                                *http.Client
 	mu                                    sync.Mutex
+	timerMu                               sync.Mutex
 	history                               map[int64][]Turn
 }
 
@@ -76,9 +77,49 @@ func (s *Service) Reply(ctx context.Context, user int64, text string) (string, e
 	if text == "" {
 		return "Escribe una consulta de texto.", nil
 	}
+	if duration, ok := parseTimerRequest(text); ok {
+		timer, err := s.createTimer(user, duration)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("⏱ Temporizador %s iniciado: %s. Te aviso cuando termine.", timer.ID, formatTimerDuration(duration)), nil
+	}
+	if isTimerIntent(text) {
+		return "Para el temporizador, indica una duración de 1 segundo a 24 horas; por ejemplo: «temporizador de 10 minutos». Por ahora enviaré un aviso al terminar.", nil
+	}
 	switch strings.Fields(text)[0] {
 	case "/start", "/help":
-		return "Soy tu secretaria del lab. Puedes escribirme en español.\n/new: conversación nueva\n/status: conexiones\n/jira: pendientes\n/reuniones: reuniones recientes\n/resumen: tareas y reuniones\nTexto primero; voz todavía no disponible.", nil
+		return "Soy tu secretaria del lab. Puedes escribirme en español.\n/new: conversación nueva\n/status: conexiones\n/jira: pendientes\n/reuniones: reuniones recientes\n/resumen: tareas y reuniones\n/timer 10m: temporizador\n/timers: ver temporizadores\n/cancel ID: cancelar temporizador\nTexto primero; voz todavía no disponible.", nil
+	case "/timers":
+		timers, err := s.timersForUser(user)
+		if err != nil {
+			return "", err
+		}
+		if len(timers) == 0 {
+			return "No tienes temporizadores activos.", nil
+		}
+		lines := make([]string, 0, len(timers))
+		for _, timer := range timers {
+			remaining := time.Until(timer.DueAt).Round(time.Second)
+			if remaining < 0 {
+				remaining = 0
+			}
+			lines = append(lines, fmt.Sprintf("%s: vence en %s", timer.ID, remaining))
+		}
+		return strings.Join(lines, "\n"), nil
+	case "/cancel":
+		fields := strings.Fields(text)
+		if len(fields) != 2 {
+			return "Uso: /cancel ID", nil
+		}
+		canceled, err := s.cancelTimer(user, fields[1])
+		if err != nil {
+			return "", err
+		}
+		if !canceled {
+			return "No encuentro un temporizador activo con ese ID.", nil
+		}
+		return "Temporizador cancelado.", nil
 	case "/new":
 		if err := atomicJSON(s.historyPath(user), []Turn{}); err != nil {
 			return "", err

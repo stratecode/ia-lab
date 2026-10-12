@@ -115,6 +115,7 @@ func (b *Bot) Run(ctx context.Context) error {
 		return errors.New("cannot read polling state")
 	}
 	b.event("telegram_ready")
+	go b.runTimerScheduler(ctx)
 	for ctx.Err() == nil {
 		var updates []Update
 		err := b.call(ctx, "getUpdates", map[string]any{"offset": offset, "timeout": 25, "allowed_updates": []string{"message"}}, &updates)
@@ -159,4 +160,37 @@ func (b *Bot) Run(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (b *Bot) runTimerScheduler(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	b.deliverDueTimers(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			b.deliverDueTimers(ctx)
+		}
+	}
+}
+
+func (b *Bot) deliverDueTimers(ctx context.Context) {
+	timers, err := b.Service.dueTimers(time.Now())
+	if err != nil {
+		b.event("timer_state_error")
+		return
+	}
+	for _, timer := range timers {
+		if err := b.send(ctx, timer.ChatID, "⏰ Temporizador terminado."); err != nil {
+			b.event("timer_send_error")
+			continue
+		}
+		if err := b.Service.markTimerDelivered(timer.ID); err != nil {
+			b.event("timer_state_error")
+			continue
+		}
+		b.event("timer_delivered")
+	}
 }
