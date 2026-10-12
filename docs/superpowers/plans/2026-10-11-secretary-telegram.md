@@ -43,8 +43,7 @@ Jira/Granola real queries await interactive OAuth consent.
 Telegram preflight passed getMe/no-webhook, but polling while our service was
 stopped still returned 409. The operator Mac has Hermes gateway PID 3771 under
 `ai.hermes.gateway` with two Telegram API connections. It is a candidate, not yet
-confirmed by stopping it or comparing credentials. Operator decision requested
-because stopping a separate project's gateway could affect other channels.
+confirmed by stopping it or comparing credentials. Operator approved stopping this separate gateway. Launchd now reports the gateway unloaded, and a standalone long poll returned HTTP 200 with zero pending updates. The lab service then logged `telegram_ready`; no 409 has recurred.
 
 One initial build retry was needed after an existing telemetry streaming test
 failed with a closed upstream connection; the final full build passes and that

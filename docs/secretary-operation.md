@@ -11,13 +11,13 @@ Telegram private chat ├─ lab-secretary :8082 ─ llm-telemetry :8081 ─ lla
                      └─ fixed read-only MCP calls ─ Jira / Granola
 ```
 
-Telegram is currently paused in repository configuration. The bot passed `getMe`
-and has no webhook, but a standalone `getUpdates` request returned HTTP 409 even
-with `lab-secretary` stopped. Investigation located the Hermes gateway on the
-operator's Mac: launchd label `ai.hermes.gateway`, working directory `~/.hermes`,
-Python PID 3771 at investigation time, with established Telegram API connections.
-Migrating requires stopping that separate project's consumer or using a different
-bot. Do not rotate credentials or delete a webhook to hide a conflict.
+Telegram polling is enabled and active in the lab. The operator approved stopping
+Hermes. Its Mac launchd service `ai.hermes.gateway` is unloaded; afterwards, a
+standalone `getUpdates` returned HTTP 200 with zero pending messages, and the lab
+service logged `telegram_ready` without another 409. The check `getMe` confirmed
+`@stratecode_bot`; no webhook is set. An actual private operator message and model
+reply remains the final delivery check. If Hermes is restarted, it may reclaim the
+bot and cause another polling conflict.
 
 ## Commands and permissions
 
@@ -86,11 +86,10 @@ omitting `LAB_SECRETARY_CONNECTORS_FILE` intentionally deploys no OAuth accounts
 The supplied token state must be refreshed/re-enrolled if the provider revokes it.
 Keep any host refresh cache private and out of evidence or Git.
 
-To re-enable Telegram after stopping its competing consumer, set
-`lab_secretary_telegram_enabled: true` in `group_vars/all.yml` and deploy. Do not
-issue manual `getUpdates` requests while the service polls: that creates a new
-conflict. Preflight uses `playbooks/check-telegram.yml` (`getMe`, webhook metadata
-only). The retired orchestrator stays stopped.
+Telegram polling is enabled in `group_vars/all.yml`. Do not issue manual
+`getUpdates` requests while the service polls: that creates a competing consumer.
+Preflight uses `playbooks/check-telegram.yml` (`getMe`, webhook metadata only).
+The retired orchestrator stays stopped.
 
 ## Verification and evidence
 

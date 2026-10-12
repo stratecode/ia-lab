@@ -3,7 +3,10 @@
   "lab_secretary_polling": "paused",
   "standalone_poll_with_lab_secretary_stopped": 409,
   "lab_legacy_orchestrator": "inactive",
-  "lab_containers": ["open-webui", "grafana"],
+  "lab_containers": [
+    "open-webui",
+    "grafana"
+  ],
   "mac_candidate": {
     "pid_at_investigation": 3771,
     "module": "hermes_cli.main",
@@ -15,7 +18,10 @@
     "established_connections": 2,
     "same_bot_token_verified": false
   },
-  "next_confirmation": "Stop the candidate only after operator decision; then verify polling no longer returns 409.",
+  "next_confirmation": "Send a private message to @stratecode_bot and verify model response",
   "credentials_rotated": false,
-  "webhook_modified": false
+  "webhook_modified": false,
+  "same_bot_token_verified": "not needed: after stopping Hermes, getUpdates returned HTTP 200 with zero pending messages",
+  "lab_telegram_reconnected": "service logged telegram_ready; first getUpdates poll returned without conflict",
+  "polling_enabled": true
 }
