@@ -1,6 +1,6 @@
 # Telegram voice MVP design
 
-**Status:** Draft for operator review  
+**Status:** Approved by operator
 **Date:** 2026-10-12
 
 ## Goal
@@ -21,8 +21,8 @@ Enable the existing `lab-secretary` Telegram bot to accept Spanish voice notes a
 
 Run the speech engines as separate host services, reachable only over loopback. This respects the current 128 MB memory limit on `lab-secretary` and allows each engine to load and retain its model independently:
 
-- **STT:** `whisper.cpp`, multilingual Spanish `small` model in a quantized build. Pin source revision, model URL, and SHA-256 in deployment configuration. Validate CPU latency on the lab before widening the model or thread count.
-- **TTS:** maintained `OHF-Voice/piper1-gpl`, using an `es_ES` medium voice as the initial candidate. Validate pronunciation and intelligibility with Spanish responses before treating the voice as final. Pin package version and model URL/checksum.
+- **STT:** `whisper.cpp` v1.9.5, multilingual Spanish `small-q5_1` model from `ggerganov/whisper.cpp` revision `5359861c739e955e79d9a303bcbc70fb988958b1`, SHA-256 `ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb` (190,085,487 bytes). Validate CPU latency on the lab before widening the model or thread count.
+- **TTS:** maintained `OHF-Voice/piper1-gpl` v1.8.0, using `es_ES-sharvard-medium` from `rhasspy/piper-voices` v1.0.0, SHA-256 `40febfb1679c69a4505ff311dc136e121e3419a13a290ef264fdf43ddedd0fb1`. The voice repository marks the model MIT-licensed; validate pronunciation and intelligibility with Spanish responses before treating the voice as final.
 - **Audio conversion:** install FFmpeg through the tracked deployment role. Convert incoming Telegram OGG/Opus as required by the STT endpoint, and Piper WAV output to OGG/Opus for Telegram `sendVoice`.
 
 The shared speech interface is channel-neutral. Channel adapters own media download, sender authorization, platform-specific formats, and delivery. No public speech endpoint is added.
@@ -31,7 +31,7 @@ The shared speech interface is channel-neutral. Channel adapters own media downl
 
 - Retain the existing Telegram user allowlist; reject unauthorized updates before downloading media or calling speech services.
 - Enforce Telegram's cloud download limit (20 MB) and a configurable audio-duration ceiling. Reject oversized input with a short user-facing message.
-- Keep intermediate media in private temporary storage and delete it after success or failure. Do not add raw audio or transcripts to logs, metrics, or persistent conversation history beyond the existing text conversation behavior.
+- Keep intermediate media in private temporary storage (`/tmp` isolated with systemd `PrivateTmp=yes`) and delete it after success or failure. Do not add raw audio or transcripts to logs, metrics, or persistent conversation history beyond the existing text conversation behavior.
 - Metrics use bounded labels such as channel, phase, and result. Never label with user IDs, chat IDs, transcripts, prompts, filenames, or Telegram file URLs.
 - Speech services listen on `127.0.0.1`; systemd units use dedicated users, restrictive filesystem settings, and independent resource limits.
 - Do not commit model weights or executable build outputs. Commit reproducible versions, source/model URLs, checksums, license notices, playbook changes, and validation evidence.
@@ -58,9 +58,7 @@ Rollback disables voice in configuration and stops the two speech services; it d
 
 ## Open implementation checks
 
-- Confirm the selected `es_ES` Piper voice card and license before downloading the model; the engine's GPL license does not establish the voice model's license.
-- Confirm the exact Whisper multilingual quantized artifact and its SHA-256 from the upstream model index when preparing the deployment plan.
-- Measure whether `small` quantized Whisper meets the desired voice-note latency on the actual CPU; adjust thread limits or model size only from those measurements.
+- Measure whether `small-q5_1` Whisper meets the desired voice-note latency on the actual CPU; adjust thread limits or model size only from those measurements.
 
 ## Primary sources
 
@@ -68,6 +66,8 @@ Rollback disables voice in configuration and stops the two speech services; it d
 - [OHF-Voice Piper HTTP API](https://github.com/OHF-Voice/piper1-gpl/blob/main/docs/API_HTTP.md): local synthesis endpoint and runtime operation.
 - [Piper maintained package metadata](https://github.com/OHF-Voice/piper1-gpl/blob/main/setup.py): package version and GPL-3.0-or-later license.
 - [Piper voice catalogue](https://github.com/rhasspy/piper/blob/master/VOICES.md): Spanish (Spain) voices; check each voice's model card independently.
+- [Pinned Sharvard voice model card](https://huggingface.co/rhasspy/piper-voices/blob/v1.0.0/es/es_ES/sharvard/medium/es_ES-sharvard-medium.onnx): MIT license, file revision, and SHA-256.
+- [Pinned Whisper model repository](https://huggingface.co/ggerganov/whisper.cpp/tree/5359861c739e955e79d9a303bcbc70fb988958b1): model artifacts and immutable revision.
 - [Telegram Bot API](https://core.telegram.org/bots/api): `getFile` download constraints and `sendVoice` supported output.
 - [WhatsApp Cloud API media](https://www.postman.com/meta/whatsapp-business-platform/folder/13382743-ecb27be5-4d27-4763-bbee-6a8002c04bf3): distinct media upload/download flow for a future adapter.
 - [Slack file upload flow](https://api.slack.com/messaging/files/remote): current external upload and share sequence for a future adapter.
