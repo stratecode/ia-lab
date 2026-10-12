@@ -25,15 +25,18 @@ without printing or saving recognized text or audio.
 
 | Phase | Result | Duration |
 |---|---:|---:|
-| Piper synthesis | pass | 0.759 s |
-| FFmpeg OGG/Opus conversion | pass | 0.072 s |
-| Whisper transcription | pass | 2.972 s |
-| Total | pass | 3.803 s |
+| Piper synthesis | pass | 0.909 s |
+| FFmpeg OGG/Opus conversion | pass | 0.078 s |
+| Whisper transcription | pass | 2.956 s |
+| Total | pass | 3.944 s |
 
 An initial phrase beginning with “Buenos días” did not recognize the first
 word consistently; the smoke phrase was adjusted so the same marker appears
 after the initial words. The strict marker check then passed. This is a smoke
 test result, not a latency guarantee for user voice notes.
+
+After redirect protection was added, the updated secretary binary was
+redeployed and the synthetic test passed again with the timings above.
 
 ## Telegram end-to-end
 

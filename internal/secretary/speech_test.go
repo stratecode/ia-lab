@@ -173,6 +173,29 @@ func TestHTTPVoiceClientHonorsCancellationAndResponseLimit(t *testing.T) {
 	}
 }
 
+func TestHTTPVoiceClientDoesNotFollowSpeechServiceRedirects(t *testing.T) {
+	redirectRequests := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectRequests++
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"text":"should not be reached"}`)
+	}))
+	defer target.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+
+	client := NewHTTPVoiceClient(redirector.URL, redirector.URL, redirector.Client())
+	if _, err := client.Transcribe(context.Background(), []byte("private voice audio")); err == nil {
+		t.Fatal("redirected transcription unexpectedly succeeded")
+	}
+	if redirectRequests != 0 {
+		t.Fatal("speech audio was sent to a redirect target")
+	}
+}
+
 func TestLocalEndpointRejectsNonLoopbackSpeechHosts(t *testing.T) {
 	for _, endpoint := range []string{"http://example.com:8083", "http://192.168.1.40:8083"} {
 		t.Run(endpoint, func(t *testing.T) {

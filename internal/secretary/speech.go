@@ -47,10 +47,14 @@ func NewHTTPVoiceClient(whisperURL, piperURL string, client *http.Client) *HTTPV
 	if client == nil {
 		client = &http.Client{Timeout: 2 * time.Minute}
 	}
+	clientCopy := *client
+	clientCopy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
 	return &HTTPVoiceClient{
 		whisperURL:             strings.TrimRight(whisperURL, "/"),
 		piperURL:               strings.TrimRight(piperURL, "/"),
-		client:                 client,
+		client:                 &clientCopy,
 		maxSpeechResponseBytes: maxSpeechResponseBytes,
 	}
 }
