@@ -16,6 +16,8 @@
   roles:
     - role: llm_telemetry
       when: llm_telemetry_enabled
+    - role: lab_secretary
+      when: lab_secretary_enabled
     - open_webui
     - monitor
     - observability

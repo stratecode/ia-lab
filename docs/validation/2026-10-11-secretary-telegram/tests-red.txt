@@ -1,0 +1,14 @@
+# github.com/stratecode/lab/internal/secretary [github.com/stratecode/lab/internal/secretary.test]
+internal/secretary/service_test.go:14:8: undefined: Service
+internal/secretary/service_test.go:15:22: undefined: Message
+internal/secretary/service_test.go:15:36: undefined: User
+internal/secretary/service_test.go:15:52: undefined: Chat
+internal/secretary/service_test.go:15:86: undefined: User
+internal/secretary/service_test.go:15:102: undefined: Chat
+internal/secretary/service_test.go:18:18: undefined: Message
+internal/secretary/service_test.go:18:31: undefined: User
+internal/secretary/service_test.go:18:47: undefined: Chat
+internal/secretary/service_test.go:33:5: undefined: New
+internal/secretary/service_test.go:33:5: too many errors
+FAIL	github.com/stratecode/lab/internal/secretary [build failed]
+FAIL

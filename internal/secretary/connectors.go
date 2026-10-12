@@ -1,0 +1,380 @@
+package secretary
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+)
+
+type OAuthConfig struct {
+	ServerURL     string `json:"server_url"`
+	AccessToken   string `json:"access_token"`
+	RefreshToken  string `json:"refresh_token,omitempty"`
+	ClientID      string `json:"client_id,omitempty"`
+	ClientSecret  string `json:"client_secret,omitempty"`
+	TokenEndpoint string `json:"token_endpoint,omitempty"`
+	ExpiresAt     int64  `json:"expires_at,omitempty"`
+	CloudID       string `json:"cloud_id,omitempty"`
+}
+type ConnectorConfig struct {
+	Jira    OAuthConfig `json:"jira"`
+	Granola OAuthConfig `json:"granola"`
+}
+type Connectors struct {
+	Config        ConnectorConfig
+	Client        *http.Client
+	StateDir      string
+	mu            sync.Mutex
+	allowTestHTTP bool
+}
+
+func NewConnectors(config ConnectorConfig, stateDir string) *Connectors {
+	c := &Connectors{Config: config, StateDir: stateDir, Client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error { return errors.New("connector redirects disabled") }}}
+	var cached ConnectorConfig
+	if raw, err := os.ReadFile(filepath.Join(stateDir, "oauth-cache.json")); err == nil && json.Unmarshal(raw, &cached) == nil {
+		for _, pair := range [][2]*OAuthConfig{{&c.Config.Jira, &cached.Jira}, {&c.Config.Granola, &cached.Granola}} {
+			if pair[0].ServerURL == pair[1].ServerURL && pair[0].ClientID == pair[1].ClientID && pair[1].ExpiresAt > pair[0].ExpiresAt {
+				*pair[0] = *pair[1]
+			}
+		}
+	}
+	return c
+}
+func (c *Connectors) Status() map[string]bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return map[string]bool{"Jira": c.Config.Jira.AccessToken != "", "Granola": c.Config.Granola.AccessToken != ""}
+}
+func (c *Connectors) validServer(raw string) bool {
+	if raw == "https://mcp.atlassian.com/v2/mcp" || raw == "https://mcp.granola.ai/mcp" {
+		return true
+	}
+	if c.allowTestHTTP {
+		u, err := url.Parse(raw)
+		return err == nil && u.Scheme == "http" && u.Hostname() == "127.0.0.1"
+	}
+	return false
+}
+func (c *Connectors) access(ctx context.Context, config *OAuthConfig) error {
+	if !c.validServer(config.ServerURL) {
+		return errors.New("connector destination rejected")
+	}
+	if config.ExpiresAt == 0 || config.ExpiresAt > time.Now().Unix()+60 {
+		return nil
+	}
+	endpoint, err := url.Parse(config.TokenEndpoint)
+	expected := "auth.atlassian.com"
+	if config.ServerURL == "https://mcp.granola.ai/mcp" {
+		expected = "mcp-auth.granola.ai"
+	}
+	if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() != expected || endpoint.User != nil || config.RefreshToken == "" {
+		return errors.New("connector reauthentication required")
+	}
+	values := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {config.RefreshToken}, "client_id": {config.ClientID}, "resource": {config.ServerURL}}
+	if config.ClientSecret != "" {
+		values.Set("client_secret", config.ClientSecret)
+	}
+	request, _ := http.NewRequestWithContext(ctx, "POST", config.TokenEndpoint, strings.NewReader(values.Encode()))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := c.Client.Do(request)
+	if err != nil {
+		return errors.New("OAuth refresh unavailable")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != 200 {
+		return fmt.Errorf("OAuth refresh HTTP %d", response.StatusCode)
+	}
+	var token struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
+	}
+	if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&token) != nil || token.AccessToken == "" {
+		return errors.New("invalid OAuth refresh")
+	}
+	config.AccessToken = token.AccessToken
+	if token.RefreshToken != "" {
+		config.RefreshToken = token.RefreshToken
+	}
+	config.ExpiresAt = time.Now().Unix() + token.ExpiresIn
+	return atomicJSON(filepath.Join(c.StateDir, "oauth-cache.json"), c.Config)
+}
+
+type mcpSession struct {
+	owner            *Connectors
+	config           OAuthConfig
+	session, version string
+	id               int
+}
+
+func (s *mcpSession) rpc(ctx context.Context, method string, params any, notification bool) (json.RawMessage, error) {
+	payload := map[string]any{"jsonrpc": "2.0", "method": method, "params": params}
+	if !notification {
+		s.id++
+		payload["id"] = s.id
+	}
+	raw, _ := json.Marshal(payload)
+	request, _ := http.NewRequestWithContext(ctx, "POST", s.config.ServerURL, bytes.NewReader(raw))
+	request.Header.Set("Authorization", "Bearer "+s.config.AccessToken)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	if s.session != "" {
+		request.Header.Set("Mcp-Session-Id", s.session)
+	}
+	if s.version != "" {
+		request.Header.Set("MCP-Protocol-Version", s.version)
+	}
+	response, err := s.owner.Client.Do(request)
+	if err != nil {
+		return nil, errors.New("MCP transport unavailable")
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("MCP HTTP %d", response.StatusCode)
+	}
+	if id := response.Header.Get("Mcp-Session-Id"); id != "" {
+		s.session = id
+	}
+	if notification {
+		return nil, nil
+	}
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
+	}
+	if strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
+		scan := bufio.NewScanner(io.LimitReader(response.Body, 2<<20))
+		scan.Buffer(make([]byte, 4096), 2<<20)
+		for scan.Scan() {
+			line := scan.Bytes()
+			if bytes.HasPrefix(line, []byte("data:")) && json.Unmarshal(bytes.TrimSpace(line[5:]), &envelope) == nil && len(envelope.Result) > 0 {
+				break
+			}
+		}
+	} else if json.NewDecoder(io.LimitReader(response.Body, 2<<20)).Decode(&envelope) != nil {
+		return nil, errors.New("invalid MCP response")
+	}
+	if (len(envelope.Error) > 0 && string(envelope.Error) != "null") || len(envelope.Result) == 0 {
+		return nil, errors.New("MCP operation rejected")
+	}
+	return envelope.Result, nil
+}
+func (c *Connectors) session(ctx context.Context, config OAuthConfig) (*mcpSession, error) {
+	if !c.validServer(config.ServerURL) || config.AccessToken == "" {
+		return nil, errors.New("connector not authorised")
+	}
+	s := &mcpSession{owner: c, config: config}
+	raw, err := s.rpc(ctx, "initialize", map[string]any{"protocolVersion": "2025-03-26", "capabilities": map[string]any{}, "clientInfo": map[string]string{"name": "stratecode-secretary", "version": "0.1.0"}}, false)
+	if err != nil {
+		return nil, err
+	}
+	var init struct {
+		Version string `json:"protocolVersion"`
+	}
+	json.Unmarshal(raw, &init)
+	s.version = init.Version
+	_, err = s.rpc(ctx, "notifications/initialized", map[string]any{}, true)
+	return s, err
+}
+
+var readTools = map[string]bool{"getAccessibleAtlassianResources": true, "searchJiraIssuesUsingJql": true, "list_meetings": true}
+
+func (c *Connectors) tool(ctx context.Context, config OAuthConfig, name string, args map[string]any) (json.RawMessage, error) {
+	if !readTools[name] {
+		return nil, errors.New("tool outside read-only allowlist")
+	}
+	s, err := c.session(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	return s.callTool(ctx, name, args)
+}
+func (s *mcpSession) callTool(ctx context.Context, name string, args map[string]any) (json.RawMessage, error) {
+	if !readTools[name] {
+		return nil, errors.New("tool outside read-only allowlist")
+	}
+	raw, err := s.rpc(ctx, "tools/call", map[string]any{"name": name, "arguments": args}, false)
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		IsError    bool            `json:"isError"`
+		Structured json.RawMessage `json:"structuredContent"`
+		Content    []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(raw, &result) != nil || result.IsError {
+		return nil, errors.New("connector tool failed")
+	}
+	if len(result.Structured) > 0 && string(result.Structured) != "null" {
+		return result.Structured, nil
+	}
+	for _, item := range result.Content {
+		if item.Type == "text" && json.Valid([]byte(item.Text)) {
+			return json.RawMessage(item.Text), nil
+		}
+	}
+	return nil, errors.New("structured source data required")
+}
+func (c *Connectors) Jira(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.Config.Jira.AccessToken == "" {
+		return "Jira: no conectado", nil
+	}
+	if c.Config.Jira.ServerURL != "https://mcp.atlassian.com/v2/mcp" && !c.allowTestHTTP {
+		return "", errors.New("Jira credential destination rejected")
+	}
+	if err := c.access(ctx, &c.Config.Jira); err != nil {
+		return "", err
+	}
+	s, err := c.session(ctx, c.Config.Jira)
+	if err != nil {
+		return "", err
+	}
+	cloud := c.Config.Jira.CloudID
+	if cloud == "" {
+		raw, err := s.callTool(ctx, "getAccessibleAtlassianResources", map[string]any{})
+		if err != nil {
+			return "", err
+		}
+		var sites []struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(raw, &sites) != nil || len(sites) != 1 {
+			return "", errors.New("select a Jira cloud_id before querying")
+		}
+		cloud = sites[0].ID
+	}
+	raw, err := s.callTool(ctx, "searchJiraIssuesUsingJql", map[string]any{"cloudId": cloud, "jql": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC", "maxResults": 5, "fields": []string{"summary", "status", "duedate"}})
+	if err != nil {
+		return "", err
+	}
+	var data struct {
+		Issues []struct {
+			Key    string `json:"key"`
+			Fields struct {
+				Summary string `json:"summary"`
+				Status  struct {
+					Name string `json:"name"`
+				} `json:"status"`
+				Due string `json:"duedate"`
+			} `json:"fields"`
+		} `json:"issues"`
+		IsLast *bool `json:"isLast"`
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || len(fields["issues"]) == 0 || string(fields["issues"]) == "null" || json.Unmarshal(raw, &data) != nil {
+		return "", errors.New("unexpected Jira source schema")
+	}
+	lines := []string{"Jira · hasta 5 pendientes asignados a tu cuenta (muestra, no listado completo):"}
+	if len(data.Issues) == 0 {
+		lines = append(lines, "La consulta no devolvió incidencias.")
+	}
+	for i, item := range data.Issues {
+		if i == 5 {
+			break
+		}
+		if item.Key == "" {
+			return "", errors.New("Jira source ID missing")
+		}
+		due := item.Fields.Due
+		if due == "" {
+			due = "sin fecha"
+		}
+		lines = append(lines, fmt.Sprintf("[%s] %s · %s · %s", short(item.Key), short(item.Fields.Summary), short(item.Fields.Status.Name), short(due)))
+	}
+	return strings.Join(lines, "\n"), nil
+}
+func (c *Connectors) Granola(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.Config.Granola.AccessToken == "" {
+		return "Granola: no conectado", nil
+	}
+	if c.Config.Granola.ServerURL != "https://mcp.granola.ai/mcp" && !c.allowTestHTTP {
+		return "", errors.New("Granola credential destination rejected")
+	}
+	if err := c.access(ctx, &c.Config.Granola); err != nil {
+		return "", err
+	}
+	s, err := c.session(ctx, c.Config.Granola)
+	if err != nil {
+		return "", err
+	}
+	// Verify the actual remote schema before choosing arguments; do not guess.
+	raw, err := s.rpc(ctx, "tools/list", map[string]any{}, false)
+	if err != nil {
+		return "", err
+	}
+	var tools struct {
+		Tools []struct {
+			Name   string `json:"name"`
+			Schema struct {
+				Required []string `json:"required"`
+			} `json:"inputSchema"`
+		} `json:"tools"`
+	}
+	json.Unmarshal(raw, &tools)
+	found := false
+	for _, tool := range tools.Tools {
+		if tool.Name == "list_meetings" {
+			found = true
+			if len(tool.Schema.Required) > 0 {
+				return "", errors.New("Granola list schema needs explicit arguments")
+			}
+		}
+	}
+	if !found {
+		return "", errors.New("Granola list_meetings unavailable")
+	}
+	raw, err = s.callTool(ctx, "list_meetings", map[string]any{})
+	if err != nil {
+		return "", err
+	}
+	var data struct {
+		Meetings []struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+			Date  string `json:"date"`
+		} `json:"meetings"`
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil || len(fields["meetings"]) == 0 || string(fields["meetings"]) == "null" || json.Unmarshal(raw, &data) != nil {
+		return "", errors.New("unexpected Granola source schema")
+	}
+	lines := []string{"Granola · hasta 5 notas devueltas por la consulta (no es tu calendario):"}
+	if len(data.Meetings) == 0 {
+		lines = append(lines, "La consulta no devolvió notas; esto no verifica que no haya reuniones.")
+	}
+	for i, item := range data.Meetings {
+		if i == 5 {
+			break
+		}
+		if item.ID == "" {
+			return "", errors.New("Granola source ID missing")
+		}
+		lines = append(lines, fmt.Sprintf("[%s] %s · %s", short(item.ID), short(item.Title), short(item.Date)))
+	}
+	return strings.Join(lines, "\n"), nil
+}
+func short(text string) string {
+	runes := []rune(strings.Join(strings.Fields(text), " "))
+	if len(runes) > 140 {
+		return string(runes[:140]) + "…"
+	}
+	return string(runes)
+}

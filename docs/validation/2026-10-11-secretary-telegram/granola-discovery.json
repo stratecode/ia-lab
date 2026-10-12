@@ -1,0 +1,6 @@
+{
+  "issuer": "https://mcp-auth.granola.ai",
+  "authorization_endpoint": "https://mcp-auth.granola.ai/oauth2/authorize",
+  "token_endpoint": "https://mcp-auth.granola.ai/oauth2/token",
+  "registration_endpoint": "https://mcp-auth.granola.ai/oauth2/register"
+}

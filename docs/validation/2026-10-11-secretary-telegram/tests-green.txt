@@ -1,0 +1,2 @@
+?   	github.com/stratecode/lab/cmd/lab-secretary	[no test files]
+ok  	github.com/stratecode/lab/internal/secretary	1.022s

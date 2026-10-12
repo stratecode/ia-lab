@@ -3,8 +3,10 @@
 Current approved increment, October 11, 2026: a personal work assistant starts
 with one local model and browser conversation. The later objective is work
 context, Jira/Granola/email access and simple everyday agents, with voice through
-Telegram, WhatsApp and Slack outside the lab VPN/LAN. These integrations and
-cross-conversation memory are not deployed by this increment.
+Telegram, WhatsApp and Slack outside the lab VPN/LAN. The follow-on [secretary increment](secretary-operation.md) adds a shared service
+for Open WebUI and prepares Telegram and readonly Jira/Granola. Telegram is paused
+for a competing gateway; OAuth consent and real provider verification are pending.
+Cross-conversation memory and voice are not deployed.
 
 ## Configuration owned by this repository
 
@@ -21,7 +23,8 @@ cross-conversation memory are not deployed by this increment.
 - Per-service MemoryMax 4 GiB. Aggregate ceiling 90% of host resources;
   zero reservation floor for this CPU-only profile. No VRAM/BIOS modification.
 - Open WebUI image pinned to [v0.12.0](https://github.com/open-webui/open-webui/releases/tag/v0.12.0),
-  loopback port 3080, HTTPS at `https://chat.stratecode.com`, one main connection.
+  loopback port 3080, HTTPS at `https://chat.stratecode.com`, one main connection through `lab-secretary` on loopback port 8082, then
+  `llm-telemetry` on 8081 and the principal on 8080.
   Existing Nginx LAN/VPN access restrictions remain; external messaging channels
   are the later route to use outside those networks. Client/proxy timeouts are
   at least 900 seconds to accommodate long CPU-prefill requests.
@@ -52,6 +55,10 @@ source .env
 set +a
 ansible-playbook playbooks/deploy-principal-model.yml
 ```
+
+Build the secretary binary first with `./scripts/build-orchestrator-go.sh`.
+Supply `LAB_SECRETARY_CONNECTORS_FILE` when authorised accounts should be retained
+in deployment; see [secretary operation](secretary-operation.md).
 
 This downloads pinned weights with checksum verification, removes stale units,
 starts and validates principal generation, and only then removes the explicit

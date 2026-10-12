@@ -1,0 +1,1 @@
+3cd7345ddf5a0e32f9aada00300cf2130a8df3b1b68edb83014c575dd49bab11  dist/lab-secretary-linux-amd64

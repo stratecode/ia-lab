@@ -1,0 +1,6 @@
+{
+  "issuer": "https://auth.atlassian.com/VCeDsk8ZHncYF1g234fKtc4lNipbBhu3",
+  "authorization_endpoint": "https://auth.atlassian.com/authorize",
+  "token_endpoint": "https://auth.atlassian.com/oauth/token",
+  "registration_endpoint": "https://auth.atlassian.com/VCeDsk8ZHncYF1g234fKtc4lNipbBhu3/dcr/register"
+}

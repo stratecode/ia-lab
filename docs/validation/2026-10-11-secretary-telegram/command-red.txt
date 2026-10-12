@@ -1,0 +1,21 @@
+--- FAIL: TestBlankMessageAndWebUIReadCommand (0.00s)
+panic: runtime error: index out of range [0] with length 0 [recovered]
+	panic: runtime error: index out of range [0] with length 0
+
+goroutine 53 [running]:
+testing.tRunner.func1.2({0x36a080, 0x40000c00d8})
+	/usr/local/go/src/testing/testing.go:1632 +0x1bc
+testing.tRunner.func1()
+	/usr/local/go/src/testing/testing.go:1635 +0x334
+panic({0x36a080?, 0x40000c00d8?})
+	/usr/local/go/src/runtime/panic.go:791 +0x124
+github.com/stratecode/lab/internal/secretary.(*Service).Reply(0x40000d7030, {0x428e58, 0x66c7e0}, 0x7, {0x4232e0, 0x1})
+	/workspace/internal/secretary/service.go:76 +0x14b0
+github.com/stratecode/lab/internal/secretary.TestBlankMessageAndWebUIReadCommand(0x40000d4680)
+	/workspace/internal/secretary/service_test.go:123 +0x1bc
+testing.tRunner(0x40000d4680, 0x3c2a70)
+	/usr/local/go/src/testing/testing.go:1690 +0xe4
+created by testing.(*T).Run in goroutine 1
+	/usr/local/go/src/testing/testing.go:1743 +0x314
+FAIL	github.com/stratecode/lab/internal/secretary	0.006s
+FAIL

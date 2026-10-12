@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-12",
+  "lab_secretary_polling": "paused",
+  "standalone_poll_with_lab_secretary_stopped": 409,
+  "lab_legacy_orchestrator": "inactive",
+  "lab_containers": ["open-webui", "grafana"],
+  "mac_candidate": {
+    "pid_at_investigation": 3771,
+    "module": "hermes_cli.main",
+    "command": "gateway run",
+    "working_directory": "~/.hermes",
+    "launchd_label": "ai.hermes.gateway",
+    "keep_alive": true,
+    "observed_telegram_api_ip": "149.154.166.110",
+    "established_connections": 2,
+    "same_bot_token_verified": false
+  },
+  "next_confirmation": "Stop the candidate only after operator decision; then verify polling no longer returns 409.",
+  "credentials_rotated": false,
+  "webhook_modified": false
+}

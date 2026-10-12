@@ -8,14 +8,17 @@ monitoring and VPN. Start a new chat at `https://chat.stratecode.com` and use
 `main` (LFM2.5-1.2B Instruct Q4_0). Conversation history is persisted in the existing
 Open WebUI volume. See [Principal model operation](principal-model-operation.md).
 
-Telegram, WhatsApp and Slack voice are future channel adapters. They are not
-active interfaces today. The orchestrator and Codex gateway remain retired.
+The shared secretary now fronts Open WebUI. `/status`, `/jira`, `/reuniones` and
+`/resumen` are deterministic source commands; account access awaits OAuth consent.
+Telegram polling is paused while migrating the competing Hermes gateway from the
+operator Mac. Voice, WhatsApp and Slack remain future adapters. See
+[secretary operation](secretary-operation.md). The orchestrator and Codex gateway remain retired.
 The remainder of this guide is historical control-plane reference; its model
 names, commands and API endpoints must not be interpreted as active services.
 
 Product direction is defined in the [Master Plan](architecture/master-plan.md).
 
-## Entry points
+## Historical entry points
 
 There are six practical ways to use the system:
 

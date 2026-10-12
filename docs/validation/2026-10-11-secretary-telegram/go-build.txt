@@ -1,0 +1,28 @@
+ok  	github.com/stratecode/lab/internal/secretary	0.016s
+?   	github.com/stratecode/lab/cmd/lab-secretary	[no test files]
+?   	github.com/stratecode/lab/cmd/llm-telemetry	[no test files]
+ok  	github.com/stratecode/lab/internal/llmtelemetry	0.140s
+?   	github.com/stratecode/lab/cmd/codex-local-gateway	[no test files]
+ok  	github.com/stratecode/lab/internal/codexlocalgateway	0.202s
+?   	github.com/stratecode/lab/internal/orchestratorgo/app	[no test files]
+?   	github.com/stratecode/lab/internal/orchestratorgo/capabilities	[no test files]
+?   	github.com/stratecode/lab/internal/orchestratorgo/config	[no test files]
+?   	github.com/stratecode/lab/internal/orchestratorgo/domain	[no test files]
+ok  	github.com/stratecode/lab/internal/orchestratorgo/bridge	0.195s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/browserverify	0.007s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/capabilities/mcpwrap	0.003s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/capabilitybroker	0.008s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/codeanalysis	0.025s
+?   	github.com/stratecode/lab/internal/orchestratorgo/logging	[no test files]
+?   	github.com/stratecode/lab/internal/orchestratorgo/memory	[no test files]
+?   	github.com/stratecode/lab/internal/orchestratorgo/planner	[no test files]
+ok  	github.com/stratecode/lab/internal/orchestratorgo/httpapi	0.081s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/initiative	0.008s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/research	0.005s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/runner	0.009s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/store	0.001s
+?   	github.com/stratecode/lab/cmd/orchestrator-go	[no test files]
+ok  	github.com/stratecode/lab/internal/orchestratorgo/telegram	0.002s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/worker	0.001s
+?   	github.com/stratecode/lab/cmd/lab-agentd	[no test files]
+ok  	github.com/stratecode/lab/cmd/lab-agent	0.001s

@@ -273,11 +273,16 @@ open_webui_public_cname_target: "{{ lookup('env', 'LAB_OPEN_WEBUI_PUBLIC_CNAME_T
 llm_telemetry_enabled: true
 llm_telemetry_port: 8081
 llm_telemetry_model_label: LFM2.5-1.2B-Instruct-Q4_0
+lab_secretary_enabled: true
+lab_secretary_port: 8082
+# Re-enable after locating the existing getUpdates consumer (Telegram HTTP 409).
+lab_secretary_telegram_enabled: false
+lab_secretary_connectors_file: "{{ lookup('env', 'LAB_SECRETARY_CONNECTORS_FILE') | default('', true) }}"
 open_webui_principal_model_name: LFM2.5 1.2B · Principal
 open_webui_default_model: main
 open_webui_connections:
   - name: main
-    url: "http://127.0.0.1:{{ llm_telemetry_port if llm_telemetry_enabled else (llama_cpp_instances | first).port }}/v1"
+    url: "http://127.0.0.1:{{ lab_secretary_port if lab_secretary_enabled else (llm_telemetry_port if llm_telemetry_enabled else (llama_cpp_instances | first).port) }}/v1"
     api_key: "{{ (llama_cpp_instances | first).api_key }}"
 
 # ─── Orchestrator Platform ──────────────────────────────────────────────────

@@ -1,0 +1,34 @@
+test-codex-mode-guided-helpers ok
+......
+----------------------------------------------------------------------
+Ran 6 tests in 0.001s
+
+OK
+?   	github.com/stratecode/lab/cmd/lab-secretary	[no test files]
+ok  	github.com/stratecode/lab/internal/secretary	0.008s
+?   	github.com/stratecode/lab/cmd/llm-telemetry	[no test files]
+ok  	github.com/stratecode/lab/internal/llmtelemetry	0.222s
+?   	github.com/stratecode/lab/cmd/codex-local-gateway	[no test files]
+ok  	github.com/stratecode/lab/internal/codexlocalgateway	0.050s
+?   	github.com/stratecode/lab/internal/orchestratorgo/app	[no test files]
+?   	github.com/stratecode/lab/internal/orchestratorgo/capabilities	[no test files]
+?   	github.com/stratecode/lab/internal/orchestratorgo/config	[no test files]
+?   	github.com/stratecode/lab/internal/orchestratorgo/domain	[no test files]
+ok  	github.com/stratecode/lab/internal/orchestratorgo/bridge	0.563s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/browserverify	0.006s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/capabilities/mcpwrap	0.005s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/capabilitybroker	0.005s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/codeanalysis	0.003s
+?   	github.com/stratecode/lab/internal/orchestratorgo/logging	[no test files]
+?   	github.com/stratecode/lab/internal/orchestratorgo/memory	[no test files]
+?   	github.com/stratecode/lab/internal/orchestratorgo/planner	[no test files]
+ok  	github.com/stratecode/lab/internal/orchestratorgo/httpapi	0.120s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/initiative	0.009s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/research	0.006s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/runner	0.016s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/store	0.004s
+?   	github.com/stratecode/lab/cmd/orchestrator-go	[no test files]
+?   	github.com/stratecode/lab/cmd/lab-agentd	[no test files]
+ok  	github.com/stratecode/lab/internal/orchestratorgo/telegram	0.002s
+ok  	github.com/stratecode/lab/internal/orchestratorgo/worker	0.002s
+ok  	github.com/stratecode/lab/cmd/lab-agent	0.002s

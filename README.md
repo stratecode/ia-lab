@@ -6,6 +6,8 @@ Ansible-managed homelab infrastructure. Provisions and configures an Ubuntu serv
 
 - Current direction: a personal work assistant with one local principal LLM.
 - LFM2.5-1.2B Instruct Q4_0 on CPU, 16k context, Open WebUI for browser conversation.
+- Shared secretary service fronts Open WebUI; Telegram migration and readonly
+  Jira/Granola OAuth are tracked in [secretary operation](docs/secretary-operation.md).
 - Reproduce the current profile with `playbooks/deploy-principal-model.yml`.
 - Monitoring, HTTPS access and WireGuard remain active; the orchestrator and
   Codex gateway remain retired. External Oráculo/OpenSearch projects are excluded.
@@ -42,15 +44,17 @@ set -a && source .env && set +a
 # Test connectivity
 ansible all -m ping
 
-# Run the full playbook
-ansible-playbook playbooks/bootstrap.yml
+# Build and deploy the current principal + secretary + chat profile
+./scripts/build-orchestrator-go.sh
+# Set LAB_SECRETARY_CONNECTORS_FILE to retain enrolled OAuth accounts.
+ansible-playbook playbooks/deploy-principal-model.yml
 
-# Dry-run with diff
-ansible-playbook playbooks/bootstrap.yml --check --diff
-
-# Run a single role
-ansible-playbook playbooks/bootstrap.yml --tags wireguard
+# Syntax validation
+ansible-playbook playbooks/deploy-principal-model.yml --syntax-check
 ```
+
+The historical `bootstrap.yml` includes legacy runtime roles and cleanup paths.
+Use the principal-model playbook for the active profile.
 
 ## Architecture
 

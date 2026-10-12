@@ -1,0 +1,23 @@
+---
+- name: Verify existing Telegram credentials without revealing them
+  hosts: all
+  tasks:
+    - name: Check bot identity
+      ansible.builtin.uri:
+        url: "https://api.telegram.org/bot{{ orchestrator_telegram_bot_token }}/getMe"
+        return_content: true
+      register: bot_identity
+      no_log: true
+    - name: Check webhook status
+      ansible.builtin.uri:
+        url: "https://api.telegram.org/bot{{ orchestrator_telegram_bot_token }}/getWebhookInfo"
+        return_content: true
+      register: bot_webhook
+      no_log: true
+    - name: Report non-sensitive bot preflight
+      ansible.builtin.debug:
+        msg:
+          bot_username: "{{ bot_identity.json.result.username }}"
+          bot_valid: "{{ bot_identity.json.ok }}"
+          webhook_configured: "{{ bot_webhook.json.result.url | length > 0 }}"
+          pending_updates: "{{ bot_webhook.json.result.pending_update_count }}"

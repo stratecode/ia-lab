@@ -1,0 +1,9 @@
+{
+  "OPENAI_API_BASE_URLS": "http://127.0.0.1:8082/v1",
+  "ENABLE_PERSISTENT_CONFIG": "False",
+  "WEBUI_AUTH": "True",
+  "DEFAULT_MODELS": "main"
+}
+active
+active
+active

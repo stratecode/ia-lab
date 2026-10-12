@@ -1,0 +1,118 @@
+# Shared secretary operation
+
+Increment prepared on October 12, 2026. The active LFM principal is unchanged.
+`lab-secretary` adds shared instructions and deterministic read commands in front
+of the existing telemetry proxy. It runs on host loopback `127.0.0.1:8082`.
+Open WebUI at `https://chat.stratecode.com` uses `/v1` on that service.
+
+```text
+Open WebUI ───────────┐
+Telegram private chat ├─ lab-secretary :8082 ─ llm-telemetry :8081 ─ llama.cpp :8080
+                     └─ fixed read-only MCP calls ─ Jira / Granola
+```
+
+Telegram is currently paused in repository configuration. The bot passed `getMe`
+and has no webhook, but a standalone `getUpdates` request returned HTTP 409 even
+with `lab-secretary` stopped. Investigation located the Hermes gateway on the
+operator's Mac: launchd label `ai.hermes.gateway`, working directory `~/.hermes`,
+Python PID 3771 at investigation time, with established Telegram API connections.
+Migrating requires stopping that separate project's consumer or using a different
+bot. Do not rotate credentials or delete a webhook to hide a conflict.
+
+## Commands and permissions
+
+| Command | Result |
+|---|---|
+| Plain text | Principal LFM conversation with shared secretary instructions |
+| `/help`, `/start` | Telegram help |
+| `/new` | Clear this operator's Telegram conversation; UI chats stay in Open WebUI |
+| `/status` | Connector configuration status; does not prove provider connectivity |
+| `/jira` | Up to five open issues assigned to the authorised Jira account |
+| `/reuniones` | Up to five Granola notes returned by the provider |
+| `/resumen` | Source-labelled Jira and Granola results, with explicit missing coverage |
+
+Source commands also work in Open WebUI. They return IDs, dates and source fields
+directly, without asking the small model to rewrite them. This POC does not yet
+support natural-language tool selection. Telegram history is persisted as complete
+exchanges, bounded to eight turns / 4,000 characters; source command results enter
+that context when they fit the limit. Open WebUI owns its separate conversation
+history. Shared persona and tools do **not** imply cross-channel memory syncing.
+
+Telegram accepts only private chats whose sender and chat IDs match an explicit
+operator allowlist. No group chats, shell, legacy `/launch` commands, Jira writes,
+calendar modifications or external message-sending tools are exposed. Voice,
+WhatsApp and Slack are later adapters. Poll offsets are checkpointed before
+processing; after a crash during a request, resend that message rather than
+expecting replay. Model calls continue through Prometheus telemetry. Source-only
+commands bypass inference and are not counted as LLM generations.
+
+## OAuth enrollment
+
+Run on the operator's Mac; authorize from a browser on that same machine:
+
+```bash
+python3 scripts/connect-secretary.py jira
+python3 scripts/connect-secretary.py granola --port 18766
+```
+
+Each helper validates provider discovery, registers a client, uses PKCE S256 and
+checks callback state. It prints a 20-minute authorization link and listens only
+on loopback. Tokens are written with mode 0600 to
+`~/.config/stratecode-lab/secretary-connectors.json`, outside Git. No changes to
+`.env`, vault or SSH credentials are needed. `--discover` probes public metadata
+without enrollment. A failed consent is not a connected account.
+
+Jira requests `read:me`, `read:jira:agent-interface`,
+`search:jira:agent-interface` and `offline_access`, without write scopes. If the
+account exposes multiple Jira sites, enroll with `--cloud-id <selected-site-id>`;
+the adapter refuses to guess. Granola exposes its general `mcp` OAuth scope;
+the adapter's hard allowlist permits `list_meetings` only. Remote tool/result
+schemas must be checked with the authorised account before POC acceptance.
+
+```bash
+./scripts/test-orchestrator-go.sh
+./scripts/build-orchestrator-go.sh
+set -a
+source .env
+set +a
+export LAB_SECRETARY_CONNECTORS_FILE="$HOME/.config/stratecode-lab/secretary-connectors.json"
+ansible-playbook playbooks/deploy-secretary.yml
+```
+
+Do not use `--diff` for secret-bearing deployment. The role loads the private JSON
+into a root-only environment file; refreshed tokens are stored privately under
+systemd's StateDirectory. Re-deployment needs the same private connector file;
+omitting `LAB_SECRETARY_CONNECTORS_FILE` intentionally deploys no OAuth accounts.
+The supplied token state must be refreshed/re-enrolled if the provider revokes it.
+Keep any host refresh cache private and out of evidence or Git.
+
+To re-enable Telegram after stopping its competing consumer, set
+`lab_secretary_telegram_enabled: true` in `group_vars/all.yml` and deploy. Do not
+issue manual `getUpdates` requests while the service polls: that creates a new
+conflict. Preflight uses `playbooks/check-telegram.yml` (`getMe`, webhook metadata
+only). The retired orchestrator stays stopped.
+
+## Verification and evidence
+
+Tests exercise allowlist rejection, private chat identity, preserved streaming,
+restart history, failure handling, durable polling offsets, source fidelity,
+malformed source responses, provider credential destination checks and denied
+write tools. OAuth tests cover issuer path discovery, allowed hosts, state and
+read-only requested Jira scopes. Execute the Docker Go harness and Python tests:
+
+```bash
+python3 scripts/test-secretary-oauth.py
+python3 -m py_compile scripts/connect-secretary.py scripts/smoke-secretary.py
+```
+
+On the host, run `scripts/smoke-secretary.py` with `LAB_SECRETARY_MODEL_KEY` set
+privately. It checks health, HTTP 401 without credentials, one model, shared status
+SSE and a synthetic streamed answer with first-token / total time. It does not
+print real task or meeting content. Final acceptance also needs an actual
+operator message/reply on Telegram and real readonly Jira/Granola queries.
+
+Evidence: [validation directory](validation/2026-10-11-secretary-telegram/).
+Primary provider contracts: [Telegram Bot API](https://core.telegram.org/bots/api),
+[Atlassian MCP](https://atlassian.github.io/atlassian-mcp-server/),
+[supported tools](https://support.atlassian.com/atlassian-ai-gateway/docs/supported-tools/),
+[Granola MCP](https://docs.granola.ai/help-center/sharing/integrations/mcp).

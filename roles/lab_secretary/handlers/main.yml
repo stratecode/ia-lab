@@ -1,0 +1,5 @@
+- name: Restart lab secretary
+  ansible.builtin.systemd:
+    name: lab-secretary
+    daemon_reload: true
+    state: restarted

@@ -1,0 +1,9 @@
+# github.com/stratecode/lab/internal/secretary [github.com/stratecode/lab/internal/secretary.test]
+internal/secretary/connectors_test.go:27:6: undefined: Connectors
+internal/secretary/connectors_test.go:27:24: undefined: ConnectorConfig
+internal/secretary/connectors_test.go:27:45: undefined: OAuthConfig
+internal/secretary/connectors_test.go:36:6: undefined: Connectors
+internal/secretary/connectors_test.go:36:24: undefined: ConnectorConfig
+internal/secretary/connectors_test.go:36:45: undefined: OAuthConfig
+FAIL	github.com/stratecode/lab/internal/secretary [build failed]
+FAIL

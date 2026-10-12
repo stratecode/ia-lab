@@ -4,7 +4,7 @@ This document is the canonical product and execution roadmap for the platform. I
 
 If another document disagrees on product direction, roadmap, MVP boundaries, or the meaning of "validated", this document wins.
 
-## Active direction — October 11, 2026
+## Active direction — October 12, 2026
 
 The operator has selected a personal work assistant as the current product
 objective: one principal local LLM, persistent work context, later read access
@@ -19,10 +19,15 @@ weights are removed after principal-model validation. Reproduction:
 `playbooks/deploy-principal-model.yml`.
 
 This increment provides browser conversation and persisted chat history.
-Cross-conversation work memory, external connectors, speech recognition,
-speech synthesis and messaging-channel adapters are future increments;
-none is claimed deployed. Later channel adapters should share this model
-and conversation/memory layer. The channel boundary must authenticate the
+The next increment adds the shared `lab-secretary` service in front of telemetry
+and Open WebUI, bounded Telegram history, shared instructions and fixed readonly
+Jira/Granola commands. Telegram polling is paused because a competing Hermes
+gateway was located on the operator Mac. OAuth enrollment is prepared; real
+provider access remains pending operator consent and live schema validation.
+See [secretary operation](../secretary-operation.md). Cross-conversation work
+memory, speech recognition/synthesis and Slack/WhatsApp adapters remain future
+increments. Channel adapters share the principal and tool layer; conversation
+histories are currently separate. The channel boundary must authenticate the
 operator and preserve action permissions; a public inference endpoint is
 not required.
 
@@ -30,8 +35,8 @@ Secretary tooling and skill priorities are analyzed in
 `../research/2026-10-11-ai-secretary-tools-skills.md`. Six synthetic prompts on
 the deployed LFM exposed an incorrect attribution of a commitment deadline and
 several omissions. This is exploratory evidence, not acceptance of autonomous
-secretary actions. External connectors remain undeployed; prioritize grounded
-read flows and reviewed drafts before bounded writes.
+secretary actions. External connector code is present but live access is not yet accepted; prioritize
+grounded read flows and reviewed drafts before bounded writes.
 
 The legacy initiative control plane remains in source as a possible governed
 execution foundation, but is retired on the host. The sections below preserve

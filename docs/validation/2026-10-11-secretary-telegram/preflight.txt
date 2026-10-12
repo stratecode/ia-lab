@@ -1,0 +1,24 @@
+
+PLAY [Verify existing Telegram credentials without revealing them] *************
+
+TASK [Gathering Facts] *********************************************************
+ok: [lab]
+
+TASK [Check bot identity] ******************************************************
+ok: [lab]
+
+TASK [Check webhook status] ****************************************************
+ok: [lab]
+
+TASK [Report non-sensitive bot preflight] **************************************
+ok: [lab] => {
+    "msg": {
+        "bot_username": "stratecode_bot",
+        "bot_valid": true,
+        "pending_updates": 0,
+        "webhook_configured": false
+    }
+}
+
+PLAY RECAP *********************************************************************
+lab                        : ok=4    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0

@@ -9,5 +9,7 @@
     open_webui_public_cname_target: ""
   roles:
     - llm_telemetry
+    - role: lab_secretary
+      when: lab_secretary_enabled
     - open_webui
     - observability

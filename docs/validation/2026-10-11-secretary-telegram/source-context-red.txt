@@ -1,0 +1,5 @@
+--- FAIL: TestSourceCommandSurvivesRestartInConversationContext (0.00s)
+    service_test.go:140: source context lost: []secretary.Turn{secretary.Turn{Role:"system", Content:"instructions"}, secretary.Turn{Role:"user", Content:"¿Qué falta conectar?"}}
+FAIL
+FAIL	github.com/stratecode/lab/internal/secretary	0.002s
+FAIL

@@ -1,0 +1,12 @@
+{
+  "health": true,
+  "unauthenticated_http": 401,
+  "models": [
+    "main"
+  ],
+  "shared_status_stream": true,
+  "stream_done": true,
+  "first_token_seconds": 0.62,
+  "duration_seconds": 0.854,
+  "synthetic_answer": "Hola, aquí tienes un mensaje breve en español."
+}

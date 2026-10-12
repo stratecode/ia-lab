@@ -2,10 +2,11 @@
 
 ## Purpose
 
-This repository provisions and operates the StrateCode lab. The active host profile is a single CPU-only principal model and Open WebUI. The personal work assistant direction is defined in the master plan. The Go orchestrator, `lab-agent`, and `lab-agentd` remain in source as the legacy governed execution foundation; the orchestrator and Codex gateway are retired on the host.
+This repository provisions and operates the StrateCode lab. The active host profile is a single CPU-only principal model, shared `lab-secretary` service and Open WebUI. The personal work assistant direction is defined in the master plan. The Go orchestrator, `lab-agent`, and `lab-agentd` remain in source as the legacy governed execution foundation; the orchestrator and Codex gateway are retired on the host.
 
 Product truth lives in `docs/architecture/master-plan.md`.
 Operational bridge usage lives in `docs/local-bridge.md`.
+Secretary operations and OAuth live in `docs/secretary-operation.md`.
 System entry points live in `docs/system-usage.md`.
 Current deployment and evidence live in `docs/principal-model-operation.md`; reproduce with `playbooks/deploy-principal-model.yml`.
 
@@ -22,6 +23,7 @@ Current deployment and evidence live in `docs/principal-model-operation.md`; rep
 
 ## Repo Map
 
+- `cmd/lab-secretary` and `internal/secretary` — shared chat, Telegram adapter and readonly MCP connectors
 - `cmd/orchestrator-go` — main Go control plane entrypoint
 - `cmd/lab-agent` — local bridge CLI and TUI
 - `cmd/lab-agentd` — local bridge daemon

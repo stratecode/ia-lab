@@ -1,0 +1,99 @@
+- name: Require existing operator credentials
+  ansible.builtin.assert:
+    that:
+      - orchestrator_telegram_bot_token | length > 0
+      - orchestrator_telegram_allowed_users | length > 0
+      - (llama_cpp_instances | first).api_key | length > 0
+    fail_msg: "Telegram credentials and a principal model key are required."
+  no_log: true
+
+- name: Verify legacy orchestrator is stopped
+  ansible.builtin.command: systemctl is-active orchestrator
+  register: legacy_orchestrator_status
+  changed_when: false
+  failed_when: legacy_orchestrator_status.stdout == 'active'
+
+- name: Create secretary configuration directory
+  ansible.builtin.file:
+    path: /etc/lab-secretary
+    state: directory
+    mode: "0755"
+
+- name: Install secretary binary
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../dist/lab-secretary-linux-amd64"
+    dest: /usr/local/bin/lab-secretary
+    mode: "0755"
+  notify: Restart lab secretary
+
+- name: Install shared secretary instructions
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../skills/secretary-core/instructions.md"
+    dest: /etc/lab-secretary/instructions.md
+    mode: "0644"
+  notify: Restart lab secretary
+
+- name: Install private secretary environment
+  ansible.builtin.copy:
+    dest: /etc/lab-secretary/secretary.env
+    mode: "0600"
+    content: |
+      LAB_SECRETARY_LISTEN=127.0.0.1:{{ lab_secretary_port }}
+      LAB_SECRETARY_UPSTREAM=http://127.0.0.1:{{ llm_telemetry_port }}
+      LAB_SECRETARY_MODEL_KEY={{ (llama_cpp_instances | first).api_key }}
+      LAB_SECRETARY_INSTRUCTIONS=/etc/lab-secretary/instructions.md
+      LAB_SECRETARY_TELEGRAM_ENABLED={{ 'true' if lab_secretary_telegram_enabled else 'false' }}
+      LAB_SECRETARY_CONNECTORS={{ (lookup('ansible.builtin.file', lab_secretary_connectors_file) if lab_secretary_connectors_file | length > 0 else '{}') | b64encode }}
+      LAB_TELEGRAM_BOT_TOKEN={{ orchestrator_telegram_bot_token }}
+      LAB_TELEGRAM_ALLOWED_USERS={{ orchestrator_telegram_allowed_users }}
+  no_log: true
+  notify: Restart lab secretary
+
+- name: Install secretary systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/lab-secretary.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Shared personal secretary and Telegram adapter
+      After=network-online.target llm-telemetry.service
+      Wants=network-online.target
+
+      [Service]
+      DynamicUser=yes
+      StateDirectory=lab-secretary
+      StateDirectoryMode=0700
+      EnvironmentFile=/etc/lab-secretary/secretary.env
+      ExecStart=/usr/local/bin/lab-secretary
+      Restart=always
+      RestartSec=5
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      ProtectHome=yes
+      PrivateTmp=yes
+      UMask=0077
+      MemoryMax=128M
+      RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart lab secretary
+
+- name: Apply secretary changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable the shared secretary service
+  ansible.builtin.systemd:
+    name: lab-secretary
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Verify secretary HTTP health
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ lab_secretary_port }}/health"
+    status_code: 200
+  register: secretary_health
+  until: secretary_health.status == 200
+  retries: 15
+  delay: 2
