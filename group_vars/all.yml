@@ -275,8 +275,8 @@ llm_telemetry_port: 8081
 llm_telemetry_model_label: LFM2.5-1.2B-Instruct-Q4_0
 lab_secretary_enabled: true
 lab_secretary_port: 8082
-# Re-enable after locating the existing getUpdates consumer (Telegram HTTP 409).
-lab_secretary_telegram_enabled: false
+# Hermes gateway on the operator Mac was stopped after confirming its Telegram API connections.
+lab_secretary_telegram_enabled: true
 lab_secretary_connectors_file: "{{ lookup('env', 'LAB_SECRETARY_CONNECTORS_FILE') | default('', true) }}"
 open_webui_principal_model_name: LFM2.5 1.2B · Principal
 open_webui_default_model: main

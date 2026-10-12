@@ -1,0 +1,62 @@
+
+PLAY [Deploy shared secretary and reconnect Telegram] **************************
+
+TASK [Gathering Facts] *********************************************************
+ok: [lab]
+
+TASK [lab_secretary : Require existing operator credentials] *******************
+ok: [lab]
+
+TASK [lab_secretary : Verify legacy orchestrator is stopped] *******************
+ok: [lab]
+
+TASK [lab_secretary : Create secretary configuration directory] ****************
+ok: [lab]
+
+TASK [lab_secretary : Install secretary binary] ********************************
+ok: [lab]
+
+TASK [lab_secretary : Install shared secretary instructions] *******************
+ok: [lab]
+
+TASK [lab_secretary : Install private secretary environment] *******************
+changed: [lab]
+
+TASK [lab_secretary : Install secretary systemd unit] **************************
+ok: [lab]
+
+TASK [lab_secretary : Apply secretary changes] *********************************
+
+RUNNING HANDLER [lab_secretary : Restart lab secretary] ************************
+changed: [lab]
+
+TASK [lab_secretary : Enable the shared secretary service] *********************
+ok: [lab]
+
+TASK [lab_secretary : Verify secretary HTTP health] ****************************
+ok: [lab]
+
+TASK [open_webui : Ensure Open WebUI directories exist] ************************
+ok: [lab] => (item=/srv/ai-lab/open-webui)
+
+TASK [open_webui : Install Open WebUI compose file] ****************************
+ok: [lab]
+
+TASK [open_webui : Install Open WebUI environment file] ************************
+ok: [lab]
+
+TASK [open_webui : Start Open WebUI stack] *************************************
+changed: [lab]
+
+TASK [open_webui : Wait for Open WebUI before reconciling principal settings] ***
+ok: [lab]
+
+TASK [open_webui : Reconcile principal streaming and model capabilities] *******
+ok: [lab]
+
+TASK [open_webui : Publish Open WebUI DNS record through Route53] **************
+skipping: [lab]
+
+PLAY RECAP *********************************************************************
+lab                        : ok=17   changed=3    unreachable=0    failed=0    skipped=1    rescued=0    ignored=0   
+
