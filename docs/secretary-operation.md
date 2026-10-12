@@ -48,8 +48,8 @@ history. Shared persona and tools do **not** imply cross-channel memory syncing.
 
 Telegram accepts only private chats whose sender and chat IDs match an explicit
 operator allowlist. No group chats, shell, legacy `/launch` commands, Jira writes,
-calendar modifications or external message-sending tools are exposed. Voice,
-WhatsApp and Slack are later adapters. Poll offsets are checkpointed before
+calendar modifications or external message-sending tools are exposed. WhatsApp
+and Slack remain later adapters. Poll offsets are checkpointed before
 processing; after a crash during a request, resend that message rather than
 expecting replay. Model calls continue through Prometheus telemetry. Source-only
 commands bypass inference and are not counted as LLM generations.
@@ -62,6 +62,45 @@ restarts. If a timer expires while the service is down, its notification is sent
 after restart. Delivery is retried while Telegram is unavailable; because the
 send and local state update are separate operations, a crash between them can
 cause a duplicate notification.
+
+## Telegram voice notes
+
+The first voice path accepts complete Telegram voice notes up to 20 MiB and 120
+seconds, only after the private-chat sender and chat pass the same allowlist as
+text. The adapter downloads the note, converts OGG/Opus to WAV in memory, sends
+it to local Whisper with Spanish recognition, asks the principal model, delivers
+the written answer, then synthesizes and sends a Telegram voice reply. If speech
+synthesis or audio delivery fails, the written answer remains available. No audio
+or transcript is written to application logs or metrics; scratch conversion data
+is held in memory, and Whisper runs with a private temporary directory.
+
+Whisper runs CPU-only from `whisper.cpp` v1.9.5 using the multilingual
+`ggml-small-q5_1.bin` model with four threads by default. Piper runs
+`piper-tts` 1.8.0 with the Spanish `es_ES-sharvard-medium` voice. Both services
+bind only to `127.0.0.1`: Whisper on port 8083 and Piper on 8084. Their systemd
+units have separate memory and CPU ceilings. Tune `lab_whisper_threads`,
+`lab_whisper_cpu_quota`, `lab_whisper_memory_max`, `lab_piper_cpu_quota`, and
+`lab_piper_memory_max` in the tracked Ansible defaults before deployment.
+
+Voice timings are exposed on the secretary's loopback `/metrics` endpoint as
+`lab_secretary_voice_phase_duration_seconds`,
+`lab_secretary_voice_phase_calls_total`, and
+`lab_secretary_voice_request_duration_seconds`. Labels are fixed phase/result
+values; they never contain transcript, prompt, chat, user, or file identifiers.
+Use `python3 scripts/smoke-secretary-voice.py` on the lab host for a synthetic
+Piper → FFmpeg → Whisper check. It prints engine pins and timings, not the
+recognized phrase, and keeps audio in memory.
+
+To roll back the voice feature, set `lab_secretary_voice_enabled: false` in
+`playbooks/deploy-secretary.yml` and redeploy. This stops and disables Whisper
+and Piper and keeps text Telegram active; downloaded models and binaries remain
+on disk for a later re-enable. The switch is tracked in Git.
+
+The engine and voice have separate licenses: [whisper.cpp](https://github.com/ggml-org/whisper.cpp/blob/d1be6fde11ac6e0407606b4e42fe72d34add8037/LICENSE)
+and [Piper](https://github.com/OHF-Voice/piper1-gpl/blob/v1.8.0/LICENSE.md) are
+GPL-3.0-or-later; the [Spanish voice](https://huggingface.co/rhasspy/piper-voices/tree/v1.0.0/es/es_ES/sharvard/medium)
+is MIT-licensed. Review each license before redistributing a built image or
+model bundle.
 
 ## OAuth enrollment
 
@@ -145,7 +184,8 @@ SSE and a synthetic streamed answer with first-token / total time. It does not
 print real task or meeting content. Final acceptance also needs an actual
 operator message/reply on Telegram and real readonly Jira/Granola queries.
 
-Evidence: [validation directory](validation/2026-10-11-secretary-telegram/).
+Voice evidence: [validation directory](validation/2026-10-12-secretary-voice/).
+Telegram evidence: [validation directory](validation/2026-10-11-secretary-telegram/).
 Primary provider contracts: [Telegram Bot API](https://core.telegram.org/bots/api),
 [Atlassian MCP](https://atlassian.github.io/atlassian-mcp-server/),
 [supported tools](https://support.atlassian.com/atlassian-ai-gateway/docs/supported-tools/),
