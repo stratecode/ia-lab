@@ -14,6 +14,10 @@ Date: 2026-10-13
 - `lab-secretary` is deployed in polling mode; Telegram has not been switched.
 - The router rule is reported as WAN IPv4 TCP 443 to `192.168.0.85:443`.
 - The lab egress address and Route53 target both resolve to `213.37.7.25`.
+- `assistant.stratecode.com` has no `/etc/hosts` override on the Mac. The macOS
+  resolver, the local DNS resolver, Cloudflare and Google DNS all resolve it to
+  `213.37.7.25`; no AAAA record is published. Other lab subdomains do have
+  local overrides, but not this callback domain.
 
 ## Blocked external acceptance
 
@@ -24,13 +28,16 @@ Cyprus, Moldova, Romania, Austria and Poland:
 [probe 2](https://check-host.net/check-report/50a7f0e4k7d0),
 [probe 3](https://check-host.net/check-report/50a89effk288),
 [probe 4](https://check-host.net/check-report/50a8a49fk4ad),
-[probe 5](https://check-host.net/check-report/50a8aef0k782). During the last
-probe, a host capture filtered to TCP SYN packets for `192.168.0.85:443` from
-outside `192.168.0.0/16` recorded zero packets. This places the failure before
-the lab host; the router's configured forward is not delivering the probes,
-or an upstream network is filtering them. DNS and public egress match, and a
-local HTTPS request verifies TLS, so the Nginx vhost and certificate are
-working inside the lab.
+[probe 5](https://check-host.net/check-report/50a8aef0k782),
+[probe 6](https://check-host.net/check-report/50a8fb52k422). During the last
+two probes, host captures filtered to TCP SYN packets for `192.168.0.85:443`
+from outside `192.168.0.0/16` recorded zero packets. This places the failure
+before the lab host; the router's configured forward is not delivering the
+probes, or an upstream network is filtering them. The Mac's direct request to
+the public address also failed, but that result is not conclusive because LAN
+hairpin NAT may be unsupported. DNS and public egress match, and a local HTTPS
+request verifies TLS, so the Nginx vhost and certificate are working inside
+the lab.
 
 No webhook was registered with Telegram. Keep polling active until an external
 probe can complete TLS and receive the expected method/path responses. After
