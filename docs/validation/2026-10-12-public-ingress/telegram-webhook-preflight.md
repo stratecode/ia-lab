@@ -12,7 +12,9 @@ Date: 2026-10-13
   method.
 - The playbook contract tests, Go secretary tests and Ansible syntax checks pass.
 - `lab-secretary` is deployed in polling mode; Telegram has not been switched.
-- The router rule is reported as WAN IPv4 TCP 443 to `192.168.0.85:443`.
+- The router WAN IPv4 is `213.37.7.25`, matching DNS and lab egress. Its
+  current port-forward table contains Teredo UDP and WireGuard UDP 51820, but
+  no TCP 443 rule for `192.168.0.85`.
 - The lab egress address and Route53 target both resolve to `213.37.7.25`.
 - `assistant.stratecode.com` has no `/etc/hosts` override on the Mac. The macOS
   resolver, the local DNS resolver, Cloudflare and Google DNS all resolve it to
@@ -31,13 +33,13 @@ Cyprus, Moldova, Romania, Austria and Poland:
 [probe 5](https://check-host.net/check-report/50a8aef0k782),
 [probe 6](https://check-host.net/check-report/50a8fb52k422). During the last
 two probes, host captures filtered to TCP SYN packets for `192.168.0.85:443`
-from outside `192.168.0.0/16` recorded zero packets. This places the failure
-before the lab host; the router's configured forward is not delivering the
-probes, or an upstream network is filtering them. The Mac's direct request to
-the public address also failed, but that result is not conclusive because LAN
-hairpin NAT may be unsupported. DNS and public egress match, and a local HTTPS
-request verifies TLS, so the Nginx vhost and certificate are working inside
-the lab.
+from outside `192.168.0.0/16` recorded zero packets. The inspected router
+table has no TCP 443 forward, which explains why probes do not reach the lab.
+The Mac's direct request to the public address also failed, but that result is
+not conclusive because LAN hairpin NAT may be unsupported. DNS and public
+egress match, and a local HTTPS request verifies TLS, so the Nginx vhost and
+certificate are working inside the lab. If external probes still fail after
+the forward is added, inspect ISP filtering next.
 
 No webhook was registered with Telegram. Keep polling active until an external
 probe can complete TLS and receive the expected method/path responses. After
