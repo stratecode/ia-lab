@@ -183,8 +183,9 @@ Retrieval currently uses normalized Spanish keywords and recency, with a maximum
 of eight exchanges supplied to the model. It needs no vector database or extra
 model. Evaluate missed synonyms and irrelevant matches against real queries first;
 if lexical retrieval is insufficient, add local embeddings and an index only then.
-Track retrieval hit rate, selected-context size, and response latency without
-recording conversation content in metrics.
+To decide, evaluate a small set of real queries for retrieval hits, irrelevant
+matches, context size and latency. Those retrieval counters are not exposed as
+Prometheus metrics yet; when added, they must not contain conversation content.
 
 Whisper runs CPU-only from `whisper.cpp` v1.9.5 using the multilingual
 `ggml-small-q5_1.bin` model with four threads by default. Piper remains
