@@ -1,0 +1,32 @@
+---
+- name: Enable authenticated Open WebUI identity forwarding without rewriting credentials
+  hosts: all
+  become: true
+  tasks:
+    - name: Enable forwarding of Open WebUI user identity to model connections
+      ansible.builtin.lineinfile:
+        path: /srv/ai-lab/open-webui/open-webui.env
+        regexp: '^ENABLE_FORWARD_USER_INFO_HEADERS='
+        line: ENABLE_FORWARD_USER_INFO_HEADERS=True
+        mode: "0600"
+      no_log: true
+
+    - name: Recreate Open WebUI with identity forwarding enabled
+      ansible.builtin.command: docker compose up -d open-webui
+      args:
+        chdir: /srv/ai-lab/open-webui
+
+    - name: Verify Open WebUI health after restart
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - open-webui
+          - python3
+          - -c
+          - "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ['PORT'] + '/health', timeout=5)"
+      register: open_webui_health
+      changed_when: false
+      retries: 30
+      delay: 2
+      until: open_webui_health.rc == 0

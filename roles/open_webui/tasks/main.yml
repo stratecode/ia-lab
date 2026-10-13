@@ -38,6 +38,7 @@
     content: |
       WEBUI_AUTH=True
       ENABLE_PERSISTENT_CONFIG=False
+      ENABLE_FORWARD_USER_INFO_HEADERS=True
       DEFAULT_MODELS={{ open_webui_default_model | default("main") }}
       DEFAULT_MODEL_METADATA={"capabilities":{"builtin_tools":false,"vision":false}}
       DEFAULT_INTERFACE_SETTINGS={"params":{"stream_response":true}}

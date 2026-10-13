@@ -92,6 +92,9 @@ configured operators fail closed. This makes Open WebUI and Telegram share the
 same recent context and durable memory without merging identities. Open WebUI
 currently accepts text-only user messages through this route; multimodal messages
 receive an explicit client error instead of silently bypassing the router.
+The Open WebUI deployment enables `ENABLE_FORWARD_USER_INFO_HEADERS`; apply that
+setting without re-rendering credentials with
+`ansible-playbook playbooks/enable-open-webui-identity-headers.yml`.
 
 Slash commands also work in Open WebUI. `/reuniones` asks the principal model to
 turn up to five recent Granola note summaries into an executive brief with decisions,
