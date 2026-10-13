@@ -77,7 +77,7 @@ func TestConnectorDestinationsAndPartialCoverage(t *testing.T) {
 	s := New("http://127.0.0.1:1", "key", "instructions", t.TempDir(), map[int64]bool{7: true})
 	s.Sources = c
 	result := s.readSources(context.Background(), "/resumen")
-	if !strings.Contains(result, "Jira: no disponible") || !strings.Contains(result, "Granola: no conectado") {
+	if !strings.Contains(result, "Jira: no disponible") || !strings.Contains(result, "Granola: no disponible") {
 		t.Fatalf("missing coverage %q", result)
 	}
 }
@@ -100,6 +100,13 @@ func TestUnknownSourceSchemaIsNotAnEmptyInbox(t *testing.T) {
 	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: server.URL, AccessToken: "secret", CloudID: "cloud-1"}}, Client: server.Client(), allowTestHTTP: true}
 	if _, err := c.Jira(context.Background()); err == nil {
 		t.Fatal("unknown payload presented as zero issues")
+	}
+}
+
+func TestGranolaMissingConnectionIsAnErrorNotSourceContent(t *testing.T) {
+	connectors := NewConnectors(ConnectorConfig{}, t.TempDir())
+	if _, err := connectors.Granola(context.Background()); err == nil {
+		t.Fatal("expected unavailable Granola connection to be reported as an error")
 	}
 }
 

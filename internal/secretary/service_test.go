@@ -328,7 +328,7 @@ func (s *intentSource) Granola(context.Context) (string, error) {
 func (s *intentSource) Status() map[string]bool { return map[string]bool{"Granola": true} }
 
 func TestNaturalLanguageMeetingQuestionQueriesGranolaAndSummarizes(t *testing.T) {
-	const question = "¿Qué tareas debería hacer según las reuniones de esta mañana?"
+	const question = "Hola, dona. Oye, ¿qué tareas tengo pendientes de hacer según las reuniones que tenéis?"
 	const source = "Notas de Granola (últimos 7 días):\nPlanificación · 2026-10-12\nAcordamos publicar el viernes."
 	const summary = "Pendiente: publicar el viernes, según Planificación del 12 de octubre."
 	var modelCalls int
@@ -356,6 +356,99 @@ func TestNaturalLanguageMeetingQuestionQueriesGranolaAndSummarizes(t *testing.T)
 	answer, err := s.Reply(context.Background(), 7, question)
 	if err != nil || answer != summary || modelCalls != 1 || sourceReader.granolaCalls != 1 || sourceReader.jiraCalls != 0 {
 		t.Fatalf("answer=%q model=%d granola=%d jira=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.jiraCalls, err)
+	}
+}
+
+func TestGranolaCapabilityCarriesToNaturalTaskFollowUp(t *testing.T) {
+	const firstQuestion = "Hola, dona. Oye, ¿qué tareas tengo pendientes de hacer según las reuniones que tenéis?"
+	const followUp = "Hola, dona. Oye, ¿qué cosas tenemos que hacer para hoy?"
+	const source = "Notas de Granola (últimos 7 días):\nStandup semanal · 2026-10-13\nEnviar correos de configuración de Active Directory a Minicor."
+	const summary = "Hoy: enviar los correos de configuración de Active Directory a Minicor."
+	var modelCalls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
+		var body struct {
+			Messages []Turn `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		joined := ""
+		for _, message := range body.Messages {
+			joined += message.Content + "\n"
+		}
+		if !strings.Contains(joined, source) {
+			t.Errorf("expected Granola notes in synthesis context: %q", joined)
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
+	}))
+	defer upstream.Close()
+	sourceReader := &intentSource{granola: source}
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	s.Sources = sourceReader
+	if _, err := s.Reply(context.Background(), 7, firstQuestion); err != nil {
+		t.Fatal(err)
+	}
+	answer, err := s.Reply(context.Background(), 7, followUp)
+	if err != nil || answer != summary || modelCalls != 2 || sourceReader.granolaCalls != 2 || sourceReader.jiraCalls != 0 {
+		t.Fatalf("answer=%q model=%d granola=%d jira=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.jiraCalls, err)
+	}
+}
+
+func TestGranolaEmptyResultDoesNotLetModelInventGenericAdvice(t *testing.T) {
+	modelCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
+		io.WriteString(w, `{"choices":[{"message":{"content":"respuesta inventada"}}]}`)
+	}))
+	defer upstream.Close()
+	sourceReader := &intentSource{}
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	s.Sources = sourceReader
+	answer, err := s.Reply(context.Background(), 7, "¿Qué tareas tengo pendientes de las reuniones de esta mañana?")
+	if err != nil || answer != "No he encontrado notas en Granola que permitan verificarlo." || modelCalls != 0 || sourceReader.granolaCalls != 1 {
+		t.Fatalf("answer=%q model=%d granola=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, err)
+	}
+}
+
+func TestTaskQuestionWithoutMeetingNameUsesLLMClassifier(t *testing.T) {
+	const question = "¿Qué tareas me quedan para hoy?"
+	const source = "Notas de Granola: hoy quedó pendiente enviar el informe a Marta."
+	const summary = "Te queda enviar el informe a Marta."
+	var modelCalls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
+		var body struct {
+			Messages []Turn `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		prompt := body.Messages[0].Content
+		if strings.Contains(prompt, "Clasifica la intención") {
+			if strings.Contains(prompt, "Granola") && strings.Contains(prompt, "notas recientes de reuniones") {
+				io.WriteString(w, `{"choices":[{"message":{"content":"{\"intent\":\"tool\"}"}}]}`)
+			} else {
+				io.WriteString(w, `{"choices":[{"message":{"content":"{\"intent\":\"clarify\"}"}}]}`)
+			}
+			return
+		}
+		joined := ""
+		for _, message := range body.Messages {
+			joined += message.Content + "\n"
+		}
+		if !strings.Contains(joined, source) || !strings.Contains(joined, question) {
+			t.Errorf("model did not receive Granola notes and task question: %q", joined)
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
+	}))
+	defer upstream.Close()
+	sourceReader := &intentSource{granola: source}
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	s.Sources = sourceReader
+	answer, err := s.Reply(context.Background(), 7, question)
+	if err != nil || answer != summary || modelCalls != 2 || sourceReader.granolaCalls != 1 {
+		t.Fatalf("answer=%q model=%d granola=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, err)
 	}
 }
 

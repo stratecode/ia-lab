@@ -109,9 +109,12 @@ routing selects from a registry of read-only capabilities, each with its own
 matching rule, retrieval function and description. Granola is the first registered
 capability for actions, decisions or follow-ups from recent meetings; adding a
 source means registering another capability, not changing Telegram or the shared
-conversation pipeline. Ambiguous meeting questions use a constrained intent
-classification and ask for clarification when uncertain. The principal model
-synthesizes retrieved data and must not invent facts.
+conversation pipeline. Task-oriented questions that do not name a source use a
+constrained intent classification against the registered capabilities; a task
+follow-up also reuses the capability selected by the preceding user turn. The
+principal model synthesizes retrieved data and must not invent facts. If a source
+is unavailable or returns no notes, the service says so directly instead of
+asking the model to improvise from an empty result.
 Conversation memory is stored on the lab server as per-operator JSONL records
 with private file permissions. Lexical retrieval selects up to three relevant
 prior exchanges for context; `/new` clears only the short conversation window,

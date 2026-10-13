@@ -29,6 +29,9 @@ func localIntent(text string) secretaryIntent {
 	if hasMeeting {
 		return intentAmbiguous
 	}
+	if containsAny(query, "tarea", "pendiente", "accion", "hacer", "prioridad", "toca", "siguiente paso") {
+		return intentAmbiguous
+	}
 	return intentGeneral
 }
 

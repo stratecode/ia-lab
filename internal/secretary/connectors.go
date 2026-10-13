@@ -308,7 +308,7 @@ func (c *Connectors) Granola(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.Config.Granola.AccessToken == "" {
-		return "Granola: no conectado", nil
+		return "", errors.New("Granola no conectado")
 	}
 	if c.Config.Granola.ServerURL != "https://mcp.granola.ai/mcp" && !c.allowTestHTTP {
 		return "", errors.New("Granola credential destination rejected")
@@ -356,7 +356,7 @@ func (c *Connectors) Granola(ctx context.Context) (string, error) {
 	}
 	lines := []string{"Notas de Granola (últimos 7 días; muestra de hasta 5 reuniones):"}
 	if len(meetings) == 0 {
-		return strings.Join(append(lines, "La consulta no devolvió notas; esto no verifica que no haya reuniones."), "\n"), nil
+		return "", nil
 	}
 	ids := make([]string, 0, 5)
 	for i, item := range meetings {
