@@ -40,6 +40,20 @@ redeployed and the synthetic test passed again with the timings above.
 
 ## Telegram end-to-end
 
-Pending a brief voice note from the authorized operator account. On receipt,
-record only bounded metric counts and whether a written and playable voice
-reply arrived; do not record the note, transcript, prompt, or chat identifiers.
+Verified on 2026-10-13 after the operator sent a private voice note. Since the
+secretary's last restart, its in-memory counters show two successful voice
+requests. STT, LLM, and TTS each completed twice; Telegram send completed four
+times, matching one text and one voice send per request. Prometheus returned the
+same counts and `up{job="lab-secretary"} = 1`. Telegram accepted the voice sends;
+this confirms delivery API success, not that the operator played the audio.
+
+| Measurement | Count | Aggregate | Mean |
+|---|---:|---:|---:|
+| STT | 2 | 6.125 s | 3.063 s |
+| LLM | 2 | 4.145 s | 2.072 s |
+| TTS | 2 | 1.807 s | 0.904 s |
+| Telegram sends (text + voice) | 4 | 1.184 s | 0.296 s |
+| Voice request | 2 | 13.598 s | 6.799 s |
+
+Only bounded counts and durations are recorded. The note, transcription, prompt,
+and chat identifiers were not inspected or added to evidence.
