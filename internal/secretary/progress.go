@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-const defaultProgressDelay = 5 * time.Second
+const DefaultProgressDelay = 30 * time.Second
 
 type progressTracker struct {
 	mu     sync.Mutex
@@ -21,7 +21,7 @@ type progressTracker struct {
 
 func newProgressTracker(delay time.Duration, emit func(string)) *progressTracker {
 	if delay <= 0 {
-		delay = defaultProgressDelay
+		delay = DefaultProgressDelay
 	}
 	return &progressTracker{delay: delay, emit: emit, prefix: "Sigo con ello: "}
 }

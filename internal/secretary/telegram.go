@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -220,7 +221,7 @@ func (b *Bot) processUpdate(ctx context.Context, update Update) error {
 		return nil
 	}
 	_ = b.call(ctx, "sendChatAction", map[string]any{"chat_id": m.Chat.ID, "action": "typing"}, nil)
-	answer, err := b.Service.ReplyWithProgress(ctx, m.From.ID, m.Text, b.progressCallback(ctx, m.Chat.ID, tracker))
+	answer, err := b.Service.ReplyWithProgressInConversation(ctx, m.From.ID, "telegram", strconv.FormatInt(m.Chat.ID, 10), m.Text, b.progressCallback(ctx, m.Chat.ID, tracker))
 	if err != nil {
 		b.event("model_reply_error")
 		answer = "No he podido completar la respuesta. Reenvía tu consulta; no he ejecutado acciones externas."
@@ -441,7 +442,7 @@ func (b *Bot) processVoiceWithProgress(ctx context.Context, message *Message, tr
 	}
 	tracker.SetStage("interpretando tu consulta")
 	llmStarted := time.Now()
-	answer, llmErr := b.Service.ReplyWithProgress(ctx, message.From.ID, transcript, b.progressCallback(ctx, message.Chat.ID, tracker))
+	answer, llmErr := b.Service.ReplyWithProgressInConversation(ctx, message.From.ID, "telegram", strconv.FormatInt(message.Chat.ID, 10), transcript, b.progressCallback(ctx, message.Chat.ID, tracker))
 	b.observeVoicePhase(ctx, VoicePhaseLLM, llmStarted, llmErr)
 	if llmErr != nil {
 		requestResult = voiceMetricResult(llmErr)

@@ -141,7 +141,7 @@ func parseTelegramMode(value string) (telegramMode, error) {
 
 func parseProgressDelay(value string) (time.Duration, error) {
 	if strings.TrimSpace(value) == "" {
-		return 5 * time.Second, nil
+		return secretary.DefaultProgressDelay, nil
 	}
 	seconds, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil || seconds < 1 || seconds > 120 {

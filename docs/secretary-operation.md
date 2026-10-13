@@ -92,8 +92,8 @@ All text prompts in Open WebUI now use the same secretary router as Telegram;
 they are no longer forwarded directly to the model. Open WebUI requests are
 accepted only for its authenticated administrator, mapped to the lab's single
 allowlisted operator. Requests without trusted admin identity or with multiple
-configured operators fail closed. This makes Open WebUI and Telegram share the
-same recent context and durable memory without merging identities. Open WebUI
+configured operators fail closed. Open WebUI and Telegram share durable memory,
+while short-term history stays isolated by channel and conversation. Open WebUI
 currently accepts text-only user messages through this route; multimodal messages
 receive an explicit client error instead of silently bypassing the router.
 The Open WebUI deployment enables `ENABLE_FORWARD_USER_INFO_HEADERS`; apply that
@@ -152,7 +152,7 @@ is currently disabled. The adapter sends a brief written acknowledgement before
 processing, alternating between a small set of short phrasings so consecutive
 requests do not receive the same canned line. When a registered source is
 selected, it sends one short progress message before reading it. If a request
-still runs after `lab_secretary_progress_delay_seconds` (five seconds by
+still runs after `lab_secretary_progress_delay_seconds` (30 seconds by
 default), it sends at most one additional update naming the current phase, such
 as transcribing, interpreting, consulting a source, or preparing the answer.
 The update is canceled when the reply finishes before the threshold. The value
@@ -161,6 +161,30 @@ finishes with one concise answer. No audio or
 transcript is written to application logs or metrics; scratch conversion data
 is held in memory, and Whisper runs with a private temporary directory. Telegram
 renders Markdown bold as HTML and escapes other markup.
+
+## Conversation memory
+
+Short-term history is scoped to the operator, channel, and conversation ID. It
+keeps up to ten exchanges and expires turns after two hours; `/new` resets only
+the current conversation. Telegram uses the private chat ID. Open WebUI uses
+`X-OpenWebUI-Chat-Id` (or the compatible `chat_id` request field); the routed
+endpoint rejects a request without a stable chat ID rather than silently mixing
+unrelated chats. Existing Telegram history remains readable during migration.
+
+Long-term memory stores each question and answer in a local JSONL file partitioned
+by calendar day in Europe/Madrid, with the channel and a one-way conversation
+fingerprint. The old shared archive remains readable. Recall filters by date
+before ranking: for example, “la semana pasada” opens only the previous Monday
+through Sunday partitions. Queries without a date search the latest 30 days and
+the legacy archive. `/forget` removes both formats and every short-term history
+for the operator.
+
+Retrieval currently uses normalized Spanish keywords and recency, with a maximum
+of eight exchanges supplied to the model. It needs no vector database or extra
+model. Evaluate missed synonyms and irrelevant matches against real queries first;
+if lexical retrieval is insufficient, add local embeddings and an index only then.
+Track retrieval hit rate, selected-context size, and response latency without
+recording conversation content in metrics.
 
 Whisper runs CPU-only from `whisper.cpp` v1.9.5 using the multilingual
 `ggml-small-q5_1.bin` model with four threads by default. Piper remains

@@ -20,10 +20,17 @@ const (
 func localIntent(text string) secretaryIntent {
 	query := normalizedIntentText(text)
 	hasMeeting := containsAny(query, "granola", "reunion", "reuniones")
+	asksAboutPriorConversation := containsAny(query, "hablamos", "comentamos", "conversacion", "te conte", "te dije", "pregunte", "recuerdas", "acordamos") && containsAny(query, "semana pasada", "semana anterior", "ayer", "esta semana", "hoy", "otro dia")
+	if asksAboutPriorConversation {
+		return intentMemory
+	}
+	if !hasMeeting && containsAny(query, "que hablamos", "que comentamos", "que acordamos") {
+		return intentMemory
+	}
 	if hasMeeting && containsAny(query, "pendiente", "accion", "decision", "resumen", "recuerd", "ultima", "reciente", "acordamos", "hablamos", "compromiso", "tarea", "seguimiento", "que salio", "que se dijo") {
 		return intentCapability
 	}
-	if containsAny(query, "ya me habias dicho", "me habias respondido", "me respondiste antes", "ya me contestaste", "te pregunte antes", "que te pregunte", "que me dijiste", "que hablamos antes", "hablamos anteriormente", "en otra conversacion", "recuerdas que te", "recuerdame que te dije") {
+	if containsAny(query, "ya me habias dicho", "me habias respondido", "me respondiste antes", "ya me contestaste", "te pregunte antes", "que te pregunte", "que me dijiste", "que hablamos antes", "que hablamos la semana", "que hablamos esta semana", "que hablamos ayer", "que hablamos hoy", "que comentamos la semana", "que comentamos ayer", "que acordamos la semana", "hablamos anteriormente", "en otra conversacion", "recuerdas que te", "recuerdame que te dije") {
 		return intentMemory
 	}
 	if hasMeeting {

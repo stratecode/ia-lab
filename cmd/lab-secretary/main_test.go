@@ -30,7 +30,7 @@ func TestParseTelegramMode(t *testing.T) {
 
 func TestParseProgressDelay(t *testing.T) {
 	for input, want := range map[string]time.Duration{
-		"":   5 * time.Second,
+		"":   30 * time.Second,
 		"1":  time.Second,
 		"30": 30 * time.Second,
 	} {

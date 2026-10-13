@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -56,6 +55,7 @@ func TestSharedChatStreamingAndAuthentication(t *testing.T) {
 			r.Header.Set("X-OpenWebUI-User-Id", "owner")
 			r.Header.Set("X-OpenWebUI-User-Role", "admin")
 		}
+		r.Header.Set("X-OpenWebUI-Chat-Id", "stream-test")
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
 		if auth == "" && w.Code != 401 {
@@ -93,16 +93,18 @@ func TestOpenWebUINaturalLanguageUsesSharedRouterAndMemory(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer key")
 	request.Header.Set("X-OpenWebUI-User-Id", "owner")
 	request.Header.Set("X-OpenWebUI-User-Role", "admin")
+	request.Header.Set("X-OpenWebUI-Chat-Id", "natural-language-test")
 	result := httptest.NewRecorder()
 	s.Handler().ServeHTTP(result, request)
 	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), summary) || reader.granolaCalls != 1 || modelCalls != 1 {
 		t.Fatalf("Open WebUI answer=%q status=%d Granola=%d model=%d", result.Body.String(), result.Code, reader.granolaCalls, modelCalls)
 	}
-	if len(s.history[7]) != 2 || s.history[7][0].Content != "¿Tengo algo pendiente según las reuniones que he tenido?" {
-		t.Fatalf("Open WebUI exchange did not enter the shared operator history: %#v", s.history[7])
+	webHistory := s.history[s.historyKey(7, "openwebui", "natural-language-test")]
+	if len(webHistory) != 2 || webHistory[0].Content != "¿Tengo algo pendiente según las reuniones que he tenido?" {
+		t.Fatalf("Open WebUI exchange did not enter its conversation history: %#v", webHistory)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "telegram-memory-7.jsonl")); err != nil {
-		t.Fatalf("Open WebUI exchange did not enter durable shared memory: %v", err)
+	if _, err := os.Stat(s.dailyMemoryPath(7, time.Now())); err != nil {
+		t.Fatalf("Open WebUI exchange did not enter daily durable memory: %v", err)
 	}
 }
 
@@ -186,7 +188,7 @@ func TestMissingSourcesAreExplicitAndHistoryIsBounded(t *testing.T) {
 	if err != nil || !strings.Contains(reply, "Jira: no conectado") || !strings.Contains(reply, "Granola: no conectado") {
 		t.Fatalf("missing sources hidden: %q %v", reply, err)
 	}
-	messages := []Turn{{Role: "user", Content: strings.Repeat("a", 5000)}, {Role: "assistant", Content: "old"}, {Role: "user", Content: "new"}, {Role: "assistant", Content: "answer"}}
+	messages := []Turn{{Role: "user", Content: strings.Repeat("a", 13000)}, {Role: "assistant", Content: "old"}, {Role: "user", Content: "new"}, {Role: "assistant", Content: "answer"}}
 	got := bounded(messages)
 	if len(got) != 2 || got[0].Content != "new" {
 		t.Fatal("unbounded history or split exchange")
@@ -200,7 +202,7 @@ func TestUpstreamFailureDoesNotPersistFalseAnswer(t *testing.T) {
 	if _, err := s.Reply(context.Background(), 7, "Hola"); err == nil {
 		t.Fatal("upstream error ignored")
 	}
-	if len(s.history[7]) != 0 {
+	if len(s.history[s.historyKey(7, "telegram", "7")]) != 0 {
 		t.Fatal("failed exchange persisted")
 	}
 }
@@ -214,6 +216,7 @@ func TestBlankMessageAndWebUIReadCommand(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer key")
 	request.Header.Set("X-OpenWebUI-User-Id", "owner")
 	request.Header.Set("X-OpenWebUI-User-Role", "admin")
+	request.Header.Set("X-OpenWebUI-Chat-Id", "read-command-test")
 	result := httptest.NewRecorder()
 	s.Handler().ServeHTTP(result, request)
 	if result.Code != 200 || !strings.Contains(result.Body.String(), "Jira: no conectado") || !strings.Contains(result.Body.String(), "[DONE]") {
@@ -304,6 +307,7 @@ func TestWebUIReunionesUsesExecutiveSummaryModel(t *testing.T) {
 	request.Header.Set("Authorization", "Bearer key")
 	request.Header.Set("X-OpenWebUI-User-Id", "owner")
 	request.Header.Set("X-OpenWebUI-User-Role", "admin")
+	request.Header.Set("X-OpenWebUI-Chat-Id", "meeting-summary-test")
 	result := httptest.NewRecorder()
 	s.Handler().ServeHTTP(result, request)
 	if result.Code != 200 || !strings.Contains(result.Body.String(), summary) || strings.Contains(result.Body.String(), "lanzamiento el viernes.") {
@@ -575,7 +579,7 @@ func TestConversationMemorySurvivesBeyondRecentHistoryAndCanBeForgotten(t *testi
 	defer upstream.Close()
 	dir := t.TempDir()
 	s := New(upstream.URL, "key", "instructions", dir, map[int64]bool{7: true})
-	if _, err := s.Reply(context.Background(), 7, "¿Qué acordamos sobre el servicio Alfa?"); err != nil {
+	if _, err := s.Reply(context.Background(), 7, "Resume el acuerdo del servicio Alfa."); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 5; i++ {
@@ -594,7 +598,7 @@ func TestConversationMemorySurvivesBeyondRecentHistoryAndCanBeForgotten(t *testi
 	if !strings.Contains(joined, "El acuerdo Alfa fue desplegarlo el lunes.") || !strings.Contains(joined, "servicio Alfa") {
 		t.Fatalf("older conversation was not retrieved into context: %q", joined)
 	}
-	memoryPath := filepath.Join(dir, "telegram-memory-7.jsonl")
+	memoryPath := s.dailyMemoryPath(7, time.Now())
 	if _, err := os.Stat(memoryPath); err != nil {
 		t.Fatalf("conversation archive was not persisted: %v", err)
 	}
