@@ -15,6 +15,7 @@
       when: llm_telemetry_enabled
     - role: lab_secretary
       when: lab_secretary_enabled
+    - role: route53_ddns
     - open_webui
     - monitor
     - observability

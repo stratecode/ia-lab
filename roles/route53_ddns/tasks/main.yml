@@ -241,6 +241,132 @@
       }}
   when: route53_ddns_enabled
 
+- name: Resolve Route53 zone for the assistant alias
+  ansible.builtin.command:
+    argv:
+      - aws
+      - route53
+      - list-hosted-zones-by-name
+      - --dns-name
+      - "{{ route53_ddns_zone_name }}"
+      - --max-items
+      - "1"
+      - --query
+      - "HostedZones[0].[Name,Id]"
+      - --output
+      - text
+  register: route53_assistant_zone_lookup
+  changed_when: false
+  environment:
+    AWS_PROFILE: "{{ route53_ddns_aws_profile }}"
+    AWS_SHARED_CREDENTIALS_FILE: /root/.aws/credentials
+    AWS_CONFIG_FILE: /root/.aws/config
+  when:
+    - route53_ddns_enabled
+    - route53_ddns_has_credentials | default(false)
+    - route53_ddns_hosted_zone_id | length == 0
+
+- name: Select Route53 zone for the assistant alias
+  ansible.builtin.set_fact:
+    route53_assistant_zone_id: >-
+      {{
+        route53_ddns_hosted_zone_id
+        if route53_ddns_hosted_zone_id | length > 0
+        else (route53_assistant_zone_lookup.stdout.split() | last | regex_replace('^/hostedzone/', ''))
+      }}
+  when:
+    - route53_ddns_enabled
+    - route53_ddns_has_credentials | default(false)
+
+- name: Read existing Route53 records for assistant hostname
+  ansible.builtin.command:
+    argv:
+      - aws
+      - route53
+      - list-resource-record-sets
+      - --hosted-zone-id
+      - "{{ route53_assistant_zone_id }}"
+      - --start-record-name
+      - "{{ lab_assistant_domain }}."
+      - --max-items
+      - "100"
+      - --output
+      - json
+  register: route53_assistant_records_result
+  changed_when: false
+  environment:
+    AWS_PROFILE: "{{ route53_ddns_aws_profile }}"
+    AWS_SHARED_CREDENTIALS_FILE: /root/.aws/credentials
+    AWS_CONFIG_FILE: /root/.aws/config
+  when:
+    - route53_ddns_enabled
+    - route53_ddns_has_credentials | default(false)
+
+- name: Extract existing Route53 record types for assistant hostname
+  ansible.builtin.set_fact:
+    route53_assistant_existing_types: >-
+      {{
+        (route53_assistant_records_result.stdout | from_json).ResourceRecordSets
+        | selectattr('Name', 'equalto', lab_assistant_domain ~ '.')
+        | map(attribute='Type') | list
+      }}
+    route53_assistant_existing_cname_targets: >-
+      {{
+        (route53_assistant_records_result.stdout | from_json).ResourceRecordSets
+        | selectattr('Name', 'equalto', lab_assistant_domain ~ '.')
+        | selectattr('Type', 'equalto', 'CNAME')
+        | map(attribute='ResourceRecords') | flatten
+        | map(attribute='Value') | list
+      }}
+  when:
+    - route53_ddns_enabled
+    - route53_ddns_has_credentials | default(false)
+
+- name: Refuse to replace a non-CNAME assistant DNS record
+  ansible.builtin.fail:
+    msg: >-
+      {{ lab_assistant_domain }} already has Route53 record type(s)
+      {{ route53_assistant_existing_types | join(', ') }}. Remove or migrate
+      the conflicting record explicitly before enabling the assistant alias.
+  when:
+    - route53_ddns_enabled
+    - route53_ddns_has_credentials | default(false)
+    - (route53_assistant_existing_types | difference(['CNAME']) | length) > 0
+
+- name: Create or update assistant Route53 CNAME
+  ansible.builtin.command:
+    argv:
+      - aws
+      - route53
+      - change-resource-record-sets
+      - --hosted-zone-id
+      - "{{ route53_assistant_zone_id }}"
+      - --change-batch
+      - >-
+        {{
+          {
+            'Comment': 'Assistant public HTTPS ingress alias',
+            'Changes': [{
+              'Action': 'UPSERT',
+              'ResourceRecordSet': {
+                'Name': lab_assistant_domain,
+                'Type': 'CNAME',
+                'TTL': route53_assistant_cname_ttl,
+                'ResourceRecords': [{'Value': route53_assistant_cname_target}]
+              }
+            }]
+          } | to_json
+        }}
+  changed_when: true
+  environment:
+    AWS_PROFILE: "{{ route53_ddns_aws_profile }}"
+    AWS_SHARED_CREDENTIALS_FILE: /root/.aws/credentials
+    AWS_CONFIG_FILE: /root/.aws/config
+  when:
+    - route53_ddns_enabled
+    - route53_ddns_has_credentials | default(false)
+    - (route53_assistant_existing_cname_targets | first | default('')) != route53_assistant_cname_target
+
 - name: Enable and start Route53 DDNS timer
   ansible.builtin.systemd:
     name: route53-ddns.timer

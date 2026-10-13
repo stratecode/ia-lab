@@ -41,6 +41,7 @@ server_packages:
 cockpit_domain: "{{ lookup('env', 'LAB_COCKPIT_DOMAIN') | default('lab.localhost', true) }}"
 observability_domain: "{{ lookup('env', 'LAB_OBSERVABILITY_DOMAIN') | default('monitor.localhost', true) }}"
 open_webui_domain: "{{ lookup('env', 'LAB_CHAT_DOMAIN') | default('chat.localhost', true) }}"
+lab_assistant_domain: "{{ lookup('env', 'LAB_ASSISTANT_DOMAIN') | default('assistant.stratecode.com', true) }}"
 
 # ─── Monitor / Nginx / TLS ──────────────────────────────────────────────────
 monitor_backend_port: 9091
@@ -219,6 +220,8 @@ route53_ddns_record_name: "{{ lookup('env', 'LAB_DNS_RECORD_NAME') | default('vp
 route53_ddns_ttl: 300
 route53_ddns_interval: "5min"
 route53_ddns_aws_profile: "{{ lookup('env', 'LAB_DNS_AWS_PROFILE') | default('route53-dns', true) }}"
+route53_assistant_cname_target: "{{ route53_ddns_record_name }}"
+route53_assistant_cname_ttl: 300
 aws_cli_profiles: "{{ vault_aws_cli_profiles | default({}) }}"
 
 # ─── WireGuard ──────────────────────────────────────────────────────────────

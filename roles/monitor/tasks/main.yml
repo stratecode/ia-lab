@@ -160,7 +160,8 @@
           '--keep-until-expiring',
           '-d', cockpit_domain,
           '-d', observability_domain,
-          '-d', open_webui_domain
+          '-d', open_webui_domain,
+          '-d', lab_assistant_domain
         ]
         + (
           ['-d', codex_gateway_domain]
@@ -221,11 +222,64 @@
         )
       }}
 
+- name: Configure query-free access logging for public callback routes
+  ansible.builtin.copy:
+    dest: /etc/nginx/conf.d/assistant-callback-logs.conf
+    mode: "0644"
+    content: |
+      log_format callback '$request_method $uri $status';
+  notify: Reload nginx
+
 - name: Configure nginx reverse proxy for cockpit
   ansible.builtin.copy:
     dest: /etc/nginx/sites-available/monitor.conf
     mode: "0644"
     content: |
+      server {
+          listen 443 ssl default_server;
+          server_name _;
+          ssl_reject_handshake on;
+      }
+
+      server {
+          listen 443 ssl;
+          server_name {{ lab_assistant_domain }};
+
+          ssl_certificate {{ monitor_nginx_ssl_certificate }};
+          ssl_certificate_key {{ monitor_nginx_ssl_certificate_key }};
+          client_max_body_size 1m;
+          access_log /var/log/nginx/assistant-callback.log callback;
+
+          location = /telegram/webhook {
+              limit_except POST { deny all; }
+              if ($args != "") { return 400; }
+              proxy_pass http://127.0.0.1:{{ lab_secretary_port }}/telegram/webhook;
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_request_buffering on;
+              proxy_read_timeout 30s;
+          }
+
+          location = /oauth/jira/callback {
+              limit_except GET { deny all; }
+              proxy_pass http://127.0.0.1:18765/callback;
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+
+          location = /oauth/granola/callback {
+              limit_except GET { deny all; }
+              proxy_pass http://127.0.0.1:18766/callback;
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+
+          location / {
+              return 404;
+          }
+      }
+
       server {
           listen 80;
           listen [::]:80;
