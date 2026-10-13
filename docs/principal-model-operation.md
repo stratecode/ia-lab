@@ -3,10 +3,11 @@
 Current approved increment, October 11, 2026: a personal work assistant starts
 with one local model and browser conversation. The later objective is work
 context, Jira/Granola/email access and simple everyday agents, with voice through
-Telegram, WhatsApp and Slack outside the lab VPN/LAN. The follow-on [secretary increment](secretary-operation.md) adds a shared service
-for Open WebUI and prepares Telegram and readonly Jira/Granola. Telegram is paused
-for a competing gateway; OAuth consent and real provider verification are pending.
-Cross-conversation memory and voice are not deployed.
+Telegram, WhatsApp and Slack outside the lab VPN/LAN. The [secretary increment](secretary-operation.md)
+is deployed for Open WebUI and Telegram, including voice notes and read-only
+Jira/Granola integration support. Telegram currently uses polling. The dedicated assistant HTTPS vhost
+and DNS alias are deployed, but external TCP 443 probes time out, so webhook
+cutover remains gated on restoring external ingress.
 
 ## Configuration owned by this repository
 

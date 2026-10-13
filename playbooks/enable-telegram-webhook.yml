@@ -1,0 +1,137 @@
+---
+- name: Enable the Telegram webhook after public ingress acceptance
+  hosts: all
+  become: true
+
+  vars_files:
+    - ../group_vars/vault.yml
+
+  vars:
+    lab_secretary_telegram_mode: webhook
+    telegram_public_probe_passed: false
+
+  pre_tasks:
+    - name: Require a successful external TCP 443 and HTTPS route probe
+      ansible.builtin.assert:
+        that:
+          - telegram_public_probe_passed | bool
+        fail_msg: >-
+          Keep polling active until an external network confirms TCP 443,
+          trusted TLS, and the exact assistant webhook route.
+
+    - name: Keep the synthetic webhook probe outside the Telegram allowlist
+      ansible.builtin.assert:
+        that:
+          - "'987654321' not in (orchestrator_telegram_allowed_users | string).split(',')"
+        fail_msg: "The synthetic probe identity must remain unauthorized."
+
+  roles:
+    - lab_secretary
+
+  tasks:
+    - name: Read the root-private webhook secret without showing it
+      ansible.builtin.slurp:
+        src: /etc/lab-secretary/telegram-webhook.env
+      register: telegram_webhook_secret_file
+      no_log: true
+
+    - name: Extract the webhook secret for authenticated probes
+      ansible.builtin.set_fact:
+        telegram_webhook_secret: "{{ (telegram_webhook_secret_file.content | b64decode).split('=', 1)[1].strip() }}"
+      no_log: true
+
+    - name: Confirm a wrong secret is rejected before accepting an update
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ lab_secretary_port }}/telegram/webhook"
+        method: POST
+        headers:
+          X-Telegram-Bot-Api-Secret-Token: invalid-probe-secret
+        body_format: json
+        body:
+          update_id: 9000000000000000000
+          message:
+            message_id: 1
+            from:
+              id: 987654321
+            chat:
+              id: 987654321
+              type: private
+            text: webhook rejection probe
+        status_code: 401
+      no_log: true
+
+    - name: Persist a synthetic unauthorized update before acknowledging it
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ lab_secretary_port }}/telegram/webhook"
+        method: POST
+        headers:
+          X-Telegram-Bot-Api-Secret-Token: "{{ telegram_webhook_secret }}"
+        body_format: json
+        body:
+          update_id: 9000000000000000000
+          message:
+            message_id: 1
+            from:
+              id: 987654321
+            chat:
+              id: 987654321
+              type: private
+            text: webhook acceptance probe
+        status_code: 200
+      no_log: true
+
+    - name: Confirm duplicate delivery is acknowledged without a second update
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ lab_secretary_port }}/telegram/webhook"
+        method: POST
+        headers:
+          X-Telegram-Bot-Api-Secret-Token: "{{ telegram_webhook_secret }}"
+        body_format: json
+        body:
+          update_id: 9000000000000000000
+          message:
+            message_id: 1
+            from:
+              id: 987654321
+            chat:
+              id: 987654321
+              type: private
+            text: webhook acceptance probe
+        status_code: 200
+      no_log: true
+
+    - name: Register Telegram webhook without dropping pending updates
+      ansible.builtin.uri:
+        url: "https://api.telegram.org/bot{{ orchestrator_telegram_bot_token }}/setWebhook"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          url: "https://{{ lab_assistant_domain }}/telegram/webhook"
+          secret_token: "{{ telegram_webhook_secret }}"
+          drop_pending_updates: "false"
+          allowed_updates: '["message"]'
+        status_code: 200
+      register: telegram_set_webhook
+      no_log: true
+
+    - name: Confirm Telegram accepted the webhook URL
+      ansible.builtin.assert:
+        that:
+          - telegram_set_webhook.json.ok | bool
+        fail_msg: "Telegram did not accept the webhook configuration."
+      no_log: true
+
+    - name: Read Telegram webhook metadata
+      ansible.builtin.uri:
+        url: "https://api.telegram.org/bot{{ orchestrator_telegram_bot_token }}/getWebhookInfo"
+        method: GET
+        status_code: 200
+      register: telegram_webhook_info
+      no_log: true
+
+    - name: Verify Telegram reports the configured public endpoint
+      ansible.builtin.assert:
+        that:
+          - telegram_webhook_info.json.ok | bool
+          - telegram_webhook_info.json.result.url == 'https://' ~ lab_assistant_domain ~ '/telegram/webhook'
+        fail_msg: "Telegram webhook metadata does not match the assistant ingress URL."

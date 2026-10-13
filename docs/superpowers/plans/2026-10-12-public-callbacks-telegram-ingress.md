@@ -47,23 +47,23 @@
 - Refactor the existing `Bot` update handling into `processUpdate(context.Context, Update) error` so polling and webhook workers enforce identical private-chat allowlisting and reply behavior.
 - Queue limits: reject bodies over 1 MiB with 413; cap pending updates at 128 and return 503 when full; use durable pending/completed records and retain completed IDs for at least 48 hours to suppress Telegram retries.
 
-- [ ] **Step 1: Add failing tests** for `TestTelegramWebhookRejectsInvalidRequests`, `TestFileUpdateQueuePersistsAndDeduplicatesAcrossRestart`, `TestTelegramWebhookWorkerProcessesAllowedUpdate`, and `TestTelegramWebhookWorkerRetriesAfterRestart`.
-- [ ] **Step 2: Run the tests and confirm they fail** with missing webhook/queue behavior.
+- [x] **Step 1: Add failing tests** for `TestTelegramWebhookRejectsInvalidRequests`, `TestFileUpdateQueuePersistsAndDeduplicatesAcrossRestart`, `TestTelegramWebhookWorkerProcessesAllowedUpdate`, and `TestTelegramWebhookWorkerRetriesAfterRestart`.
+- [x] **Step 2: Run the tests and confirm they fail** with missing webhook/queue behavior.
 
 Run: `go test ./internal/secretary -run 'TestTelegramWebhook|TestFileUpdateQueue' -count=1`
 
 Expected: FAIL because the queue and webhook handler do not exist.
 
-- [ ] **Step 3: Implement the durable queue** with atomic private files under `StateDirectory`, FIFO selection by `update_id`, duplicate detection across pending and completed records, and recovery of pending work after process restart.
-- [ ] **Step 4: Implement the HTTP handler** to accept POST only, compare `X-Telegram-Bot-Api-Secret-Token` in constant time before reading JSON, bound the request body to 1 MiB, queue before returning 200, and return 503 if durable acceptance fails.
-- [ ] **Step 5: Extract shared update processing** into `Bot.processUpdate`; add the webhook worker that retries incomplete updates and records completion only after Telegram accepts the reply.
-- [ ] **Step 6: Run targeted and full secretary tests.**
+- [x] **Step 3: Implement the durable queue** with atomic private files under `StateDirectory`, FIFO selection by `update_id`, duplicate detection across pending and completed records, and recovery of pending work after process restart.
+- [x] **Step 4: Implement the HTTP handler** to accept POST only, compare `X-Telegram-Bot-Api-Secret-Token` in constant time before reading JSON, bound the request body to 1 MiB, queue before returning 200, and return 503 if durable acceptance fails.
+- [x] **Step 5: Extract shared update processing** into `Bot.processUpdate`; add the webhook worker that retries incomplete updates and records completion only after Telegram accepts the reply.
+- [x] **Step 6: Run targeted and full secretary tests.**
 
 Run: `go test ./internal/secretary -count=1`
 
 Expected: PASS, including existing polling behavior and the new queue/replay tests.
 
-- [ ] **Step 7: Commit** the queue, handler, shared processor, and tests.
+- [x] **Step 7: Commit** the queue, handler, shared processor, and tests.
 
 ### Task 2: Mutually exclusive secretary Telegram modes
 
@@ -79,23 +79,23 @@ Expected: PASS, including existing polling behavior and the new queue/replay tes
 - In `polling` mode, run the current polling loop and do not accept webhook updates. In `disabled` mode, start neither Telegram consumer.
 - Read `LAB_TELEGRAM_WEBHOOK_SECRET` only in webhook mode. Store the generated value in a root-owned mode-0600 host environment file; never include it in task output or the repository.
 
-- [ ] **Step 1: Add failing mode tests** `TestParseTelegramMode`, `TestWebhookModeDoesNotStartPolling`, and `TestDisabledModeStartsNoTelegramConsumer`.
-- [ ] **Step 2: Run the tests and confirm invalid/mutually active modes fail.**
+- [x] **Step 1: Add failing mode tests** `TestParseTelegramMode`, `TestWebhookModeDoesNotStartPolling`, and `TestDisabledModeStartsNoTelegramConsumer`.
+- [x] **Step 2: Run the tests and confirm invalid/mutually active modes fail.**
 
 Run: `go test ./cmd/lab-secretary -run 'Test(ParseTelegramMode|WebhookMode|DisabledMode)' -count=1`
 
 Expected: FAIL until mode selection and startup wiring exist.
 
-- [ ] **Step 3: Implement and validate mode parsing** in `cmd/lab-secretary/main.go`; reject unknown values at startup without printing secrets.
-- [ ] **Step 4: Wire the three modes** to the shared loopback HTTP server and the existing polling bot without starting both consumers.
-- [ ] **Step 5: Update Ansible runtime configuration** to preserve polling by default, generate the webhook secret idempotently on the host, load it through a root-protected systemd environment file, and avoid changing `.env` or `group_vars/vault.yml`.
-- [ ] **Step 6: Run Go tests, build, and secretary playbook syntax checks.**
+- [x] **Step 3: Implement and validate mode parsing** in `cmd/lab-secretary/main.go`; reject unknown values at startup without printing secrets.
+- [x] **Step 4: Wire the three modes** to the shared loopback HTTP server and the existing polling bot without starting both consumers.
+- [x] **Step 5: Update Ansible runtime configuration** to preserve polling by default, generate the webhook secret idempotently on the host, load it through a root-protected systemd environment file, and avoid changing `.env` or `group_vars/vault.yml`.
+- [x] **Step 6: Run Go tests, build, and secretary playbook syntax checks.**
 
 Run: `./scripts/test-orchestrator-go.sh && ./scripts/build-orchestrator-go.sh && ansible-playbook --syntax-check playbooks/deploy-secretary.yml`
 
 Expected: PASS; the deployed mode remains `polling`.
 
-- [ ] **Step 7: Commit** mode wiring, tests, and Ansible runtime configuration.
+- [x] **Step 7: Commit** mode wiring, tests, and Ansible runtime configuration.
 
 ### Task 3: Public OAuth redirect URIs and temporary reverse tunnel
 
@@ -137,17 +137,17 @@ Expected: PASS; invalid public origins and invalid callback state are rejected.
 - Create a dedicated Nginx vhost with exact routes: POST `/telegram/webhook` to `127.0.0.1:8082/telegram/webhook`; GET `/oauth/jira/callback` to `127.0.0.1:18765/callback`; GET `/oauth/granola/callback` to `127.0.0.1:18766/callback`.
 - For callback paths, log only method, normalized path, and status. Reject unknown TLS hosts, paths, and methods. Preserve every existing private vhost ACL.
 
-- [ ] **Step 1: Add failing Bats contract tests** for the CNAME target, certificate SAN, exact Nginx routes, loopback upstreams, sanitized logs, and rejection of unlisted paths.
-- [ ] **Step 2: Run `bats tests/properties/prop_public_ingress_contract.bats` and confirm it fails against the current role.**
-- [ ] **Step 3: Implement the idempotent Route53 CNAME reconciliation** in the existing role without adding work to the five-minute A-record refresh loop.
-- [ ] **Step 4: Add the hostname to Certbot DNS-01 and implement the dedicated Nginx TLS vhost** with exact path/method handling and an unknown-host TLS rejection.
-- [ ] **Step 5: Run the Bats contract and all affected Ansible syntax checks.**
+- [x] **Step 1: Add failing Bats contract tests** for the CNAME target, certificate SAN, exact Nginx routes, loopback upstreams, sanitized logs, and rejection of unlisted paths.
+- [x] **Step 2: Run `bats tests/properties/prop_public_ingress_contract.bats` and confirm it fails against the current role.**
+- [x] **Step 3: Implement the idempotent Route53 CNAME reconciliation** in the existing role without adding work to the five-minute A-record refresh loop.
+- [x] **Step 4: Add the hostname to Certbot DNS-01 and implement the dedicated Nginx TLS vhost** with exact path/method handling and an unknown-host TLS rejection.
+- [x] **Step 5: Run the Bats contract and all affected Ansible syntax checks.**
 
 Run: `bats tests/properties/prop_public_ingress_contract.bats && for playbook in playbooks/deploy-lab-surface.yml playbooks/deploy-principal-model.yml; do ansible-playbook --syntax-check "$playbook" || exit; done`
 
 Expected: PASS; current chat/monitoring ACLs and the DDNS A-record updater remain unchanged.
 
-- [ ] **Step 6: Commit** DNS, certificate, Nginx, and contract-test changes.
+- [x] **Step 6: Commit** DNS, certificate, Nginx, and contract-test changes.
 
 ### Task 5: Controlled webhook activation and rollback
 
@@ -164,22 +164,22 @@ Expected: PASS; current chat/monitoring ACLs and the DDNS A-record updater remai
 - `restore-telegram-polling.yml` calls `deleteWebhook` with pending updates preserved before deploying `polling` mode.
 - The normal deployment remains on polling until the operator completes the router and public-route checks.
 
-- [ ] **Step 1: Add failing/static playbook contract checks** in `tests/properties/prop_telegram_webhook_playbooks.bats` for deployment order, exact public URL, `drop_pending_updates=false`, rollback order, and `no_log: true` on all Telegram token/secret tasks.
-- [ ] **Step 2: Run the new contract checks and confirm they fail.**
-- [ ] **Step 3: Implement explicit activation and rollback playbooks** without changing the normal deployment's polling default.
-- [ ] **Step 4: Document manual router configuration:** reserve `192.168.0.85`, forward IPv4 TCP 443 only to `192.168.0.85:443`, keep ports 80/22/application ports closed, and verify IPv6 ingress is absent.
-- [ ] **Step 5: Run Bats tests, Go harness/build, Python checks, and syntax checks for all affected playbooks.**
+- [x] **Step 1: Add failing/static playbook contract checks** in `tests/properties/prop_telegram_webhook_playbooks.bats` for deployment order, exact public URL, `drop_pending_updates=false`, rollback order, and `no_log: true` on all Telegram token/secret tasks.
+- [x] **Step 2: Run the new contract checks and confirm they fail.**
+- [x] **Step 3: Implement explicit activation and rollback playbooks** without changing the normal deployment's polling default.
+- [ ] **Step 4: Document manual router configuration:** reserve `192.168.0.85`, forward IPv4 TCP 443 only to `192.168.0.85:443`, keep ports 80/22/application ports closed, and verify IPv6 ingress is absent. IPv4 rule documented; external IPv6 exposure still needs verification.
+- [x] **Step 5: Run Bats tests, Go harness/build, Python checks, and syntax checks for all affected playbooks.**
 
 Run: `./scripts/test-orchestrator-go.sh && ./scripts/build-orchestrator-go.sh && python3 scripts/test-secretary-oauth.py && python3 -m py_compile scripts/connect-secretary.py scripts/test-secretary-oauth.py && bats tests/properties/prop_public_ingress_contract.bats tests/properties/prop_telegram_webhook_playbooks.bats && for playbook in playbooks/deploy-secretary.yml playbooks/deploy-lab-surface.yml playbooks/deploy-principal-model.yml playbooks/enable-telegram-webhook.yml playbooks/restore-telegram-polling.yml; do ansible-playbook --syntax-check "$playbook" || exit; done`
 
 Expected: all checks PASS before live deployment.
 
-- [ ] **Step 6: Deploy DNS, certificate, Nginx, and secretary webhook support while polling remains active.** Verify the certificate, vhost, and secretary route locally before enabling router ingress.
-- [ ] **Step 7: Configure the router's manual forward** only after the host vhost is deployed. From an external network verify TCP 443, the certificate, exact routes, current chat ACLs, and that model/telemetry/application ports remain inaccessible. If 443 still times out, stop and diagnose router policy versus ISP filtering.
+- [x] **Step 6: Deploy DNS, certificate, Nginx, and secretary webhook support while polling remains active.** Verify the certificate, vhost, and secretary route locally before enabling router ingress.
+- [ ] **Step 7: Configure the router's manual forward** only after the host vhost is deployed. From an external network verify TCP 443, the certificate, exact routes, current chat ACLs, and that model/telemetry/application ports remain inaccessible. If 443 still times out, stop and diagnose router policy versus ISP filtering. Current check: TCP 443 timed out from six external nodes; ingress activation is blocked pending router/ISP diagnosis.
 - [ ] **Step 8: Test OAuth callback forwarding** with both helpers and invalid-state probes. Complete each provider separately; if a provider rejects the custom URI, leave that provider unconnected and continue with Telegram.
 - [ ] **Step 9: Activate Telegram webhook** only after a valid secret is enforced and a synthetic update is durably queued. Verify `getWebhookInfo`, deliver one allowlisted private message/reply, and test duplicate delivery and rollback. Change the committed default mode to `webhook` only after this live acceptance succeeds, so ordinary redeploys preserve the active transport.
-- [ ] **Step 10: Save sanitized live evidence** under `docs/validation/2026-10-12-public-ingress/`; do not include tokens, codes, message bodies, connector data, or private IP/secret-bearing environment output.
-- [ ] **Step 11: Commit** the runbooks, final operational state, and sanitized evidence.
+- [x] **Step 10: Save sanitized live evidence** under `docs/validation/2026-10-12-public-ingress/`; do not include tokens, codes, message bodies, connector data, or private IP/secret-bearing environment output.
+- [x] **Step 11: Commit** the runbooks, final operational state, and sanitized evidence (`9e51a78`).
 
 ## Self-Review
 

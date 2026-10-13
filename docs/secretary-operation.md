@@ -21,6 +21,45 @@ service logged `telegram_ready` without another 409. The check `getMe` confirmed
 reply remains the final delivery check. If Hermes is restarted, it may reclaim the
 bot and cause another polling conflict.
 
+## Telegram webhook ingress
+
+The repository provisions `https://assistant.stratecode.com/telegram/webhook`
+through an exact-match Nginx route to the loopback secretary. The public vhost
+rejects other paths and TLS hosts; callback access logs contain only method,
+normalized path and status. The webhook handler authenticates Telegram's secret
+header, limits request bodies, and persists/deduplicates updates before returning
+success. Polling, webhook and disabled modes are mutually exclusive. The normal
+deployment remains on polling.
+
+The assistant DNS alias, TLS certificate and Nginx route are deployed. Local
+Nginx validation passed and the loopback webhook path rejects GET with 403 as
+configured. Three TCP 443 probes from external networks timed out while the
+assistant DNS address matched the lab's current public egress address. The
+router/upstream ingress path is therefore still unverified; do not run the
+activation playbook until an external probe confirms TCP 443 and trusted HTTPS.
+The secretary remains available through Telegram polling while this is resolved.
+The router rule must forward IPv4 TCP 443 only to the reserved lab address
+`192.168.0.85:443`; do not forward ports 80, 22 or application ports, and do not
+add IPv6 ingress.
+
+After the external check succeeds, activate the transport with:
+
+```bash
+set -a
+source .env
+set +a
+ansible-playbook playbooks/enable-telegram-webhook.yml \
+  -e telegram_public_probe_passed=true
+```
+
+The playbook verifies wrong-secret rejection, durable acceptance and duplicate
+delivery locally before calling Telegram `setWebhook` with
+`drop_pending_updates=false`. It suppresses token and secret output. If delivery
+fails, use `playbooks/restore-telegram-polling.yml`; it deletes the webhook
+without dropping pending updates, then restarts the exclusive polling consumer.
+Do not run both consumers at once. The queue is at-least-once: a crash after a
+Telegram reply but before local completion can duplicate that reply.
+
 ## Commands and permissions
 
 | Command | Result |

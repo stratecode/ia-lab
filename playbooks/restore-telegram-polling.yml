@@ -1,0 +1,54 @@
+---
+- name: Restore Telegram polling while preserving pending updates
+  hosts: all
+  become: true
+
+  vars_files:
+    - ../group_vars/vault.yml
+
+  vars:
+    lab_secretary_telegram_mode: polling
+
+  tasks:
+    - name: Remove Telegram webhook without dropping pending updates
+      ansible.builtin.uri:
+        url: "https://api.telegram.org/bot{{ orchestrator_telegram_bot_token }}/deleteWebhook"
+        method: POST
+        body_format: form-urlencoded
+        body:
+          drop_pending_updates: "false"
+        status_code: 200
+      register: telegram_delete_webhook
+      no_log: true
+
+    - name: Confirm Telegram removed the webhook
+      ansible.builtin.assert:
+        that:
+          - telegram_delete_webhook.json.ok | bool
+        fail_msg: "Telegram did not remove the webhook; polling was not started."
+      no_log: true
+
+    - name: Deploy the mutually exclusive polling mode
+      ansible.builtin.import_role:
+        name: lab_secretary
+
+    - name: Verify secretary health after returning to polling
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ lab_secretary_port }}/health"
+        status_code: 200
+
+    - name: Verify Telegram reports no webhook
+      ansible.builtin.uri:
+        url: "https://api.telegram.org/bot{{ orchestrator_telegram_bot_token }}/getWebhookInfo"
+        method: GET
+        status_code: 200
+      register: telegram_webhook_info
+      no_log: true
+
+    - name: Confirm polling is clear to resume
+      ansible.builtin.assert:
+        that:
+          - telegram_webhook_info.json.ok | bool
+          - telegram_webhook_info.json.result.url == ''
+        fail_msg: "Telegram still reports a webhook; check its pending delivery state."
+      no_log: true
