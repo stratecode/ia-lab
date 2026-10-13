@@ -19,17 +19,20 @@ weights are removed after principal-model validation. Reproduction:
 `playbooks/deploy-principal-model.yml`.
 
 This increment provides browser conversation and persisted chat history.
-The next increment adds the shared `lab-secretary` service in front of telemetry
-and Open WebUI, bounded Telegram history, shared instructions and fixed readonly
-Jira/Granola commands. Telegram polling is paused because a competing Hermes
-gateway was located on the operator Mac. OAuth enrollment is prepared; real
-provider access remains pending operator consent and live schema validation.
-See [secretary operation](../secretary-operation.md). Cross-conversation work
-memory, speech recognition/synthesis and Slack/WhatsApp adapters remain future
-increments. Channel adapters share the principal and tool layer; conversation
-histories are currently separate. The channel boundary must authenticate the
-operator and preserve action permissions; a public inference endpoint is
-not required.
+The shared `lab-secretary` service fronts telemetry and Open WebUI, with bounded
+Telegram history, fixed read-only Jira/Granola commands and natural-language
+routing through a registry of read-only capabilities. Granola is the first
+registered capability for recent-meeting follow-ups; adding Jira, email or other
+sources should register a capability without changing the conversation flow.
+The secretary keeps per-operator memory on the lab server and retrieves relevant
+prior exchanges; `/new` clears short context and `/forget` deletes both memory
+and Telegram history. Telegram voice notes receive voice-only answers, while
+text receives text-only answers. Memory is not shared with Open WebUI yet, and
+Slack/WhatsApp adapters remain future work. See
+[secretary operation](../secretary-operation.md). Telegram polling is active;
+OAuth enrollment and live connector access are documented in the operation
+guide. The channel boundary must authenticate the operator and preserve action
+permissions; a public inference endpoint is not required.
 
 Secretary tooling and skill priorities are analyzed in
 `../research/2026-10-11-ai-secretary-tools-skills.md`. Six synthetic prompts on

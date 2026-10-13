@@ -62,11 +62,17 @@ Telegram reply but before local completion can duplicate that reply.
 
 ## Commands and permissions
 
+After building the Linux binary, update only this service with
+`ansible-playbook playbooks/deploy-secretary-runtime.yml`. The narrower playbook
+reuses the existing private inventory and vault configuration and leaves
+Open WebUI, telemetry, and the speech services untouched.
+
 | Command | Result |
 |---|---|
 | Plain text | Principal LFM conversation with shared secretary instructions |
 | `/help`, `/start` | Telegram help |
-| `/new` | Clear this operator's Telegram conversation; UI chats stay in Open WebUI |
+| `/new` | Clear this operator's recent Telegram context; durable memory remains |
+| `/forget` | Delete this operator's durable secretary memory and Telegram history |
 | `/status` | Connector configuration status; does not prove provider connectivity |
 | `/jira` | Up to five open issues assigned to the authorised Jira account |
 | `/reuniones` | Executive summary of up to five Granola notes from the last seven days; uses note summaries, never transcripts |
@@ -79,11 +85,20 @@ Source commands also work in Open WebUI. `/reuniones` asks the principal model t
 turn up to five recent Granola note summaries into an executive brief with decisions,
 actions and reminders. The source window is the last seven days, not a full calendar
 query; missing owners and dates are never inferred, and transcripts are excluded.
-Jira and `/resumen` still return source-labelled fields directly. This POC does not
-yet support natural-language tool selection. Telegram history is persisted as complete
-exchanges, bounded to eight turns / 4,000 characters; source command results enter
-that context when they fit the limit. Open WebUI owns its separate conversation
-history. Shared persona and tools do **not** imply cross-channel memory syncing.
+Jira and `/resumen` still return source-labelled fields directly. Natural-language
+routing selects from a registry of read-only capabilities, each with its own
+matching rule, retrieval function and description. Granola is the first registered
+capability for actions, decisions or follow-ups from recent meetings; adding a
+source means registering another capability, not changing Telegram or the shared
+conversation pipeline. Ambiguous meeting questions use a constrained intent
+classification and ask for clarification when uncertain. The principal model
+synthesizes retrieved data and must not invent facts.
+Conversation memory is stored on the lab server as per-operator JSONL records
+with private file permissions. Lexical retrieval selects up to three relevant
+prior exchanges for context; `/new` clears only the short conversation window,
+while `/forget` removes both that window and durable memory. Memory stores text,
+including voice transcripts and replies, but never audio. Open WebUI keeps its
+separate history; cross-channel memory sync is not implemented yet.
 
 Telegram accepts only private chats whose sender and chat IDs match an explicit
 operator allowlist. No group chats, shell, legacy `/launch` commands, Jira writes,
@@ -107,11 +122,12 @@ cause a duplicate notification.
 The first voice path accepts complete Telegram voice notes up to 20 MiB and 120
 seconds, only after the private-chat sender and chat pass the same allowlist as
 text. The adapter downloads the note, converts OGG/Opus to WAV in memory, sends
-it to local Whisper with Spanish recognition, asks the principal model, delivers
-the written answer, then synthesizes and sends a Telegram voice reply. If speech
-synthesis or audio delivery fails, the written answer remains available. No audio
-or transcript is written to application logs or metrics; scratch conversion data
-is held in memory, and Whisper runs with a private temporary directory.
+it to local Whisper with Spanish recognition, asks the principal model, then
+synthesizes and sends only a Telegram voice reply. Text input receives only a
+text reply. If speech synthesis or audio delivery fails, the voice request fails
+without sending a duplicate text answer. No audio or transcript is written to
+application logs or metrics; scratch conversion data is held in memory, and
+Whisper runs with a private temporary directory.
 
 Whisper runs CPU-only from `whisper.cpp` v1.9.5 using the multilingual
 `ggml-small-q5_1.bin` model with four threads by default. Piper runs

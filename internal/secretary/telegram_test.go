@@ -185,11 +185,11 @@ func TestUnauthorizedVoiceDoesNotDownloadFile(t *testing.T) {
 func TestVoiceDisabledDoesNotDownloadOrCallInference(t *testing.T) {
 	bot, speech, _, state := newVoiceTestBot(t, voiceTestConfig{fileBytes: []byte("ogg"), fileSize: 3, duration: 3})
 	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: 3, FileSize: 3}}
-	if err := bot.processVoice(context.Background(), message); err != nil {
-		t.Fatal(err)
+	if err := bot.processVoice(context.Background(), message); err == nil {
+		t.Fatal("disabled voice should be rejected")
 	}
-	if state.getFileCalls != 0 || state.downloads != 0 || speech.transCalls != 0 || state.modelCalls != 0 || len(state.textReplies) != 1 || !strings.Contains(state.textReplies[0], "desactivada") {
-		t.Fatalf("disabled voice did not fail closed with a notice: state=%+v speech=%d", state, speech.transCalls)
+	if state.getFileCalls != 0 || state.downloads != 0 || speech.transCalls != 0 || state.modelCalls != 0 || len(state.textReplies) != 0 || state.voiceReplies != 0 {
+		t.Fatalf("disabled voice triggered work or sent a different modality: state=%+v speech=%d", state, speech.transCalls)
 	}
 }
 
@@ -207,34 +207,34 @@ func TestVoiceRejectsOversizedAndOverDurationUpdates(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			bot, speech, _, state := newVoiceTestBot(t, tt.cfg)
 			message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: tt.cfg.duration, FileSize: tt.cfg.fileSize}}
-			if err := bot.processVoice(context.Background(), message); err != nil {
-				t.Fatal(err)
+			if err := bot.processVoice(context.Background(), message); err == nil {
+				t.Fatal("invalid voice should be rejected")
 			}
 			if speech.transCalls != 0 || state.modelCalls != 0 || state.voiceReplies != 0 {
 				t.Fatalf("rejected voice triggered inference: state=%+v speech calls=%d", state, speech.transCalls)
 			}
-			if len(state.textReplies) != 1 {
-				t.Fatalf("expected a rejection notice: %+v", state)
+			if len(state.textReplies) != 0 {
+				t.Fatalf("rejected voice sent a text reply: %+v", state)
 			}
 		})
 	}
 }
 
-func TestVoiceTranscribesRepliesTextThenVoice(t *testing.T) {
+func TestVoiceTranscribesRepliesOnlyVoice(t *testing.T) {
 	bot, speech, audio, state := newVoiceTestBot(t, voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg-input"), fileSize: 9, duration: 4})
 	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: 4, FileSize: 9}}
 	if err := bot.processVoice(context.Background(), message); err != nil {
 		t.Fatal(err)
 	}
-	wantEvents := []string{"getFile", "download", "sendMessage", "synthesize", "sendVoice"}
+	wantEvents := []string{"getFile", "download", "synthesize", "sendVoice"}
 	if strings.Join(state.events, ",") != strings.Join(wantEvents, ",") {
 		t.Fatalf("flow events = %v, want %v", state.events, wantEvents)
 	}
 	if speech.transCalls != 1 || speech.synthCalls != 1 || audio.toWAVCalls != 1 || audio.toOGGCalls != 1 || state.modelCalls != 1 || state.voiceReplies != 1 {
 		t.Fatalf("unexpected flow counts: state=%+v speech=%+v audio=%+v", state, speech, audio)
 	}
-	if len(state.textReplies) != 1 || state.textReplies[0] != "Respuesta de prueba" {
-		t.Fatalf("text answer was not delivered first: %+v", state.textReplies)
+	if len(state.textReplies) != 0 {
+		t.Fatalf("voice request was duplicated as text: %+v", state.textReplies)
 	}
 }
 
@@ -244,19 +244,19 @@ func TestVoiceSTTFailureDoesNotCallModel(t *testing.T) {
 	if err := bot.processVoice(context.Background(), message); err != nil {
 		t.Fatal(err)
 	}
-	if state.modelCalls != 0 || speech.synthCalls != 0 || len(state.textReplies) != 1 || !strings.Contains(strings.ToLower(state.textReplies[0]), "no he podido entender") {
-		t.Fatalf("failed transcription did not stop cleanly: state=%+v speech=%+v", state, speech)
+	if state.modelCalls != 0 || speech.synthCalls != 1 || len(state.textReplies) != 0 || state.voiceReplies != 1 {
+		t.Fatalf("failed transcription did not remain voice-only: state=%+v speech=%+v", state, speech)
 	}
 }
 
-func TestVoiceTTSFailureKeepsTextReply(t *testing.T) {
+func TestVoiceTTSFailureDoesNotSendTextReply(t *testing.T) {
 	bot, speech, _, state := newVoiceTestBot(t, voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg"), fileSize: 3, duration: 3, synthErr: io.ErrUnexpectedEOF})
 	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: 3, FileSize: 3}}
 	if err := bot.processVoice(context.Background(), message); err == nil {
 		t.Fatal("expected a TTS failure after the text reply was sent")
 	}
-	if len(state.textReplies) != 1 || state.textReplies[0] != "Respuesta de prueba" || speech.synthCalls != 1 || state.voiceReplies != 0 {
-		t.Fatalf("TTS failure suppressed text or sent a voice: state=%+v speech=%+v", state, speech)
+	if len(state.textReplies) != 0 || speech.synthCalls != 1 || state.voiceReplies != 0 {
+		t.Fatalf("TTS failure sent a duplicate text answer: state=%+v speech=%+v", state, speech)
 	}
 }
 

@@ -53,7 +53,7 @@ func TestVoiceFlowObservesBoundedPhaseMetrics(t *testing.T) {
 		`lab_secretary_voice_phase_calls_total{phase="stt",result="ok"} 1`,
 		`lab_secretary_voice_phase_calls_total{phase="llm",result="ok"} 1`,
 		`lab_secretary_voice_phase_calls_total{phase="tts",result="ok"} 1`,
-		`lab_secretary_voice_phase_calls_total{phase="telegram_send",result="ok"} 2`,
+		`lab_secretary_voice_phase_calls_total{phase="telegram_send",result="ok"} 1`,
 		`lab_secretary_voice_request_duration_seconds_count{result="ok"} 1`,
 	} {
 		if !strings.Contains(body, want) {

@@ -265,10 +265,12 @@ func (b *Bot) processVoice(ctx context.Context, message *Message) (returnErr err
 		return errors.New("unauthorized voice message")
 	}
 	if !b.VoiceEnabled {
-		return b.sendVoiceMessage(ctx, message.Chat.ID, "La recepción de notas de voz está desactivada.")
+		requestResult = VoiceResultError
+		return errors.New("voice handling is disabled")
 	}
 	if b.Speech == nil || b.Audio == nil {
-		return b.sendVoiceMessage(ctx, message.Chat.ID, "La voz no está disponible ahora mismo; puedes escribirme por texto.")
+		requestResult = VoiceResultError
+		return errors.New("voice response is unavailable")
 	}
 	voice := message.Voice
 	maxDuration := b.VoiceMaxDuration
@@ -277,7 +279,7 @@ func (b *Bot) processVoice(ctx context.Context, message *Message) (returnErr err
 	}
 	if voice.FileID == "" || voice.Duration <= 0 || time.Duration(voice.Duration) > maxDuration/time.Second || voice.FileSize < 0 || voice.FileSize > maxTelegramFileBytes {
 		requestResult = VoiceResultError
-		return b.sendVoiceMessage(ctx, message.Chat.ID, "La nota de voz supera el límite permitido o no tiene metadatos válidos.")
+		return errors.New("invalid or oversized Telegram voice metadata")
 	}
 	var file struct {
 		FilePath string `json:"file_path"`
@@ -312,7 +314,7 @@ func (b *Bot) processVoice(ctx context.Context, message *Message) (returnErr err
 	ogg, err := io.ReadAll(io.LimitReader(response.Body, maxTelegramFileBytes+1))
 	if len(ogg) > maxTelegramFileBytes {
 		requestResult = VoiceResultError
-		return b.sendVoiceMessage(ctx, message.Chat.ID, "La nota de voz supera el límite permitido de 20 MB.")
+		return errors.New("Telegram voice exceeds the size limit")
 	}
 	if err != nil || len(ogg) == 0 {
 		return errors.New("telegram voice download failed")
@@ -322,10 +324,7 @@ func (b *Bot) processVoice(ctx context.Context, message *Message) (returnErr err
 	if sttErr != nil {
 		b.observeVoicePhase(ctx, VoicePhaseSTT, sttStarted, sttErr)
 		requestResult = voiceMetricResult(sttErr)
-		if err := b.sendVoiceMessage(ctx, message.Chat.ID, "No he podido entender la nota de voz. ¿Puedes enviar otra con más claridad?"); err != nil {
-			return errors.New("telegram voice reply failed")
-		}
-		return nil
+		return b.sendVoiceOnly(ctx, message.Chat.ID, "No he podido entender la nota de voz. ¿Puedes enviar otra con más claridad?")
 	}
 	transcript, sttErr := b.Speech.Transcribe(ctx, wav)
 	if sttErr == nil && strings.TrimSpace(transcript) == "" {
@@ -334,10 +333,7 @@ func (b *Bot) processVoice(ctx context.Context, message *Message) (returnErr err
 	b.observeVoicePhase(ctx, VoicePhaseSTT, sttStarted, sttErr)
 	if sttErr != nil {
 		requestResult = voiceMetricResult(sttErr)
-		if sendErr := b.sendVoiceMessage(ctx, message.Chat.ID, "No he podido entender la nota de voz. ¿Puedes enviar otra con más claridad?"); sendErr != nil {
-			return errors.New("telegram voice reply failed")
-		}
-		return nil
+		return b.sendVoiceOnly(ctx, message.Chat.ID, "No he podido entender la nota de voz. ¿Puedes enviar otra con más claridad?")
 	}
 	llmStarted := time.Now()
 	answer, llmErr := b.Service.Reply(ctx, message.From.ID, transcript)
@@ -346,23 +342,24 @@ func (b *Bot) processVoice(ctx context.Context, message *Message) (returnErr err
 		requestResult = voiceMetricResult(llmErr)
 		answer = "No he podido completar la respuesta. Reenvía tu consulta por texto; no he ejecutado acciones externas."
 	}
-	if err := b.sendVoiceMessage(ctx, message.Chat.ID, answer); err != nil {
-		return errors.New("telegram text reply failed")
+	return b.sendVoiceOnly(ctx, message.Chat.ID, answer)
+}
+
+func (b *Bot) sendVoiceOnly(ctx context.Context, chat int64, text string) error {
+	if b.Speech == nil || b.Audio == nil {
+		return errors.New("voice response is unavailable")
 	}
-	ttsStarted := time.Now()
-	wavReply, ttsErr := b.Speech.Synthesize(ctx, answer)
-	var oggReply []byte
-	if ttsErr == nil {
-		oggReply, ttsErr = b.Audio.ToOGGOpus(ctx, wavReply)
+	started := time.Now()
+	wav, err := b.Speech.Synthesize(ctx, text)
+	var ogg []byte
+	if err == nil {
+		ogg, err = b.Audio.ToOGGOpus(ctx, wav)
 	}
-	b.observeVoicePhase(ctx, VoicePhaseTTS, ttsStarted, ttsErr)
-	if ttsErr != nil {
+	b.observeVoicePhase(ctx, VoicePhaseTTS, started, err)
+	if err != nil {
 		return errors.New("telegram speech synthesis failed")
 	}
-	if err := b.sendVoice(ctx, message.Chat.ID, oggReply); err != nil {
-		return err
-	}
-	return nil
+	return b.sendVoice(ctx, chat, ogg)
 }
 
 func (b *Bot) observeVoicePhase(ctx context.Context, phase VoicePhase, started time.Time, err error) {
