@@ -70,6 +70,10 @@ restores the previous binary if health verification fails. Existing credentials
 and service configuration stay in place; Open WebUI, telemetry and speech
 services are not restarted.
 
+To deploy only Piper voice settings and shared response instructions, run
+`ansible-playbook playbooks/deploy-secretary-voice.yml`. This restarts `lab-piper`
+when its unit changes and `lab-secretary` when the instructions change.
+
 | Command | Result |
 |---|---|
 | Plain text | Natural-language routing, shared operator memory and principal LFM synthesis, from Telegram or Open WebUI |
