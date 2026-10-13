@@ -25,10 +25,13 @@ routing through a registry of read-only capabilities. Granola is the first
 registered capability for recent-meeting follow-ups; adding Jira, email or other
 sources should register a capability without changing the conversation flow.
 The secretary keeps per-operator memory on the lab server and retrieves relevant
-prior exchanges; `/new` clears short context and `/forget` deletes both memory
-and Telegram history. Telegram voice notes receive voice-only answers, while
-text receives text-only answers. Memory is not shared with Open WebUI yet, and
-Slack/WhatsApp adapters remain future work. See
+prior exchanges. Telegram and Open WebUI use the same routing, capability and
+memory layer; `/new` clears shared short context and `/forget` deletes shared
+memory, while each channel retains its own visible chat history. Open WebUI is
+restricted to its authenticated administrator mapped to the single lab operator.
+Telegram voice notes receive voice-only answers, while text receives text-only
+answers. Slack/WhatsApp adapters remain future work and must plug into this same
+router. See
 [secretary operation](../secretary-operation.md). Telegram polling is active;
 OAuth enrollment and live connector access are documented in the operation
 guide. The channel boundary must authenticate the operator and preserve action

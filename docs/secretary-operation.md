@@ -1,14 +1,15 @@
 # Shared secretary operation
 
 Increment prepared on October 12, 2026. The active LFM principal is unchanged.
-`lab-secretary` adds shared instructions and deterministic read commands in front
-of the existing telemetry proxy. It runs on host loopback `127.0.0.1:8082`.
+`lab-secretary` is the shared channel router for the principal model, registered
+read-only capabilities, conversation memory and telemetry. It runs on host
+loopback `127.0.0.1:8082`.
 Open WebUI at `https://chat.stratecode.com` uses `/v1` on that service.
 
 ```text
 Open WebUI ───────────┐
-Telegram private chat ├─ lab-secretary :8082 ─ llm-telemetry :8081 ─ llama.cpp :8080
-                     └─ fixed read-only MCP calls ─ Jira / Granola
+Telegram private chat ├─ shared router + memory ─ llm-telemetry :8081 ─ llama.cpp :8080
+Future channels ─────┘                    └───── registered read-only capabilities
 ```
 
 Telegram polling is enabled and active in the lab. The operator approved stopping
@@ -71,10 +72,10 @@ services are not restarted.
 
 | Command | Result |
 |---|---|
-| Plain text | Principal LFM conversation with shared secretary instructions |
-| `/help`, `/start` | Telegram help |
-| `/new` | Clear this operator's recent Telegram context; durable memory remains |
-| `/forget` | Delete this operator's durable secretary memory and Telegram history |
+| Plain text | Natural-language routing, shared operator memory and principal LFM synthesis, from Telegram or Open WebUI |
+| `/help`, `/start` | Secretary help |
+| `/new` | Clear the secretary's recent shared context; channel-native chat histories and durable memory remain |
+| `/forget` | Delete the operator's durable secretary memory and recent shared context |
 | `/status` | Connector configuration status; does not prove provider connectivity |
 | `/jira` | Up to five open issues assigned to the authorised Jira account |
 | `/reuniones` | Executive summary of up to five Granola notes from the last seven days; uses note summaries, never transcripts |
@@ -83,7 +84,16 @@ services are not restarted.
 | `/timers` | List this operator's active timers and remaining time |
 | `/cancel ID` | Cancel one of this operator's active timers |
 
-Source commands also work in Open WebUI. `/reuniones` asks the principal model to
+All text prompts in Open WebUI now use the same secretary router as Telegram;
+they are no longer forwarded directly to the model. Open WebUI requests are
+accepted only for its authenticated administrator, mapped to the lab's single
+allowlisted operator. Requests without trusted admin identity or with multiple
+configured operators fail closed. This makes Open WebUI and Telegram share the
+same recent context and durable memory without merging identities. Open WebUI
+currently accepts text-only user messages through this route; multimodal messages
+receive an explicit client error instead of silently bypassing the router.
+
+Slash commands also work in Open WebUI. `/reuniones` asks the principal model to
 turn up to five recent Granola note summaries into an executive brief with decisions,
 actions and reminders. The source window is the last seven days, not a full calendar
 query; missing owners and dates are never inferred, and transcripts are excluded.
@@ -99,13 +109,15 @@ Conversation memory is stored on the lab server as per-operator JSONL records
 with private file permissions. Lexical retrieval selects up to three relevant
 prior exchanges for context; `/new` clears only the short conversation window,
 while `/forget` removes both that window and durable memory. Memory stores text,
-including voice transcripts and replies, but never audio. Open WebUI keeps its
-separate history; cross-channel memory sync is not implemented yet.
+including voice transcripts and replies, but never audio. Open WebUI retains its
+own visible chat history while its new turns also enter the secretary's shared
+operator memory.
 
 Telegram accepts only private chats whose sender and chat IDs match an explicit
 operator allowlist. No group chats, shell, legacy `/launch` commands, Jira writes,
 calendar modifications or external message-sending tools are exposed. WhatsApp
-and Slack remain later adapters. Poll offsets are checkpointed before
+and Slack remain later adapters; they should register transport identity and
+call this same router rather than implement their own model or tool flow. Poll offsets are checkpointed before
 processing; after a crash during a request, resend that message rather than
 expecting replay. Model calls continue through Prometheus telemetry. Source-only
 commands bypass inference and are not counted as LLM generations.

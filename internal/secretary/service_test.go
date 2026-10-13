@@ -31,7 +31,6 @@ func TestPrivateAllowlistAndNoLegacyCommands(t *testing.T) {
 }
 
 func TestSharedChatStreamingAndAuthentication(t *testing.T) {
-	const stream = "data: {\"choices\":[{\"delta\":{\"content\":\"Hola\"}}]}\n\ndata: [DONE]\n\n"
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer key" {
 			t.Error("upstream auth lost")
@@ -39,28 +38,101 @@ func TestSharedChatStreamingAndAuthentication(t *testing.T) {
 		var b map[string]any
 		json.NewDecoder(r.Body).Decode(&b)
 		if b["stream"] != true {
-			t.Error("stream flag changed")
+			t.Error("secretary should preserve model token streaming")
 		}
 		messages := b["messages"].([]any)
 		if messages[0].(map[string]any)["content"] != "shared instructions" {
-			t.Error("shared skill missing")
+			t.Error("shared instructions missing")
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		io.WriteString(w, stream)
+		io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"Ho\"}}]}\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"la\"}}]}\n\ndata: [DONE]\n\n")
 	}))
 	defer upstream.Close()
 	s := New(upstream.URL, "key", "shared instructions", t.TempDir(), map[int64]bool{7: true})
 	for _, auth := range []string{"", "Bearer key"} {
 		r := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"main","stream":true,"messages":[{"role":"user","content":"Hola"}]}`))
 		r.Header.Set("Authorization", auth)
+		if auth != "" {
+			r.Header.Set("X-OpenWebUI-User-Id", "owner")
+			r.Header.Set("X-OpenWebUI-User-Role", "admin")
+		}
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
 		if auth == "" && w.Code != 401 {
 			t.Fatal("missing auth accepted")
 		}
-		if auth != "" && (w.Code != 200 || w.Body.String() != stream) {
-			t.Fatalf("stream changed: %d %q", w.Code, w.Body.String())
+		if auth != "" && (w.Code != 200 || !strings.Contains(w.Body.String(), `"content":"Ho"`) || !strings.Contains(w.Body.String(), `"content":"la"`) || !strings.Contains(w.Body.String(), "[DONE]")) {
+			t.Fatalf("stream response invalid: %d %q", w.Code, w.Body.String())
 		}
+	}
+}
+
+func TestOpenWebUINaturalLanguageUsesSharedRouterAndMemory(t *testing.T) {
+	const source = "Notas de Granola: lanzamiento el viernes."
+	const summary = "Granola indica que el lanzamiento queda para el viernes."
+	var modelCalls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
+		var body struct {
+			Messages []Turn `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Messages) < 2 || !strings.Contains(body.Messages[len(body.Messages)-1].Content, source) {
+			t.Errorf("shared router did not pass Granola context to the model: %#v", body.Messages)
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
+	}))
+	defer upstream.Close()
+	dir := t.TempDir()
+	s := New(upstream.URL, "key", "shared secretary instructions", dir, map[int64]bool{7: true})
+	reader := &intentSource{granola: source}
+	s.Sources = reader
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"main","stream":false,"messages":[{"role":"user","content":"¿Tengo algo pendiente según las reuniones que he tenido?"}]}`))
+	request.Header.Set("Authorization", "Bearer key")
+	request.Header.Set("X-OpenWebUI-User-Id", "owner")
+	request.Header.Set("X-OpenWebUI-User-Role", "admin")
+	result := httptest.NewRecorder()
+	s.Handler().ServeHTTP(result, request)
+	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), summary) || reader.granolaCalls != 1 || modelCalls != 1 {
+		t.Fatalf("Open WebUI answer=%q status=%d Granola=%d model=%d", result.Body.String(), result.Code, reader.granolaCalls, modelCalls)
+	}
+	if len(s.history[7]) != 2 || s.history[7][0].Content != "¿Tengo algo pendiente según las reuniones que he tenido?" {
+		t.Fatalf("Open WebUI exchange did not enter the shared operator history: %#v", s.history[7])
+	}
+	if _, err := os.Stat(filepath.Join(dir, "telegram-memory-7.jsonl")); err != nil {
+		t.Fatalf("Open WebUI exchange did not enter durable shared memory: %v", err)
+	}
+}
+
+func TestOpenWebUIRejectsUntrustedOrAmbiguousIdentity(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		io.WriteString(w, `{"choices":[{"message":{"content":"should not run"}}]}`)
+	}))
+	defer upstream.Close()
+	request := func(role string, allowed map[int64]bool) *httptest.ResponseRecorder {
+		s := New(upstream.URL, "key", "instructions", t.TempDir(), allowed)
+		r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"messages":[{"role":"user","content":"Hola"}]}`))
+		r.Header.Set("Authorization", "Bearer key")
+		r.Header.Set("X-OpenWebUI-User-Id", "owner")
+		r.Header.Set("X-OpenWebUI-User-Role", role)
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		return w
+	}
+	for _, w := range []*httptest.ResponseRecorder{
+		request("user", map[int64]bool{7: true}),
+		request("admin", map[int64]bool{7: true, 8: true}),
+	} {
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("untrusted or ambiguous identity accepted: %d %s", w.Code, w.Body.String())
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("unauthorized Open WebUI request reached model: %d calls", calls)
 	}
 }
 
@@ -140,6 +212,8 @@ func TestBlankMessageAndWebUIReadCommand(t *testing.T) {
 	}
 	request := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"main","stream":true,"messages":[{"role":"user","content":"/resumen"}]}`))
 	request.Header.Set("Authorization", "Bearer key")
+	request.Header.Set("X-OpenWebUI-User-Id", "owner")
+	request.Header.Set("X-OpenWebUI-User-Role", "admin")
 	result := httptest.NewRecorder()
 	s.Handler().ServeHTTP(result, request)
 	if result.Code != 200 || !strings.Contains(result.Body.String(), "Jira: no conectado") || !strings.Contains(result.Body.String(), "[DONE]") {
@@ -228,6 +302,8 @@ func TestWebUIReunionesUsesExecutiveSummaryModel(t *testing.T) {
 	s.Sources = executiveSummarySource{granola: "Notas de Granola (últimos 7 días; muestra de hasta 5 reuniones):\nLanzamiento · 2026-10-12\nAcordamos publicar el viernes."}
 	request := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"main","stream":false,"messages":[{"role":"user","content":"/reuniones"}]}`))
 	request.Header.Set("Authorization", "Bearer key")
+	request.Header.Set("X-OpenWebUI-User-Id", "owner")
+	request.Header.Set("X-OpenWebUI-User-Role", "admin")
 	result := httptest.NewRecorder()
 	s.Handler().ServeHTTP(result, request)
 	if result.Code != 200 || !strings.Contains(result.Body.String(), summary) || strings.Contains(result.Body.String(), "lanzamiento el viernes.") {
