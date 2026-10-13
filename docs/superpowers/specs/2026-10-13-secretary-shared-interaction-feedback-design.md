@@ -51,13 +51,13 @@ An instruction such as `Cierra la tarea STRAT-42 para Acme` produces 👍 to ack
 Channel adapters render the same event meaning and source copy:
 
 - **Telegram:** use `setMessageReaction` on the authorized incoming message for 🔍, ✅, or 👍. Use one active reaction per message. Send a concise text message when a source lookup or supported action actually starts, and a final text answer when complete. Reaction API failure must not stop the request or suppress its answer.
-- **OpenWebUI:** include the same semantic emoji and contextual source update in the assistant response stream, then stream the final answer in the same chat. Preserve the existing streaming response contract and identity checks.
+- **OpenWebUI:** for streaming requests, emit the same semantic emoji and contextual source update as assistant SSE content before streaming the final answer in the same chat. For non-streaming requests, include a concise source update in the final assistant message only when a lookup actually starts. Preserve the existing streaming response contract and identity checks.
 - **Future channels:** Slack and WhatsApp adapters map the event to a native reaction when supported; otherwise render the same emoji with the corresponding short text. They must not implement their own intent classifier.
 
 Suggested shared Spanish copy:
 
 - Lookup: `Déjame revisar {source}.`
-- Action recognized but unavailable: `He entendido que quieres {action}. Ahora mismo solo puedo consultar {source}; no puedo aplicar ese cambio.`
+- Action recognized but unavailable: if the action requires finding an item and a read capability is available, `Buscando {item} en {source}; por ahora solo puedo consultarlo, no aplicar cambios.` If no capability is available, say that directly without claiming a lookup started.
 - Supported action starting: `Voy a {action} en {source}.`
 - Delayed work: a varied, concise message naming the current stage, sent once after 30 seconds.
 
