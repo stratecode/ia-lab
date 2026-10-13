@@ -266,6 +266,24 @@ func TestSharedChatNonStreamingProgressOnlyWhenLookupStarts(t *testing.T) {
 		}
 	})
 
+	t.Run("read-only action is acknowledged without claiming a change", func(t *testing.T) {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, `{"choices":[{"message":{"content":"He encontrado la tarea STRAT-42."}}]}`)
+		}))
+		defer upstream.Close()
+		s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+		s.Capabilities = []ReadCapability{{
+			Name: "Jira", Description: "tareas actuales",
+			Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "jira") },
+			Read:  func(context.Context, string) (string, error) { return "La tarea STRAT-42 sigue abierta.", nil },
+		}}
+		result := performOpenWebUIChat(t, s, "Cierra la tarea STRAT-42 en Jira", false)
+		body := result.Body.String()
+		if !strings.Contains(body, "👍") || !strings.Contains(body, "Buscando en Jira; esta conexión solo permite consultar.") || !strings.Contains(body, "No he cambiado nada; solo he consultado Jira.") {
+			t.Fatalf("read-only action feedback is missing or claims a write: %q", body)
+		}
+	})
+
 	t.Run("unsupported action has no source feedback", func(t *testing.T) {
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			body, _ := io.ReadAll(r.Body)
