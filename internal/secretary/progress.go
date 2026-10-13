@@ -20,13 +20,14 @@ type progressTracker struct {
 }
 
 type interactionProgressTracker struct {
-	mu     sync.Mutex
-	delay  time.Duration
-	stage  string
-	timer  *time.Timer
-	sent   bool
-	closed bool
-	emit   InteractionObserver
+	mu       sync.Mutex
+	delay    time.Duration
+	stage    string
+	timer    *time.Timer
+	emitDone chan struct{}
+	sent     bool
+	closed   bool
+	emit     InteractionObserver
 }
 
 func newInteractionProgressTracker(delay time.Duration, emit InteractionObserver) *interactionProgressTracker {
@@ -49,6 +50,7 @@ func (p *interactionProgressTracker) Observe(event InteractionEvent) {
 		p.mu.Unlock()
 		return
 	}
+	var waitForEmit chan struct{}
 	switch event.Kind {
 	case EventIntentRecognized:
 		p.stage = "preparando la respuesta"
@@ -70,11 +72,15 @@ func (p *interactionProgressTracker) Observe(event InteractionEvent) {
 		if p.timer != nil {
 			p.timer.Stop()
 		}
+		waitForEmit = p.emitDone
 	}
 	emit := p.emit
 	p.mu.Unlock()
 	if event.Kind != EventStageChanged && event.Kind != EventWorkDelayed && emit != nil {
 		emit(event)
+	}
+	if waitForEmit != nil {
+		<-waitForEmit
 	}
 }
 
@@ -88,9 +94,12 @@ func (p *interactionProgressTracker) sendDelayed() {
 		return
 	}
 	p.sent = true
+	done := make(chan struct{})
+	p.emitDone = done
 	event := InteractionEvent{Kind: EventWorkDelayed, Stage: p.stage}
 	emit := p.emit
 	p.mu.Unlock()
+	defer close(done)
 	emit(event)
 }
 
@@ -99,10 +108,14 @@ func (p *interactionProgressTracker) Close() {
 		return
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.closed = true
 	if p.timer != nil {
 		p.timer.Stop()
+	}
+	done := p.emitDone
+	p.mu.Unlock()
+	if done != nil {
+		<-done
 	}
 }
 

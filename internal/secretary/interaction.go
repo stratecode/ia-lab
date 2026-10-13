@@ -101,6 +101,16 @@ func interactionMeaning(intent secretaryIntent, text string) InteractionMeaning 
 }
 
 func explicitAgreement(query string) bool {
+	if containsAny(query,
+		"no estoy de acuerdo",
+		"no me parece bien",
+		"no me parece correcto",
+		"no coincido contigo",
+		"no lo apruebo",
+		"no acepto la propuesta",
+	) {
+		return false
+	}
 	return containsAny(query,
 		"estoy de acuerdo",
 		"de acuerdo contigo",
