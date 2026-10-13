@@ -1,0 +1,37 @@
+---
+- name: Publish Atlassian domain verification file
+  hosts: all
+  become: true
+  gather_facts: false
+
+  vars:
+    atlassian_verification_filename: atlassian-domain-verification-c6745070-eb80-4e07-981f-901946f6c29c.html
+
+  tasks:
+    - name: Copy verification file to the web root
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../roles/monitor/files/{{ atlassian_verification_filename }}"
+        dest: "/var/www/html/{{ atlassian_verification_filename }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Allow only the verification file on the public assistant virtual host
+      ansible.builtin.blockinfile:
+        path: /etc/nginx/sites-available/monitor.conf
+        insertafter: '^\s*access_log /var/log/nginx/assistant-callback\.log callback;$'
+        marker: "# {mark} ANSIBLE MANAGED ATLASSIAN DOMAIN VERIFICATION"
+        block: |
+          location = /{{ atlassian_verification_filename }} {
+              limit_except GET { deny all; }
+              root /var/www/html;
+          }
+      notify: Validate and reload nginx
+
+    - name: Flush nginx validation and reload
+      ansible.builtin.meta: flush_handlers
+
+  handlers:
+    - name: Validate and reload nginx
+      ansible.builtin.shell: nginx -t && systemctl reload nginx
+      changed_when: true

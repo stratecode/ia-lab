@@ -32,6 +32,29 @@ class OAuthTests(unittest.TestCase):
         self.assertIn("search:jira:agent-interface", scopes)
         self.assertFalse(any(x.startswith(("write:", "delete:", "manage:")) for x in scopes))
 
+    def test_callback_uri_supports_public_https_origin_for_each_provider(self):
+        origin = "https://assistant.stratecode.com"
+        self.assertEqual(module.callback_uri("jira", 18765, origin),
+                         "https://assistant.stratecode.com/oauth/jira/callback")
+        self.assertEqual(module.callback_uri("granola", 18766, origin),
+                         "https://assistant.stratecode.com/oauth/granola/callback")
+
+    def test_callback_uri_preserves_localhost_default(self):
+        self.assertEqual(module.callback_uri("jira", 18765, None),
+                         "http://127.0.0.1:18765/callback")
+
+    def test_public_callback_origin_must_be_exact_trusted_https_origin(self):
+        for origin in (
+            "http://assistant.stratecode.com",
+            "https://assistant.stratecode.com/",
+            "https://assistant.stratecode.com/path",
+            "https://attacker.example",
+            "https://user@assistant.stratecode.com",
+            "https://assistant.stratecode.com:443",
+        ):
+            with self.subTest(origin=origin), self.assertRaises(ValueError):
+                module.callback_uri("jira", 18765, origin)
+
     def test_secret_file_is_private_and_preserves_other_provider(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'connectors.json'

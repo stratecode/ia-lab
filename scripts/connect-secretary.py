@@ -46,6 +46,16 @@ def callback_code(query, expected):
     return code[0]
 
 
+def callback_uri(provider, port, public_origin=None):
+    if provider not in PROVIDERS:
+        raise ValueError('Unknown OAuth provider')
+    if public_origin is None:
+        return f'http://127.0.0.1:{port}/callback'
+    if public_origin != 'https://assistant.stratecode.com':
+        raise ValueError('Public OAuth origin must be the configured HTTPS assistant domain')
+    return f'{public_origin}/oauth/{provider}/callback'
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         raise ValueError("OAuth HTTP redirect rejected")
@@ -103,9 +113,9 @@ def save_config(path, provider, value):
             os.unlink(tmp)
 
 
-def connect(provider, path, port, cloud_id):
+def connect(provider, path, port, cloud_id, public_origin=None):
     auth = discover(provider)
-    redirect = f'http://127.0.0.1:{port}/callback'
+    redirect = callback_uri(provider, port, public_origin)
     state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
     received = {}
@@ -174,13 +184,14 @@ def main():
     parser.add_argument('--output', type=Path, default=Path('~/.config/stratecode-lab/secretary-connectors.json'))
     parser.add_argument('--port', type=int, default=18765)
     parser.add_argument('--cloud-id', default='')
+    parser.add_argument('--public-origin', default=None)
     args = parser.parse_args()
     try:
         if args.discover:
             auth = discover(args.provider)
             print(json.dumps({k: auth[k] for k in ('issuer', 'authorization_endpoint', 'token_endpoint', 'registration_endpoint')}, indent=2))
         else:
-            connect(args.provider, args.output, args.port, args.cloud_id)
+            connect(args.provider, args.output, args.port, args.cloud_id, args.public_origin)
     except KeyboardInterrupt:
         raise SystemExit('OAuth cancelled')
     except Exception as error:

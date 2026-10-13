@@ -230,6 +230,12 @@
       log_format callback '$request_method $uri $status';
   notify: Reload nginx
 
+- name: Publish Atlassian domain verification file
+  ansible.builtin.copy:
+    src: atlassian-domain-verification-c6745070-eb80-4e07-981f-901946f6c29c.html
+    dest: /var/www/html/atlassian-domain-verification-c6745070-eb80-4e07-981f-901946f6c29c.html
+    mode: "0644"
+
 - name: Configure nginx reverse proxy for cockpit
   ansible.builtin.copy:
     dest: /etc/nginx/sites-available/monitor.conf
@@ -249,6 +255,11 @@
           ssl_certificate_key {{ monitor_nginx_ssl_certificate_key }};
           client_max_body_size 1m;
           access_log /var/log/nginx/assistant-callback.log callback;
+
+          location = /atlassian-domain-verification-c6745070-eb80-4e07-981f-901946f6c29c.html {
+              limit_except GET { deny all; }
+              root /var/www/html;
+          }
 
           location = /telegram/webhook {
               limit_except POST { deny all; }
