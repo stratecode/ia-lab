@@ -46,6 +46,44 @@ type InteractionEvent struct {
 
 type InteractionObserver func(InteractionEvent)
 
+func interactionEmoji(event InteractionEvent) string {
+	if event.Kind != EventIntentRecognized {
+		return ""
+	}
+	switch event.Meaning {
+	case InteractionLookup:
+		return "🔍"
+	case InteractionAgreement:
+		return "✅"
+	case InteractionAction:
+		return "👍"
+	default:
+		return ""
+	}
+}
+
+func interactionProgressText(event InteractionEvent) string {
+	switch event.Kind {
+	case EventLookupStarted:
+		source := boundedLabel(event.Source)
+		if source == "" {
+			return ""
+		}
+		if event.Meaning == InteractionAction {
+			return "Buscando en " + source + "; esta conexión solo permite consultar."
+		}
+		return "Déjame revisar " + source + "."
+	case EventWorkDelayed:
+		stage := strings.TrimSpace(event.Stage)
+		if stage == "" {
+			return ""
+		}
+		return "Esto está tardando más de lo previsto; sigo " + stage + "."
+	default:
+		return ""
+	}
+}
+
 func interactionMeaning(intent secretaryIntent, text string) InteractionMeaning {
 	query := normalizedIntentText(text)
 	if explicitAgreement(query) {

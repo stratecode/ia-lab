@@ -23,6 +23,155 @@ func TestVoiceUpdateUnmarshalsTelegramVoice(t *testing.T) {
 	}
 }
 
+func TestTelegramRendersInteractionReactionAndProgress(t *testing.T) {
+	for meaning, want := range map[InteractionMeaning]string{
+		InteractionLookup:    "🔍",
+		InteractionAgreement: "✅",
+		InteractionAction:    "👍",
+	} {
+		if got := telegramReaction(meaning); got != want {
+			t.Errorf("telegramReaction(%q) = %q, want %q", meaning, got, want)
+		}
+	}
+
+	type apiRequest struct {
+		method  string
+		payload map[string]json.RawMessage
+	}
+	var requests []apiRequest
+	telegramAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Errorf("invalid Telegram payload: %v", err)
+		}
+		method := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		requests = append(requests, apiRequest{method: method, payload: payload})
+		io.WriteString(w, `{"ok":true,"result":true}`)
+	}))
+	defer telegramAPI.Close()
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"choices":[{"message":{"content":"Hay dos tareas importantes."}}]}`)
+	}))
+	defer model.Close()
+	service := New(model.URL, "model-key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	service.Capabilities = []ReadCapability{{
+		Name: "Jira", Description: "tareas actuales",
+		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "jira") },
+		Read:  func(context.Context, string) (string, error) { return "Tarea A y tarea B.", nil },
+	}}
+	bot := &Bot{Base: telegramAPI.URL, Token: "bot-token", Client: telegramAPI.Client(), Service: service}
+	update := Update{Message: &Message{ID: 42, From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Text: "¿Qué tareas importantes tengo en Jira?"}}
+	if err := bot.processUpdate(context.Background(), update); err != nil {
+		t.Fatal(err)
+	}
+
+	var reactionIndex, progressIndex, finalIndex = -1, -1, -1
+	reactionCount := 0
+	for i, request := range requests {
+		switch request.method {
+		case "setMessageReaction":
+			reactionCount++
+			reactionIndex = i
+			var chatID, messageID int64
+			_ = json.Unmarshal(request.payload["chat_id"], &chatID)
+			_ = json.Unmarshal(request.payload["message_id"], &messageID)
+			var reaction []map[string]string
+			_ = json.Unmarshal(request.payload["reaction"], &reaction)
+			if chatID != 7 || messageID != 42 || len(reaction) != 1 || reaction[0]["emoji"] != "🔍" || reaction[0]["type"] != "emoji" {
+				t.Fatalf("invalid reaction target/payload: chat=%d message=%d reaction=%v", chatID, messageID, reaction)
+			}
+		case "sendMessage":
+			var text string
+			_ = json.Unmarshal(request.payload["text"], &text)
+			if strings.Contains(text, "Déjame revisar Jira.") {
+				progressIndex = i
+			}
+			if strings.Contains(text, "Hay dos tareas importantes.") {
+				finalIndex = i
+			}
+			if strings.Contains(text, "Recibido") || strings.Contains(text, "voy enseguida") {
+				t.Fatalf("generic acknowledgement should not be sent: %q", text)
+			}
+		}
+	}
+	if reactionCount != 1 || reactionIndex < 0 || progressIndex <= reactionIndex || finalIndex <= progressIndex {
+		t.Fatalf("reaction/progress/final order invalid: count=%d reaction=%d progress=%d final=%d requests=%+v", reactionCount, reactionIndex, progressIndex, finalIndex, requests)
+	}
+}
+
+func TestUnauthorizedTelegramMessageHasNoSideEffects(t *testing.T) {
+	var apiCalls, modelCalls int
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalls++
+		io.WriteString(w, `{"ok":true,"result":true}`)
+	}))
+	defer api.Close()
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
+		io.WriteString(w, `{"choices":[{"message":{"content":"No."}}]}`)
+	}))
+	defer model.Close()
+	service := New(model.URL, "model-key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	bot := &Bot{Base: api.URL, Token: "bot-token", Client: api.Client(), Service: service}
+	update := Update{Message: &Message{ID: 50, From: User{ID: 8}, Chat: Chat{ID: 8, Type: "private"}, Text: "¿Puedes revisar Jira?"}}
+	if err := bot.processUpdate(context.Background(), update); err != nil {
+		t.Fatal(err)
+	}
+	if apiCalls != 0 || modelCalls != 0 {
+		t.Fatalf("unauthorized update caused side effects: Telegram=%d model=%d", apiCalls, modelCalls)
+	}
+}
+
+func TestTelegramReactionFailureStillDeliversReply(t *testing.T) {
+	var methods []string
+	var events []string
+	telegramAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+		methods = append(methods, method)
+		if method == "setMessageReaction" {
+			http.Error(w, `{"ok":false,"description":"reaction unavailable"}`, http.StatusBadRequest)
+			return
+		}
+		io.WriteString(w, `{"ok":true,"result":true}`)
+	}))
+	defer telegramAPI.Close()
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"choices":[{"message":{"content":"Resultado verificado."}}]}`)
+	}))
+	defer model.Close()
+	service := New(model.URL, "model-key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	service.Capabilities = []ReadCapability{{
+		Name: "Correo", Description: "mensajes recientes",
+		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "correo") },
+		Read:  func(context.Context, string) (string, error) { return "Un correo pendiente.", nil },
+	}}
+	bot := &Bot{Base: telegramAPI.URL, Token: "bot-token", Client: telegramAPI.Client(), Service: service, OnEvent: func(name string) { events = append(events, name) }}
+	update := Update{Message: &Message{ID: 43, From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Text: "¿Tengo algún correo pendiente?"}}
+	if err := bot.processUpdate(context.Background(), update); err != nil {
+		t.Fatalf("reaction failure should not abort the reply: %v", err)
+	}
+	if !strings.Contains(strings.Join(methods, ","), "setMessageReaction") {
+		t.Fatalf("reaction endpoint was not attempted: %v", methods)
+	}
+	if eventsCount(events, "telegram_reaction_error") != 1 || eventsCount(events, "telegram_reply_sent") != 1 {
+		t.Fatalf("reaction failure should be isolated and reply delivered: %v", events)
+	}
+	if eventsCount(methods, "sendMessage") < 2 {
+		t.Fatalf("expected contextual progress and final answer despite reaction failure: %v", methods)
+	}
+}
+
+func eventsCount(values []string, want string) int {
+	count := 0
+	for _, value := range values {
+		if value == want {
+			count++
+		}
+	}
+	return count
+}
+
 type voiceTestSpeech struct {
 	transcript string
 	wav        []byte
@@ -229,17 +378,17 @@ func TestVoiceTranscribesAndRepliesWithTextOnly(t *testing.T) {
 	if err := bot.processUpdate(context.Background(), Update{Message: message}); err != nil {
 		t.Fatal(err)
 	}
-	wantEvents := []string{"sendMessage", "getFile", "download", "sendMessage"}
+	wantEvents := []string{"getFile", "download", "sendMessage"}
 	if strings.Join(state.events, ",") != strings.Join(wantEvents, ",") {
 		t.Fatalf("flow events = %v, want %v", state.events, wantEvents)
 	}
 	if speech.transCalls != 1 || speech.synthCalls != 0 || audio.toWAVCalls != 1 || audio.toOGGCalls != 0 || state.modelCalls != 1 || state.voiceReplies != 0 {
 		t.Fatalf("unexpected flow counts: state=%+v speech=%+v audio=%+v", state, speech, audio)
 	}
-	if len(state.textReplies) != 2 || strings.TrimSpace(state.textReplies[0]) == "" || strings.TrimSpace(state.textReplies[1]) == "" {
-		t.Fatalf("voice request should receive a short acknowledgement and one text answer: %+v", state.textReplies)
+	if len(state.textReplies) != 1 || strings.TrimSpace(state.textReplies[0]) == "" {
+		t.Fatalf("voice request should receive one text answer: %+v", state.textReplies)
 	}
-	if len(state.parseModes) != 2 || state.parseModes[1] != "HTML" {
+	if len(state.parseModes) != 1 || state.parseModes[0] != "HTML" {
 		t.Fatalf("Telegram reply did not enable safe Markdown rendering: %v", state.parseModes)
 	}
 }
@@ -271,8 +420,8 @@ func TestTelegramSendsDelayedProgressForSlowModel(t *testing.T) {
 	if err := bot.processUpdate(context.Background(), Update{Message: message}); err != nil {
 		t.Fatal(err)
 	}
-	if len(sent) != 3 || !strings.Contains(sent[1], "preparando la respuesta") || sent[2] != "Respuesta lista" {
-		t.Fatalf("slow model messages = %v, want acknowledgement, current-stage update, and final answer", sent)
+	if len(sent) != 2 || !strings.Contains(sent[0], "sintetizando la respuesta") || sent[1] != "Respuesta lista" {
+		t.Fatalf("slow model messages = %v, want one current-stage update and final answer", sent)
 	}
 }
 
@@ -282,7 +431,7 @@ func TestVoiceSTTFailureDoesNotCallModel(t *testing.T) {
 	if err := bot.processUpdate(context.Background(), Update{Message: message}); err != nil {
 		t.Fatal(err)
 	}
-	if state.modelCalls != 0 || speech.synthCalls != 0 || len(state.textReplies) != 2 || state.voiceReplies != 0 {
+	if state.modelCalls != 0 || speech.synthCalls != 0 || len(state.textReplies) != 1 || state.voiceReplies != 0 {
 		t.Fatalf("failed transcription should report in text without TTS: state=%+v speech=%+v", state, speech)
 	}
 }
@@ -365,7 +514,7 @@ func TestPollingPersistsOffsetRejectsOtherUsersAndDeliversReply(t *testing.T) {
 	if err := b.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(sent) != 2 || strings.TrimSpace(sent[0]) == "" || sent[1] != "Respuesta real" || modelCalls != 1 || rejected != 2 {
+	if len(sent) != 1 || sent[0] != "Respuesta real" || modelCalls != 1 || rejected != 2 {
 		t.Fatalf("sent %v model %d rejected %d", sent, modelCalls, rejected)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "offset.json"))

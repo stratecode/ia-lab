@@ -200,6 +200,112 @@ func TestSharedChatStreamingAndAuthentication(t *testing.T) {
 	}
 }
 
+func TestSharedChatStreamingRendersInteractionBeforeAnswer(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"Resumen útil.\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	s.Capabilities = []ReadCapability{{
+		Name: "Granola", Description: "reuniones recientes",
+		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "reuniones") },
+		Read:  func(context.Context, string) (string, error) { return "Notas de las reuniones de hoy.", nil },
+	}}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"main","stream":true,"messages":[{"role":"user","content":"¿Qué tareas salen de las reuniones de hoy?"}]}`))
+	request.Header.Set("Authorization", "Bearer key")
+	request.Header.Set("X-OpenWebUI-User-Id", "owner")
+	request.Header.Set("X-OpenWebUI-User-Role", "admin")
+	request.Header.Set("X-OpenWebUI-Chat-Id", "interaction-stream")
+	result := httptest.NewRecorder()
+	s.Handler().ServeHTTP(result, request)
+	body := result.Body.String()
+	reaction := strings.Index(body, `"content":"🔍"`)
+	progress := strings.Index(body, `"content":"Déjame revisar Granola."`)
+	answer := strings.Index(body, `"content":"Resumen útil."`)
+	if result.Code != http.StatusOK || reaction < 0 || progress <= reaction || answer <= progress || !strings.Contains(body, "[DONE]") {
+		t.Fatalf("stream interaction order/status invalid: status=%d reaction=%d progress=%d answer=%d body=%q", result.Code, reaction, progress, answer, body)
+	}
+}
+
+func TestSharedChatNonStreamingProgressOnlyWhenLookupStarts(t *testing.T) {
+	t.Run("lookup includes semantic and source feedback", func(t *testing.T) {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, `{"choices":[{"message":{"content":"Hay dos tareas importantes."}}]}`)
+		}))
+		defer upstream.Close()
+		s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+		s.Capabilities = []ReadCapability{{
+			Name: "Jira", Description: "tareas actuales",
+			Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "jira") },
+			Read:  func(context.Context, string) (string, error) { return "Tarea uno y tarea dos.", nil },
+		}}
+		result := performOpenWebUIChat(t, s, "¿Qué tareas tengo en Jira?", false)
+		var response struct {
+			Choices []struct {
+				Message Turn `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(result.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if len(response.Choices) != 1 || !strings.Contains(response.Choices[0].Message.Content, "🔍") || !strings.Contains(response.Choices[0].Message.Content, "Déjame revisar Jira.") || !strings.Contains(response.Choices[0].Message.Content, "Hay dos tareas importantes.") {
+			t.Fatalf("non-streaming lookup response missing source feedback: %q", result.Body.String())
+		}
+	})
+
+	t.Run("neutral response has no source feedback", func(t *testing.T) {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, `{"choices":[{"message":{"content":"Buenos días."}}]}`)
+		}))
+		defer upstream.Close()
+		s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+		result := performOpenWebUIChat(t, s, "Buenos días", false)
+		if strings.Contains(result.Body.String(), "Déjame revisar") || strings.Contains(result.Body.String(), "🔍") {
+			t.Fatalf("neutral response must not invent source feedback: %q", result.Body.String())
+		}
+	})
+
+	t.Run("unsupported action has no source feedback", func(t *testing.T) {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			if strings.Contains(string(body), "Clasifica la intención") {
+				io.WriteString(w, `{"choices":[{"message":{"content":"{\"intent\":\"clarify\"}"}}]}`)
+				return
+			}
+			io.WriteString(w, `{"choices":[{"message":{"content":"No hay herramienta disponible."}}]}`)
+		}))
+		defer upstream.Close()
+		s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+		result := performOpenWebUIChat(t, s, "Cierra la tarea STRAT-42", false)
+		if strings.Contains(result.Body.String(), "Déjame revisar") || strings.Contains(result.Body.String(), "🔍") {
+			t.Fatalf("unsupported action must not claim a lookup started: %q", result.Body.String())
+		}
+	})
+}
+
+func performOpenWebUIChat(t *testing.T, service *Service, prompt string, streaming bool) *httptest.ResponseRecorder {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"model": "main", "stream": streaming,
+		"messages": []map[string]string{{"role": "user", "content": prompt}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(string(payload)))
+	request.Header.Set("Authorization", "Bearer key")
+	request.Header.Set("X-OpenWebUI-User-Id", "owner")
+	request.Header.Set("X-OpenWebUI-User-Role", "admin")
+	request.Header.Set("X-OpenWebUI-Chat-Id", "interaction-nonstream")
+	result := httptest.NewRecorder()
+	service.Handler().ServeHTTP(result, request)
+	if result.Code != http.StatusOK {
+		t.Fatalf("Open WebUI returned status %d: %s", result.Code, result.Body.String())
+	}
+	return result
+}
+
 func TestOpenWebUINaturalLanguageUsesSharedRouterAndMemory(t *testing.T) {
 	const source = "Notas de Granola: lanzamiento el viernes."
 	const summary = "Granola indica que el lanzamiento queda para el viernes."

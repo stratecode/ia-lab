@@ -756,11 +756,15 @@ func (s *Service) Handler() http.Handler {
 			var streaming bool
 			json.Unmarshal(payload["stream"], &streaming)
 			streamID := "secretary-routed"
+			var streamMu sync.Mutex
 			streamed := false
+			answerStreamed := false
 			emit := func(content string) {
 				if !streaming {
 					return
 				}
+				streamMu.Lock()
+				defer streamMu.Unlock()
 				if !streamed {
 					w.Header().Set("Content-Type", "text/event-stream")
 					w.Header().Set("Cache-Control", "no-cache")
@@ -774,23 +778,69 @@ func (s *Service) Handler() http.Handler {
 			}
 			var streamFn func(string)
 			if streaming {
-				streamFn = emit
+				streamFn = func(content string) {
+					streamMu.Lock()
+					answerStreamed = true
+					streamMu.Unlock()
+					emit(content)
+				}
 			}
-			answer, err := s.reply(r.Context(), operator, "openwebui", conversation, prompt, streamFn, nil, nil)
+			var feedback []string
+			var feedbackMu sync.Mutex
+			renderInteraction := func(event InteractionEvent) {
+				if emoji := interactionEmoji(event); emoji != "" {
+					if streaming {
+						emit(emoji)
+					} else {
+						feedbackMu.Lock()
+						feedback = append(feedback, emoji)
+						feedbackMu.Unlock()
+					}
+				}
+				if message := interactionProgressText(event); message != "" {
+					if streaming {
+						emit(message)
+					} else {
+						feedbackMu.Lock()
+						feedback = append(feedback, message)
+						feedbackMu.Unlock()
+					}
+				}
+			}
+			interactionTracker := newInteractionProgressTracker(DefaultProgressDelay, renderInteraction)
+			defer interactionTracker.Close()
+			answer, err := s.reply(r.Context(), operator, "openwebui", conversation, prompt, streamFn, nil, interactionTracker.Observe)
 			if err != nil {
-				if !streamed {
+				streamMu.Lock()
+				wasStreamed := streamed
+				streamMu.Unlock()
+				if !wasStreamed {
 					http.Error(w, "secretary could not complete the request", http.StatusBadGateway)
 					return
 				}
+				streamMu.Lock()
 				fmt.Fprint(w, "data: {\"error\":{\"message\":\"secretary could not complete the request\",\"type\":\"server_error\"}}\n\ndata: [DONE]\n\n")
+				streamMu.Unlock()
 				return
 			}
+			if !streaming {
+				feedbackMu.Lock()
+				if len(feedback) > 0 {
+					answer = strings.Join(feedback, "\n\n") + "\n\n" + answer
+				}
+				feedbackMu.Unlock()
+			}
 			if streaming {
-				if !streamed {
+				streamMu.Lock()
+				needsAnswer := !answerStreamed
+				streamMu.Unlock()
+				if needsAnswer {
 					emit(answer)
 				}
 				stop, _ := json.Marshal(map[string]any{"id": streamID, "object": "chat.completion.chunk", "model": "main", "choices": []any{map[string]any{"index": 0, "delta": map[string]string{}, "finish_reason": "stop"}}})
+				streamMu.Lock()
 				fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", stop)
+				streamMu.Unlock()
 			} else {
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]any{"id": "secretary-routed", "object": "chat.completion", "model": "main", "choices": []any{map[string]any{"index": 0, "message": Turn{Role: "assistant", Content: answer}, "finish_reason": "stop"}}})

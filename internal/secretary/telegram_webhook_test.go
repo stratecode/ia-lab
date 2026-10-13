@@ -150,8 +150,8 @@ func TestTelegramWebhookWorkerProcessesAllowedUpdate(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("webhook worker did not finish")
 	}
-	if len(sent) != 2 || strings.TrimSpace(sent[0]) == "" || sent[1] != "respuesta" {
-		t.Fatalf("sent replies=%v, want acknowledgement and answer", sent)
+	if len(sent) != 1 || sent[0] != "respuesta" {
+		t.Fatalf("sent replies=%v, want one final answer", sent)
 	}
 	if _, err := os.Stat(filepath.Join(queue.dir, "pending-00000000000000000001.json")); !os.IsNotExist(err) {
 		t.Fatalf("update still pending: %v", err)
@@ -208,8 +208,8 @@ func TestTelegramWebhookWorkerRetriesAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	stop2()
-	if sendAttempts != 3 {
-		t.Fatalf("send attempts=%d, want failed acknowledgement plus acknowledgement and answer after restart", sendAttempts)
+	if sendAttempts != 2 {
+		t.Fatalf("send attempts=%d, want failed delivery and one answer after restart", sendAttempts)
 	}
 	queue, err = OpenTelegramUpdateQueue(dir)
 	if err != nil {
