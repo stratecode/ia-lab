@@ -115,6 +115,35 @@ follow-up also reuses the capability selected by the preceding user turn. The
 principal model synthesizes retrieved data and must not invent facts. If a source
 is unavailable or returns no notes, the service says so directly instead of
 asking the model to improvise from an empty result.
+
+## Shared interaction feedback
+
+The router emits short-lived, channel-neutral events after classifying an
+authorized request. A lookup uses 🔍, agreement uses ✅, and a recognized action
+request uses 👍. The signal describes the request's meaning; it does not claim
+that a lookup succeeded or that an external change was made.
+
+Telegram reacts to the authorized incoming message. When a registered source is
+actually selected, it sends one short source update before the final answer
+(for example, “Déjame revisar Granola.”). A recognized action against today's
+read-only tools says that it is looking up the item and can only consult it; the
+final answer states that no change was applied. If processing exceeds 30 seconds,
+the channel sends at most one further update naming the current phase. Fast
+answers have no generic acknowledgement. If Telegram rejects a reaction, the
+secretary records only a bounded presentation error and continues the answer.
+
+Open WebUI renders the same emoji and source update as assistant content before
+the answer, preserving streaming responses. Non-streaming replies include those
+items only when the corresponding events occurred. Neutral conversation does
+not invent a lookup update, and an unsupported action does not claim a source
+was checked.
+
+These events exist only while handling the request: they are not persisted and
+do not add message content, prompts, identifiers or connector data to metrics.
+Slack and WhatsApp are not connected yet; future adapters should render this
+same event contract using their own native presentation, without adding a
+channel-specific classifier.
+
 Conversation memory is stored on the lab server as per-operator JSONL records
 with private file permissions. Lexical retrieval selects up to three relevant
 prior exchanges for context; `/new` clears only the short conversation window,

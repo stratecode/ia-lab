@@ -12,7 +12,12 @@ The shared secretary now fronts Open WebUI. `/status`, `/jira`, `/reuniones` and
 `/resumen` are deterministic source commands. Telegram polling runs on the lab
 with private-chat allowlisting; voice notes use local CPU Whisper when the
 tracked voice-input flag is enabled. Telegram currently responds to voice notes
-with text, not audio, and sends short progress updates before source reads.
+with text, not audio. For authorized routed requests, Telegram reacts to the
+incoming message (🔍 lookup, ✅ agreement, 👍 action) and reports the selected
+source before its answer. Open WebUI renders the same feedback in its response
+stream. Both channels send at most one stage-aware delay update after 30 seconds;
+fast replies skip generic acknowledgements. These signals do not claim an action
+was executed: connected capabilities remain read-only.
 Piper remains configured but is not used for replies. WhatsApp and Slack remain future adapters. See
 [secretary operation](secretary-operation.md). The orchestrator and Codex gateway remain retired.
 The remainder of this guide is historical control-plane reference; its model
