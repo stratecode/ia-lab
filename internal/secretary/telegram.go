@@ -110,6 +110,90 @@ func (b *Bot) send(ctx context.Context, chat int64, text string) error {
 	}
 	return nil
 }
+
+// processUpdate is shared by polling and webhook delivery so both transports
+// apply the same private-chat allowlist, text, and voice behavior.
+func (b *Bot) processUpdate(ctx context.Context, update Update) error {
+	if update.Message == nil || !b.Service.Permitted(*update.Message) {
+		b.event("telegram_rejected")
+		return nil
+	}
+	m := update.Message
+	if m.Voice != nil {
+		if err := b.processVoice(ctx, m); err != nil {
+			b.event("telegram_voice_error")
+			return err
+		}
+		return nil
+	}
+	if strings.TrimSpace(m.Text) == "" {
+		if err := b.send(ctx, m.Chat.ID, "Por ahora recibo texto. La voz se incorporará después."); err != nil {
+			b.event("telegram_send_error")
+			return err
+		}
+		b.event("telegram_reply_sent")
+		return nil
+	}
+	_ = b.call(ctx, "sendChatAction", map[string]any{"chat_id": m.Chat.ID, "action": "typing"}, nil)
+	answer, err := b.Service.Reply(ctx, m.From.ID, m.Text)
+	if err != nil {
+		b.event("model_reply_error")
+		answer = "No he podido completar la respuesta. Reenvía tu consulta; no he ejecutado acciones externas."
+	}
+	if err := b.send(ctx, m.Chat.ID, answer); err != nil {
+		b.event("telegram_send_error")
+		return err
+	}
+	b.event("telegram_reply_sent")
+	return nil
+}
+
+func (b *Bot) RunWebhookWorker(ctx context.Context, queue TelegramUpdateQueue) error {
+	if queue == nil {
+		return errors.New("Telegram update queue is required")
+	}
+	for ctx.Err() == nil {
+		update, err := queue.Next(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			b.event("telegram_queue_error")
+			if !waitTelegramRetry(ctx) {
+				return nil
+			}
+			continue
+		}
+		if err := b.processUpdate(ctx, update); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			if !waitTelegramRetry(ctx) {
+				return nil
+			}
+			continue
+		}
+		if err := queue.Complete(update.ID); err != nil {
+			b.event("telegram_queue_error")
+			if !waitTelegramRetry(ctx) {
+				return nil
+			}
+		}
+	}
+	return nil
+}
+
+func waitTelegramRetry(ctx context.Context) bool {
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 func (b *Bot) Run(ctx context.Context) error {
 	var me struct {
 		ID int64 `json:"id"`
@@ -156,34 +240,7 @@ func (b *Bot) Run(ctx context.Context) error {
 			if err := atomicJSON(state, offset); err != nil {
 				return errors.New("cannot persist polling offset")
 			}
-			if update.Message == nil || !b.Service.Permitted(*update.Message) {
-				b.event("telegram_rejected")
-				continue
-			}
-			m := update.Message
-			if m.Voice != nil {
-				if err := b.processVoice(ctx, m); err != nil {
-					b.event("telegram_voice_error")
-				}
-				continue
-			}
-			if strings.TrimSpace(m.Text) == "" {
-				if err = b.send(ctx, m.Chat.ID, "Por ahora recibo texto. La voz se incorporará después."); err != nil {
-					b.event("telegram_send_error")
-				}
-				continue
-			}
-			_ = b.call(ctx, "sendChatAction", map[string]any{"chat_id": m.Chat.ID, "action": "typing"}, nil)
-			answer, replyErr := b.Service.Reply(ctx, m.From.ID, m.Text)
-			if replyErr != nil {
-				b.event("model_reply_error")
-				answer = "No he podido completar la respuesta. Reenvía tu consulta; no he ejecutado acciones externas."
-			}
-			if err = b.send(ctx, m.Chat.ID, answer); err != nil {
-				b.event("telegram_send_error")
-			} else {
-				b.event("telegram_reply_sent")
-			}
+			_ = b.processUpdate(ctx, update)
 		}
 	}
 	return nil

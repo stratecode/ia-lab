@@ -220,7 +220,7 @@ route53_ddns_record_name: "{{ lookup('env', 'LAB_DNS_RECORD_NAME') | default('vp
 route53_ddns_ttl: 300
 route53_ddns_interval: "5min"
 route53_ddns_aws_profile: "{{ lookup('env', 'LAB_DNS_AWS_PROFILE') | default('route53-dns', true) }}"
-route53_assistant_cname_target: "{{ route53_ddns_record_name }}"
+route53_assistant_cname_target: "{{ (route53_ddns_record_name | regex_replace('\\.$', '')) ~ '.' }}"
 route53_assistant_cname_ttl: 300
 aws_cli_profiles: "{{ vault_aws_cli_profiles | default({}) }}"
 
@@ -282,8 +282,8 @@ lab_secretary_voice_enabled: false
 lab_secretary_voice_max_duration_seconds: 120
 lab_whisper_url: "http://127.0.0.1:8083"
 lab_piper_url: "http://127.0.0.1:8084"
-# Hermes gateway on the operator Mac was stopped after confirming its Telegram API connections.
-lab_secretary_telegram_enabled: true
+# Keep the normal deployment on polling until public ingress acceptance succeeds.
+lab_secretary_telegram_mode: "{{ lookup('env', 'LAB_SECRETARY_TELEGRAM_MODE') | default('polling', true) }}"
 lab_secretary_connectors_file: "{{ lookup('env', 'LAB_SECRETARY_CONNECTORS_FILE') | default('', true) }}"
 open_webui_principal_model_name: LFM2.5 1.2B · Principal
 open_webui_default_model: main

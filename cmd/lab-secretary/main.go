@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -22,6 +24,10 @@ func main() {
 	host, _, err := net.SplitHostPort(listen)
 	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
 		log.Fatal("loopback listener required")
+	}
+	mode, err := parseTelegramMode(os.Getenv("LAB_SECRETARY_TELEGRAM_MODE"))
+	if err != nil {
+		log.Fatal("invalid Telegram mode")
 	}
 	allowed := map[int64]bool{}
 	for _, id := range strings.Split(os.Getenv("LAB_TELEGRAM_ALLOWED_USERS"), ",") {
@@ -48,7 +54,8 @@ func main() {
 	service.Sources = secretary.NewConnectors(connectorConfig, service.StateDir)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
-	server := &http.Server{Addr: listen, Handler: service.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	mux := http.NewServeMux()
+	mux.Handle("/", service.Handler())
 	voiceMaxDuration := 120 * time.Second
 	voiceEnabled := env("LAB_SECRETARY_VOICE_ENABLED", "false") == "true"
 	if voiceEnabled {
@@ -70,14 +77,31 @@ func main() {
 			log.Print("secretary_voice_disabled_missing_endpoint")
 		}
 	}
-	if env("LAB_SECRETARY_TELEGRAM_ENABLED", "true") == "true" {
+	var queue secretary.TelegramUpdateQueue
+	webhookSecret := ""
+	if mode == "webhook" {
+		webhookSecret = os.Getenv("LAB_TELEGRAM_WEBHOOK_SECRET")
+		if webhookSecret == "" {
+			log.Fatal("Telegram webhook secret required in webhook mode")
+		}
+		queue, err = secretary.OpenTelegramUpdateQueue(service.StateDir)
+		if err != nil {
+			log.Fatal("Telegram webhook queue unavailable")
+		}
+	}
+	runTelegram, err := configureTelegram(string(mode), mux, bot, queue, webhookSecret)
+	if err != nil {
+		log.Fatal("Telegram mode configuration failed")
+	}
+	server := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	if mode != "disabled" {
 		go func() {
-			if err := bot.Run(ctx); err != nil {
+			if err := runTelegram(ctx); err != nil {
 				log.Print("Telegram startup failed; HTTP interface remains available")
 			}
 		}()
 	} else {
-		log.Print("telegram_polling_disabled")
+		log.Print("telegram_disabled")
 	}
 	go func() {
 		<-ctx.Done()
@@ -89,6 +113,52 @@ func main() {
 		log.Fatal("HTTP service failed")
 	}
 }
+
+type telegramMode string
+
+const (
+	telegramModeDisabled telegramMode = "disabled"
+	telegramModePolling  telegramMode = "polling"
+	telegramModeWebhook  telegramMode = "webhook"
+)
+
+func parseTelegramMode(value string) (telegramMode, error) {
+	if value == "" {
+		return telegramModePolling, nil
+	}
+	mode := telegramMode(strings.TrimSpace(value))
+	switch mode {
+	case telegramModeDisabled, telegramModePolling, telegramModeWebhook:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("unsupported Telegram mode %q", value)
+	}
+}
+
+func configureTelegram(mode string, mux *http.ServeMux, bot *secretary.Bot, queue secretary.TelegramUpdateQueue, webhookSecret string) (func(context.Context) error, error) {
+	parsed, err := parseTelegramMode(mode)
+	if err != nil {
+		return nil, err
+	}
+	switch parsed {
+	case telegramModeDisabled:
+		return func(context.Context) error { return nil }, nil
+	case telegramModePolling:
+		if bot == nil {
+			return nil, errors.New("Telegram bot is required in polling mode")
+		}
+		return bot.Run, nil
+	case telegramModeWebhook:
+		if mux == nil || bot == nil || queue == nil || webhookSecret == "" {
+			return nil, errors.New("webhook mode requires an HTTP mux, bot, queue, and secret")
+		}
+		mux.Handle("/telegram/webhook", secretary.TelegramWebhook{Queue: queue, Secret: webhookSecret})
+		return func(ctx context.Context) error { return bot.RunWebhookWorker(ctx, queue) }, nil
+	default:
+		return nil, errors.New("unsupported Telegram mode")
+	}
+}
+
 func env(key, fallback string) string {
 	if value := os.Getenv(key); value != "" {
 		return value

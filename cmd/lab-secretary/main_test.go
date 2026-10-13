@@ -1,0 +1,74 @@
+package main
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/stratecode/lab/internal/secretary"
+)
+
+func TestParseTelegramMode(t *testing.T) {
+	for input, want := range map[string]string{
+		"":         "polling",
+		"polling":  "polling",
+		"webhook":  "webhook",
+		"disabled": "disabled",
+	} {
+		got, err := parseTelegramMode(input)
+		if err != nil || string(got) != want {
+			t.Errorf("parseTelegramMode(%q) = %q, %v; want %q", input, got, err, want)
+		}
+	}
+	if _, err := parseTelegramMode("both"); err == nil {
+		t.Fatal("invalid Telegram mode was accepted")
+	}
+}
+
+func TestWebhookModeDoesNotStartPolling(t *testing.T) {
+	telegramCalls := 0
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		telegramCalls++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer api.Close()
+	queue, err := secretary.OpenTelegramUpdateQueue(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	bot := &secretary.Bot{Base: api.URL, Token: "secret", Client: api.Client(), Service: secretary.New("", "", "", t.TempDir(), map[int64]bool{7: true})}
+	run, err := configureTelegram("webhook", mux, bot, queue, "webhook-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if telegramCalls != 0 {
+		t.Fatalf("webhook mode made %d Telegram API calls; it must not start polling", telegramCalls)
+	}
+}
+
+func TestDisabledModeStartsNoTelegramConsumer(t *testing.T) {
+	telegramCalls := 0
+	api := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { telegramCalls++ }))
+	defer api.Close()
+	mux := http.NewServeMux()
+	bot := &secretary.Bot{Base: api.URL, Token: "secret", Client: api.Client(), Service: secretary.New("", "", "", t.TempDir(), map[int64]bool{7: true})}
+	run, err := configureTelegram("disabled", mux, bot, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if telegramCalls != 0 {
+		t.Fatalf("disabled mode made %d Telegram API calls", telegramCalls)
+	}
+}

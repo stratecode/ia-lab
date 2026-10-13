@@ -4,6 +4,7 @@
       - orchestrator_telegram_bot_token | length > 0
       - orchestrator_telegram_allowed_users | length > 0
       - (llama_cpp_instances | first).api_key | length > 0
+      - lab_secretary_telegram_mode in ['disabled', 'polling', 'webhook']
     fail_msg: "Telegram credentials and a principal model key are required."
   no_log: true
 
@@ -18,6 +19,23 @@
     path: /etc/lab-secretary
     state: directory
     mode: "0755"
+
+- name: Generate a private Telegram webhook secret on the host
+  ansible.builtin.shell:
+    cmd: |
+      umask 077
+      printf 'LAB_TELEGRAM_WEBHOOK_SECRET=%s\n' "$(openssl rand -hex 32)" > /etc/lab-secretary/telegram-webhook.env
+    creates: /etc/lab-secretary/telegram-webhook.env
+  no_log: true
+  when: lab_secretary_telegram_mode == "webhook"
+
+- name: Enforce private Telegram webhook secret file permissions
+  ansible.builtin.file:
+    path: /etc/lab-secretary/telegram-webhook.env
+    owner: root
+    group: root
+    mode: "0600"
+  when: lab_secretary_telegram_mode == "webhook"
 
 - name: Install secretary binary
   ansible.builtin.copy:
@@ -42,7 +60,7 @@
       LAB_SECRETARY_UPSTREAM=http://127.0.0.1:{{ llm_telemetry_port }}
       LAB_SECRETARY_MODEL_KEY={{ (llama_cpp_instances | first).api_key }}
       LAB_SECRETARY_INSTRUCTIONS=/etc/lab-secretary/instructions.md
-      LAB_SECRETARY_TELEGRAM_ENABLED={{ 'true' if lab_secretary_telegram_enabled else 'false' }}
+      LAB_SECRETARY_TELEGRAM_MODE={{ lab_secretary_telegram_mode }}
       LAB_TELEGRAM_BOT_TOKEN={{ orchestrator_telegram_bot_token }}
       LAB_TELEGRAM_ALLOWED_USERS={{ orchestrator_telegram_allowed_users }}
       LAB_SECRETARY_VOICE_ENABLED={{ 'true' if lab_secretary_voice_enabled | bool else 'false' }}
@@ -78,6 +96,8 @@
       StateDirectoryMode=0700
       EnvironmentFile=/etc/lab-secretary/secretary.env
       EnvironmentFile=/etc/lab-secretary/connectors.env
+      {% if lab_secretary_telegram_mode == 'webhook' %}EnvironmentFile=/etc/lab-secretary/telegram-webhook.env
+      {% endif %}
       ExecStart=/usr/local/bin/lab-secretary
       Restart=always
       RestartSec=5
