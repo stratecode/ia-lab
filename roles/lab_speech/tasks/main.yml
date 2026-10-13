@@ -226,7 +226,7 @@
       StateDirectory=lab-piper
       StateDirectoryMode=0750
       Environment=HOME={{ lab_piper_state_dir }}
-      ExecStart={{ lab_speech_piper_venv }}/bin/python -m piper.http_server --host {{ lab_piper_host }} --port {{ lab_piper_port }} --data-dir {{ lab_speech_model_dir }} -m {{ lab_piper_voice_name }}
+      ExecStart={{ lab_speech_piper_venv }}/bin/python -m piper.http_server --host {{ lab_piper_host }} --port {{ lab_piper_port }} --data-dir {{ lab_speech_model_dir }} -m {{ lab_piper_voice_name }} --speaker {{ lab_piper_speaker_id }} --length-scale {{ lab_piper_length_scale }}
       Restart=on-failure
       RestartSec=5
       NoNewPrivileges=yes

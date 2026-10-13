@@ -21,6 +21,8 @@ lab_whisper_user: lab-whisper
 
 lab_piper_package: "piper-tts[http]==1.8.0"
 lab_piper_voice_name: es_ES-sharvard-medium
+lab_piper_speaker_id: 1
+lab_piper_length_scale: 0.96
 lab_piper_voice_url: https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_ES/sharvard/medium/es_ES-sharvard-medium.onnx
 lab_piper_voice_sha256: 40febfb1679c69a4505ff311dc136e121e3419a13a290ef264fdf43ddedd0fb1
 lab_piper_config_url: https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/es/es_ES/sharvard/medium/es_ES-sharvard-medium.onnx.json

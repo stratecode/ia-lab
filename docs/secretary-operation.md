@@ -148,7 +148,9 @@ Whisper runs with a private temporary directory.
 
 Whisper runs CPU-only from `whisper.cpp` v1.9.5 using the multilingual
 `ggml-small-q5_1.bin` model with four threads by default. Piper runs
-`piper-tts` 1.8.0 with the Spanish `es_ES-sharvard-medium` voice. Both services
+`piper-tts` 1.8.0 with the Spanish `es_ES-sharvard-medium` voice, female speaker
+1, at length scale `0.96`. The repository defaults keep the speaker and pace
+adjustable. Both services
 bind only to `127.0.0.1`: Whisper on port 8083 and Piper on 8084. Their systemd
 units have separate memory and CPU ceilings. Tune `lab_whisper_threads`,
 `lab_whisper_cpu_quota`, `lab_whisper_memory_max`, `lab_piper_cpu_quota`, and
