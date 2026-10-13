@@ -8,6 +8,7 @@
 
   vars:
     lab_secretary_telegram_mode: webhook
+    lab_secretary_voice_enabled: true
     telegram_public_probe_passed: false
 
   pre_tasks:
@@ -26,6 +27,7 @@
         fail_msg: "The synthetic probe identity must remain unauthorized."
 
   roles:
+    - lab_speech
     - lab_secretary
 
   tasks:

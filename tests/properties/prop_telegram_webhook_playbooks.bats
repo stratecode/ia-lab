@@ -25,6 +25,11 @@ if not any("telegram_public_probe_passed | bool" in str(task) for task in pre_ta
     raise SystemExit("activation has no external-reachability gate")
 if "webhook" != activate.get("vars", {}).get("lab_secretary_telegram_mode"):
     raise SystemExit("activation does not select webhook mode")
+if activate.get("vars", {}).get("lab_secretary_voice_enabled") is not True:
+    raise SystemExit("webhook activation must preserve the approved voice path")
+activate_roles = [item if isinstance(item, str) else item.get("role", "") for item in activate.get("roles", [])]
+if "lab_speech" not in activate_roles or activate_roles.index("lab_speech") > activate_roles.index("lab_secretary"):
+    raise SystemExit("webhook activation must install speech services before the secretary")
 if "polling" != rollback.get("vars", {}).get("lab_secretary_telegram_mode"):
     raise SystemExit("rollback does not select polling mode")
 
