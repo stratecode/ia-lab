@@ -150,7 +150,7 @@ func TestTelegramWebhookWorkerProcessesAllowedUpdate(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("webhook worker did not finish")
 	}
-	if len(sent) != 2 || sent[0] != "Recibido. Voy enseguida." || sent[1] != "respuesta" {
+	if len(sent) != 2 || strings.TrimSpace(sent[0]) == "" || sent[1] != "respuesta" {
 		t.Fatalf("sent replies=%v, want acknowledgement and answer", sent)
 	}
 	if _, err := os.Stat(filepath.Join(queue.dir, "pending-00000000000000000001.json")); !os.IsNotExist(err) {

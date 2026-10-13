@@ -5,6 +5,8 @@
       - orchestrator_telegram_allowed_users | length > 0
       - (llama_cpp_instances | first).api_key | length > 0
       - lab_secretary_telegram_mode in ['disabled', 'polling', 'webhook']
+      - lab_secretary_progress_delay_seconds | int >= 1
+      - lab_secretary_progress_delay_seconds | int <= 120
     fail_msg: "Telegram credentials and a principal model key are required."
   no_log: true
 
@@ -65,6 +67,7 @@
       LAB_TELEGRAM_ALLOWED_USERS={{ orchestrator_telegram_allowed_users }}
       LAB_SECRETARY_VOICE_ENABLED={{ 'true' if lab_secretary_voice_enabled | bool else 'false' }}
       LAB_SECRETARY_VOICE_MAX_DURATION_SECONDS={{ lab_secretary_voice_max_duration_seconds }}
+      LAB_SECRETARY_PROGRESS_DELAY_SECONDS={{ lab_secretary_progress_delay_seconds }}
       LAB_WHISPER_URL={{ lab_whisper_url }}
       LAB_PIPER_URL={{ lab_piper_url }}
       LAB_FFMPEG_BINARY=/usr/bin/ffmpeg

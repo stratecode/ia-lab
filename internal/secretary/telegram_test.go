@@ -236,11 +236,43 @@ func TestVoiceTranscribesAndRepliesWithTextOnly(t *testing.T) {
 	if speech.transCalls != 1 || speech.synthCalls != 0 || audio.toWAVCalls != 1 || audio.toOGGCalls != 0 || state.modelCalls != 1 || state.voiceReplies != 0 {
 		t.Fatalf("unexpected flow counts: state=%+v speech=%+v audio=%+v", state, speech, audio)
 	}
-	if len(state.textReplies) != 2 || state.textReplies[0] != "Recibido. Voy enseguida." || strings.TrimSpace(state.textReplies[1]) == "" {
+	if len(state.textReplies) != 2 || strings.TrimSpace(state.textReplies[0]) == "" || strings.TrimSpace(state.textReplies[1]) == "" {
 		t.Fatalf("voice request should receive a short acknowledgement and one text answer: %+v", state.textReplies)
 	}
 	if len(state.parseModes) != 2 || state.parseModes[1] != "HTML" {
 		t.Fatalf("Telegram reply did not enable safe Markdown rendering: %v", state.parseModes)
+	}
+}
+
+func TestTelegramSendsDelayedProgressForSlowModel(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		io.WriteString(w, `{"choices":[{"message":{"content":"Respuesta lista"}}]}`)
+	}))
+	defer model.Close()
+	var sent []string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			var body struct {
+				Text string `json:"text"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode Telegram message: %v", err)
+			}
+			sent = append(sent, body.Text)
+		}
+		io.WriteString(w, `{"ok":true,"result":true}`)
+	}))
+	defer api.Close()
+
+	service := New(model.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	bot := &Bot{Base: api.URL, Token: "token", Client: api.Client(), Service: service, ProgressDelay: 10 * time.Millisecond}
+	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Text: "Hola"}
+	if err := bot.processUpdate(context.Background(), Update{Message: message}); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent) != 3 || !strings.Contains(sent[1], "preparando la respuesta") || sent[2] != "Respuesta lista" {
+		t.Fatalf("slow model messages = %v, want acknowledgement, current-stage update, and final answer", sent)
 	}
 }
 
@@ -333,7 +365,7 @@ func TestPollingPersistsOffsetRejectsOtherUsersAndDeliversReply(t *testing.T) {
 	if err := b.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(sent) != 2 || sent[0] != "Recibido. Voy enseguida." || sent[1] != "Respuesta real" || modelCalls != 1 || rejected != 2 {
+	if len(sent) != 2 || strings.TrimSpace(sent[0]) == "" || sent[1] != "Respuesta real" || modelCalls != 1 || rejected != 2 {
 		t.Fatalf("sent %v model %d rejected %d", sent, modelCalls, rejected)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "offset.json"))

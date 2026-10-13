@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -56,6 +57,54 @@ type Bot struct {
 	Metrics          *VoiceMetrics
 	VoiceEnabled     bool
 	VoiceMaxDuration time.Duration
+	ProgressDelay    time.Duration
+	acknowledgements atomic.Uint64
+}
+
+var telegramAcknowledgements = [...]string{
+	"Lo tengo; me pongo con ello.",
+	"Vale, lo reviso ahora.",
+	"Entendido. Estoy con ello.",
+	"De acuerdo, voy a comprobarlo.",
+	"Me ocupo; enseguida te cuento.",
+}
+
+var telegramProgressPrefixes = [...]string{
+	"Sigo con ello:",
+	"Aún estoy",
+	"Me está llevando algo más; sigo",
+	"Continúo",
+}
+
+func (b *Bot) nextAcknowledgement() string {
+	index := b.acknowledgements.Add(1) - 1
+	return telegramAcknowledgements[index%uint64(len(telegramAcknowledgements))]
+}
+
+func (b *Bot) progressTracker(ctx context.Context, chat int64) *progressTracker {
+	tracker := newProgressTracker(b.ProgressDelay, func(message string) {
+		if err := b.send(ctx, chat, message); err != nil {
+			b.event("telegram_send_error")
+		}
+	})
+	index := b.acknowledgements.Add(1) - 1
+	tracker.SetPrefix(telegramProgressPrefixes[index%uint64(len(telegramProgressPrefixes))])
+	return tracker
+}
+
+func (b *Bot) progressCallback(ctx context.Context, chat int64, tracker *progressTracker) func(string) {
+	return func(message string) {
+		const prefix = "Voy a revisar "
+		if strings.HasPrefix(message, prefix) {
+			stage := strings.TrimSuffix(strings.TrimPrefix(message, prefix), ".")
+			tracker.SetStage("consultando " + stage)
+			if err := b.send(ctx, chat, message); err != nil {
+				b.event("telegram_send_error")
+			}
+			return
+		}
+		tracker.SetStage(message)
+	}
 }
 
 const (
@@ -147,13 +196,16 @@ func (b *Bot) processUpdate(ctx context.Context, update Update) error {
 	}
 	m := update.Message
 	if m.Voice != nil || strings.TrimSpace(m.Text) != "" {
-		if err := b.send(ctx, m.Chat.ID, "Recibido. Voy enseguida."); err != nil {
+		if err := b.send(ctx, m.Chat.ID, b.nextAcknowledgement()); err != nil {
 			b.event("telegram_send_error")
 			return err
 		}
 	}
+	tracker := b.progressTracker(ctx, m.Chat.ID)
+	defer tracker.Close()
+	tracker.SetStage("interpretando tu consulta")
 	if m.Voice != nil {
-		if err := b.processVoice(ctx, m); err != nil {
+		if err := b.processVoiceWithProgress(ctx, m, tracker); err != nil {
 			b.event("telegram_voice_error")
 			return err
 		}
@@ -168,15 +220,12 @@ func (b *Bot) processUpdate(ctx context.Context, update Update) error {
 		return nil
 	}
 	_ = b.call(ctx, "sendChatAction", map[string]any{"chat_id": m.Chat.ID, "action": "typing"}, nil)
-	answer, err := b.Service.ReplyWithProgress(ctx, m.From.ID, m.Text, func(message string) {
-		if sendErr := b.send(ctx, m.Chat.ID, message); sendErr != nil {
-			b.event("telegram_send_error")
-		}
-	})
+	answer, err := b.Service.ReplyWithProgress(ctx, m.From.ID, m.Text, b.progressCallback(ctx, m.Chat.ID, tracker))
 	if err != nil {
 		b.event("model_reply_error")
 		answer = "No he podido completar la respuesta. Reenvía tu consulta; no he ejecutado acciones externas."
 	}
+	tracker.Close()
 	if err := b.send(ctx, m.Chat.ID, answer); err != nil {
 		b.event("telegram_send_error")
 		return err
@@ -283,7 +332,17 @@ func (b *Bot) Run(ctx context.Context) error {
 	return nil
 }
 
-func (b *Bot) processVoice(ctx context.Context, message *Message) (returnErr error) {
+func (b *Bot) processVoice(ctx context.Context, message *Message) error {
+	var tracker *progressTracker
+	if message != nil {
+		tracker = b.progressTracker(ctx, message.Chat.ID)
+		tracker.SetStage("recibiendo la nota de voz")
+		defer tracker.Close()
+	}
+	return b.processVoiceWithProgress(ctx, message, tracker)
+}
+
+func (b *Bot) processVoiceWithProgress(ctx context.Context, message *Message, tracker *progressTracker) (returnErr error) {
 	requestStarted := time.Now()
 	requestResult := VoiceResultOK
 	defer func() {
@@ -318,6 +377,7 @@ func (b *Bot) processVoice(ctx context.Context, message *Message) (returnErr err
 		requestResult = VoiceResultError
 		return errors.New("invalid or oversized Telegram voice metadata")
 	}
+	tracker.SetStage("descargando la nota de voz")
 	var file struct {
 		FilePath string `json:"file_path"`
 	}
@@ -357,6 +417,7 @@ func (b *Bot) processVoice(ctx context.Context, message *Message) (returnErr err
 		return errors.New("telegram voice download failed")
 	}
 	sttStarted := time.Now()
+	tracker.SetStage("transcribiendo la nota de voz")
 	wav, sttErr := b.Audio.ToWAV(ctx, ogg)
 	if sttErr != nil {
 		b.observeVoicePhase(ctx, VoicePhaseSTT, sttStarted, sttErr)
@@ -378,17 +439,15 @@ func (b *Bot) processVoice(ctx context.Context, message *Message) (returnErr err
 		b.observeVoicePhase(ctx, VoicePhaseTelegramSend, sendStarted, sendErr)
 		return sendErr
 	}
+	tracker.SetStage("interpretando tu consulta")
 	llmStarted := time.Now()
-	answer, llmErr := b.Service.ReplyWithProgress(ctx, message.From.ID, transcript, func(progress string) {
-		if sendErr := b.send(ctx, message.Chat.ID, progress); sendErr != nil {
-			b.event("telegram_send_error")
-		}
-	})
+	answer, llmErr := b.Service.ReplyWithProgress(ctx, message.From.ID, transcript, b.progressCallback(ctx, message.Chat.ID, tracker))
 	b.observeVoicePhase(ctx, VoicePhaseLLM, llmStarted, llmErr)
 	if llmErr != nil {
 		requestResult = voiceMetricResult(llmErr)
 		answer = "No he podido completar la respuesta. Reenvía tu consulta por texto; no he ejecutado acciones externas."
 	}
+	tracker.Close()
 	sendStarted := time.Now()
 	sendErr := b.send(ctx, message.Chat.ID, answer)
 	b.observeVoicePhase(ctx, VoicePhaseTelegramSend, sendStarted, sendErr)

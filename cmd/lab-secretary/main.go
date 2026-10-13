@@ -65,7 +65,11 @@ func main() {
 		}
 		voiceMaxDuration = time.Duration(seconds) * time.Second
 	}
-	bot := &secretary.Bot{Base: "https://api.telegram.org", Token: os.Getenv("LAB_TELEGRAM_BOT_TOKEN"), Client: &http.Client{Timeout: 40 * time.Second}, Service: service, Metrics: service.VoiceMetrics(), VoiceMaxDuration: voiceMaxDuration, OnEvent: func(event string) { log.Print(event) }}
+	progressDelay, err := parseProgressDelay(os.Getenv("LAB_SECRETARY_PROGRESS_DELAY_SECONDS"))
+	if err != nil {
+		log.Fatal("valid secretary progress delay required")
+	}
+	bot := &secretary.Bot{Base: "https://api.telegram.org", Token: os.Getenv("LAB_TELEGRAM_BOT_TOKEN"), Client: &http.Client{Timeout: 40 * time.Second}, Service: service, Metrics: service.VoiceMetrics(), VoiceMaxDuration: voiceMaxDuration, ProgressDelay: progressDelay, OnEvent: func(event string) { log.Print(event) }}
 	if voiceEnabled {
 		whisperURL := env("LAB_WHISPER_URL", "")
 		piperURL := env("LAB_PIPER_URL", "")
@@ -133,6 +137,17 @@ func parseTelegramMode(value string) (telegramMode, error) {
 	default:
 		return "", fmt.Errorf("unsupported Telegram mode %q", value)
 	}
+}
+
+func parseProgressDelay(value string) (time.Duration, error) {
+	if strings.TrimSpace(value) == "" {
+		return 5 * time.Second, nil
+	}
+	seconds, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || seconds < 1 || seconds > 120 {
+		return 0, fmt.Errorf("progress delay must be between 1 and 120 seconds")
+	}
+	return time.Duration(seconds) * time.Second, nil
 }
 
 func configureTelegram(mode string, mux *http.ServeMux, bot *secretary.Bot, queue secretary.TelegramUpdateQueue, webhookSecret string) (func(context.Context) error, error) {

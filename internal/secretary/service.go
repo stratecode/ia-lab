@@ -203,6 +203,9 @@ func (s *Service) reply(ctx context.Context, user int64, text string, stream fun
 		intent = intentCapability
 	}
 	if intent == intentAmbiguous {
+		if progress != nil {
+			progress("interpretando tu consulta")
+		}
 		classified, classifyErr := s.classifyIntent(ctx, text)
 		if classifyErr != nil {
 			intent = intentClarify
@@ -237,17 +240,23 @@ func (s *Service) reply(ctx context.Context, user int64, text string, stream fun
 			if progress != nil {
 				progress("Voy a revisar " + capability.Name + ".")
 			}
-			answer, err = s.answerFromCapability(ctx, text, capability, memories, stream)
+			answer, err = s.answerFromCapability(ctx, text, capability, memories, stream, progress)
 		}
 	case intentMemory:
 		if len(memories) == 0 {
 			answer = "No encuentro en la memoria de la secretaria una conversación anterior relacionada con ese tema."
 		} else {
+			if progress != nil {
+				progress("preparando la respuesta")
+			}
 			answer, err = s.answerWithContext(ctx, text, nil, memories, true, stream)
 		}
 	case intentClarify:
 		answer = "¿Qué fuente o información quieres que consulte?"
 	default:
+		if progress != nil {
+			progress("preparando la respuesta")
+		}
 		answer, err = s.answerWithContext(ctx, text, s.history[user], memories, false, stream)
 	}
 	if err != nil {
@@ -355,13 +364,16 @@ func (s *Service) capabilityForFollowUp(query string, history []Turn) (ReadCapab
 	return ReadCapability{}, false
 }
 
-func (s *Service) answerFromCapability(ctx context.Context, question string, capability ReadCapability, memories []conversationMemory, stream func(string)) (string, error) {
+func (s *Service) answerFromCapability(ctx context.Context, question string, capability ReadCapability, memories []conversationMemory, stream func(string), progress func(string)) (string, error) {
 	source, err := capability.Read(ctx, question)
 	if err != nil {
 		return capability.Name + " no está disponible; no he podido verificar la información.", nil
 	}
 	if strings.TrimSpace(source) == "" {
 		return "No he encontrado notas en " + capability.Name + " que permitan verificarlo.", nil
+	}
+	if progress != nil {
+		progress("preparando la respuesta")
 	}
 	return s.answerWithContext(ctx, question, nil, memories, false, stream, source, capability.Name+" — "+capability.Description)
 }

@@ -149,8 +149,15 @@ text. The adapter downloads the note, converts OGG/Opus to WAV in memory, sends
 it to local Whisper with Spanish recognition, then asks the principal model.
 Both voice and text input receive written responses; Telegram speech synthesis
 is currently disabled. The adapter sends a brief written acknowledgement before
-processing and, when a registered source is selected, one short progress
-message before reading it. It finishes with one concise answer. No audio or
+processing, alternating between a small set of short phrasings so consecutive
+requests do not receive the same canned line. When a registered source is
+selected, it sends one short progress message before reading it. If a request
+still runs after `lab_secretary_progress_delay_seconds` (five seconds by
+default), it sends at most one additional update naming the current phase, such
+as transcribing, interpreting, consulting a source, or preparing the answer.
+The update is canceled when the reply finishes before the threshold. The value
+is configurable from one to 120 seconds in `group_vars/all.yml`. The adapter
+finishes with one concise answer. No audio or
 transcript is written to application logs or metrics; scratch conversion data
 is held in memory, and Whisper runs with a private temporary directory. Telegram
 renders Markdown bold as HTML and escapes other markup.

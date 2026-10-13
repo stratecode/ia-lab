@@ -28,6 +28,24 @@ func TestParseTelegramMode(t *testing.T) {
 	}
 }
 
+func TestParseProgressDelay(t *testing.T) {
+	for input, want := range map[string]time.Duration{
+		"":   5 * time.Second,
+		"1":  time.Second,
+		"30": 30 * time.Second,
+	} {
+		got, err := parseProgressDelay(input)
+		if err != nil || got != want {
+			t.Errorf("parseProgressDelay(%q) = %s, %v; want %s", input, got, err, want)
+		}
+	}
+	for _, input := range []string{"0", "121", "fast"} {
+		if _, err := parseProgressDelay(input); err == nil {
+			t.Errorf("parseProgressDelay(%q) accepted an invalid threshold", input)
+		}
+	}
+}
+
 func TestWebhookModeDoesNotStartPolling(t *testing.T) {
 	telegramCalls := 0
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

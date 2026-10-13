@@ -548,7 +548,7 @@ func TestReplyWithProgressAnnouncesSelectedCapabilityBeforeReading(t *testing.T)
 	answer, err := s.ReplyWithProgress(context.Background(), 7, "¿Tengo algún correo pendiente?", func(message string) {
 		progress = append(progress, message)
 	})
-	if err != nil || answer != "Hecho." || len(progress) != 1 {
+	if err != nil || answer != "Hecho." || len(progress) != 2 || progress[1] != "preparando la respuesta" {
 		t.Fatalf("answer=%q progress=%v err=%v", answer, progress, err)
 	}
 }
