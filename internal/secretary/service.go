@@ -93,10 +93,16 @@ func (s *Service) historyPath(user int64) string {
 	return filepath.Join(s.StateDir, fmt.Sprintf("telegram-%d.json", user))
 }
 func (s *Service) Reply(ctx context.Context, user int64, text string) (string, error) {
-	return s.reply(ctx, user, text, nil)
+	return s.reply(ctx, user, text, nil, nil)
 }
 
-func (s *Service) reply(ctx context.Context, user int64, text string, stream func(string)) (string, error) {
+// ReplyWithProgress runs the shared intent and capability router while
+// reporting the selected read source before its connector is called.
+func (s *Service) ReplyWithProgress(ctx context.Context, user int64, text string, progress func(string)) (string, error) {
+	return s.reply(ctx, user, text, nil, progress)
+}
+
+func (s *Service) reply(ctx context.Context, user int64, text string, stream func(string), progress func(string)) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	text = strings.TrimSpace(text)
@@ -163,6 +169,16 @@ func (s *Service) reply(ctx context.Context, user int64, text string, stream fun
 		if err := s.loadHistory(user); err != nil {
 			return "", err
 		}
+		if progress != nil {
+			switch strings.Fields(text)[0] {
+			case "/jira":
+				progress("Voy a revisar Jira.")
+			case "/reuniones":
+				progress("Voy a revisar Granola.")
+			case "/resumen":
+				progress("Voy a revisar las fuentes conectadas.")
+			}
+		}
 		answer, err := s.readCommand(ctx, strings.Fields(text)[0])
 		if err != nil {
 			return "", err
@@ -218,6 +234,9 @@ func (s *Service) reply(ctx context.Context, user int64, text string, stream fun
 		if !capabilityMatched {
 			answer = "No encuentro una herramienta de solo lectura configurada para esa consulta."
 		} else {
+			if progress != nil {
+				progress("Voy a revisar " + capability.Name + ".")
+			}
 			answer, err = s.answerFromCapability(ctx, text, capability, memories, stream)
 		}
 	case intentMemory:
@@ -627,7 +646,7 @@ func (s *Service) Handler() http.Handler {
 			if streaming {
 				streamFn = emit
 			}
-			answer, err := s.reply(r.Context(), operator, prompt, streamFn)
+			answer, err := s.reply(r.Context(), operator, prompt, streamFn, nil)
 			if err != nil {
 				if !streamed {
 					http.Error(w, "secretary could not complete the request", http.StatusBadGateway)

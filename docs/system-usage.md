@@ -10,8 +10,10 @@ Open WebUI volume. See [Principal model operation](principal-model-operation.md)
 
 The shared secretary now fronts Open WebUI. `/status`, `/jira`, `/reuniones` and
 `/resumen` are deterministic source commands. Telegram polling runs on the lab
-with private-chat allowlisting; voice notes use local CPU Whisper and Piper when
-the tracked voice flag is enabled. WhatsApp and Slack remain future adapters. See
+with private-chat allowlisting; voice notes use local CPU Whisper when the
+tracked voice-input flag is enabled. Telegram currently responds to voice notes
+with text, not audio, and sends short progress updates before source reads.
+Piper remains configured but is not used for replies. WhatsApp and Slack remain future adapters. See
 [secretary operation](secretary-operation.md). The orchestrator and Codex gateway remain retired.
 The remainder of this guide is historical control-plane reference; its model
 names, commands and API endpoints must not be interpreted as active services.

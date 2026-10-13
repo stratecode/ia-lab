@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -103,12 +104,38 @@ func (b *Bot) send(ctx context.Context, chat int64, text string) error {
 		if n > 3500 {
 			n = 3500
 		}
-		if err := b.call(ctx, "sendMessage", map[string]any{"chat_id": chat, "text": string(runes[:n])}, nil); err != nil {
+		if err := b.call(ctx, "sendMessage", map[string]any{"chat_id": chat, "text": telegramHTML(string(runes[:n])), "parse_mode": "HTML"}, nil); err != nil {
 			return err
 		}
 		runes = runes[n:]
 	}
 	return nil
+}
+
+// telegramHTML supports the bold Markdown emitted by the secretary and escapes
+// every other character so model output cannot become Telegram markup.
+func telegramHTML(text string) string {
+	var out strings.Builder
+	for len(text) > 0 {
+		start := strings.Index(text, "**")
+		if start < 0 {
+			out.WriteString(html.EscapeString(text))
+			break
+		}
+		out.WriteString(html.EscapeString(text[:start]))
+		afterStart := text[start+2:]
+		end := strings.Index(afterStart, "**")
+		if end <= 0 {
+			out.WriteString("**")
+			text = afterStart
+			continue
+		}
+		out.WriteString("<b>")
+		out.WriteString(html.EscapeString(afterStart[:end]))
+		out.WriteString("</b>")
+		text = afterStart[end+2:]
+	}
+	return out.String()
 }
 
 // processUpdate is shared by polling and webhook delivery so both transports
@@ -119,6 +146,12 @@ func (b *Bot) processUpdate(ctx context.Context, update Update) error {
 		return nil
 	}
 	m := update.Message
+	if m.Voice != nil || strings.TrimSpace(m.Text) != "" {
+		if err := b.send(ctx, m.Chat.ID, "Recibido. Voy enseguida."); err != nil {
+			b.event("telegram_send_error")
+			return err
+		}
+	}
 	if m.Voice != nil {
 		if err := b.processVoice(ctx, m); err != nil {
 			b.event("telegram_voice_error")
@@ -135,7 +168,11 @@ func (b *Bot) processUpdate(ctx context.Context, update Update) error {
 		return nil
 	}
 	_ = b.call(ctx, "sendChatAction", map[string]any{"chat_id": m.Chat.ID, "action": "typing"}, nil)
-	answer, err := b.Service.Reply(ctx, m.From.ID, m.Text)
+	answer, err := b.Service.ReplyWithProgress(ctx, m.From.ID, m.Text, func(message string) {
+		if sendErr := b.send(ctx, m.Chat.ID, message); sendErr != nil {
+			b.event("telegram_send_error")
+		}
+	})
 	if err != nil {
 		b.event("model_reply_error")
 		answer = "No he podido completar la respuesta. Reenvía tu consulta; no he ejecutado acciones externas."
@@ -324,7 +361,10 @@ func (b *Bot) processVoice(ctx context.Context, message *Message) (returnErr err
 	if sttErr != nil {
 		b.observeVoicePhase(ctx, VoicePhaseSTT, sttStarted, sttErr)
 		requestResult = voiceMetricResult(sttErr)
-		return b.sendVoiceOnly(ctx, message.Chat.ID, "No he podido entender la nota de voz. ¿Puedes enviar otra con más claridad?")
+		sendStarted := time.Now()
+		sendErr := b.send(ctx, message.Chat.ID, "No he podido entender la nota de voz. ¿Puedes enviar otra con más claridad?")
+		b.observeVoicePhase(ctx, VoicePhaseTelegramSend, sendStarted, sendErr)
+		return sendErr
 	}
 	transcript, sttErr := b.Speech.Transcribe(ctx, wav)
 	if sttErr == nil && strings.TrimSpace(transcript) == "" {
@@ -333,16 +373,26 @@ func (b *Bot) processVoice(ctx context.Context, message *Message) (returnErr err
 	b.observeVoicePhase(ctx, VoicePhaseSTT, sttStarted, sttErr)
 	if sttErr != nil {
 		requestResult = voiceMetricResult(sttErr)
-		return b.sendVoiceOnly(ctx, message.Chat.ID, "No he podido entender la nota de voz. ¿Puedes enviar otra con más claridad?")
+		sendStarted := time.Now()
+		sendErr := b.send(ctx, message.Chat.ID, "No he podido entender la nota de voz. ¿Puedes enviar otra con más claridad?")
+		b.observeVoicePhase(ctx, VoicePhaseTelegramSend, sendStarted, sendErr)
+		return sendErr
 	}
 	llmStarted := time.Now()
-	answer, llmErr := b.Service.Reply(ctx, message.From.ID, transcript)
+	answer, llmErr := b.Service.ReplyWithProgress(ctx, message.From.ID, transcript, func(progress string) {
+		if sendErr := b.send(ctx, message.Chat.ID, progress); sendErr != nil {
+			b.event("telegram_send_error")
+		}
+	})
 	b.observeVoicePhase(ctx, VoicePhaseLLM, llmStarted, llmErr)
 	if llmErr != nil {
 		requestResult = voiceMetricResult(llmErr)
 		answer = "No he podido completar la respuesta. Reenvía tu consulta por texto; no he ejecutado acciones externas."
 	}
-	return b.sendVoiceOnly(ctx, message.Chat.ID, answer)
+	sendStarted := time.Now()
+	sendErr := b.send(ctx, message.Chat.ID, answer)
+	b.observeVoicePhase(ctx, VoicePhaseTelegramSend, sendStarted, sendErr)
+	return sendErr
 }
 
 func (b *Bot) sendVoiceOnly(ctx context.Context, chat int64, text string) error {

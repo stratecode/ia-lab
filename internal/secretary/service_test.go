@@ -528,6 +528,31 @@ func TestRegisteredCapabilityRoutesWithoutGranolaConnector(t *testing.T) {
 	}
 }
 
+func TestReplyWithProgressAnnouncesSelectedCapabilityBeforeReading(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"choices":[{"message":{"content":"Hecho."}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	var progress []string
+	s.Capabilities = []ReadCapability{{
+		Name: "Correo", Description: "mensajes recientes",
+		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "correo") },
+		Read: func(context.Context, string) (string, error) {
+			if len(progress) != 1 || progress[0] != "Voy a revisar Correo." {
+				t.Errorf("source read began before its progress message: %v", progress)
+			}
+			return "Hay un mensaje pendiente.", nil
+		},
+	}}
+	answer, err := s.ReplyWithProgress(context.Background(), 7, "¿Tengo algún correo pendiente?", func(message string) {
+		progress = append(progress, message)
+	})
+	if err != nil || answer != "Hecho." || len(progress) != 1 {
+		t.Fatalf("answer=%q progress=%v err=%v", answer, progress, err)
+	}
+}
+
 func TestConversationMemorySurvivesBeyondRecentHistoryAndCanBeForgotten(t *testing.T) {
 	var requests int
 	var lastMessages []Turn

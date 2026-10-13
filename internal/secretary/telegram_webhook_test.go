@@ -97,7 +97,7 @@ func TestTelegramWebhookWorkerProcessesAllowedUpdate(t *testing.T) {
 	defer model.Close()
 
 	var cancel context.CancelFunc
-	var sent int
+	var sent []string
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch strings.TrimPrefix(r.URL.Path, "/botsecret/") {
 		case "sendChatAction":
@@ -107,12 +107,12 @@ func TestTelegramWebhookWorkerProcessesAllowedUpdate(t *testing.T) {
 				ChatID int64  `json:"chat_id"`
 				Text   string `json:"text"`
 			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ChatID != 7 || body.Text != "respuesta" {
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ChatID != 7 {
 				t.Errorf("unexpected Telegram reply: %+v err=%v", body, err)
 			}
-			sent++
+			sent = append(sent, body.Text)
 			io.WriteString(w, `{"ok":true,"result":{}}`)
-			if cancel != nil {
+			if body.Text == "respuesta" && cancel != nil {
 				cancel()
 			}
 		default:
@@ -150,8 +150,8 @@ func TestTelegramWebhookWorkerProcessesAllowedUpdate(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("webhook worker did not finish")
 	}
-	if sent != 1 {
-		t.Fatalf("sent replies=%d, want 1", sent)
+	if len(sent) != 2 || sent[0] != "Recibido. Voy enseguida." || sent[1] != "respuesta" {
+		t.Fatalf("sent replies=%v, want acknowledgement and answer", sent)
 	}
 	if _, err := os.Stat(filepath.Join(queue.dir, "pending-00000000000000000001.json")); !os.IsNotExist(err) {
 		t.Fatalf("update still pending: %v", err)
@@ -208,8 +208,8 @@ func TestTelegramWebhookWorkerRetriesAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	stop2()
-	if sendAttempts != 2 {
-		t.Fatalf("send attempts=%d, want retry after restart", sendAttempts)
+	if sendAttempts != 3 {
+		t.Fatalf("send attempts=%d, want failed acknowledgement plus acknowledgement and answer after restart", sendAttempts)
 	}
 	queue, err = OpenTelegramUpdateQueue(dir)
 	if err != nil {

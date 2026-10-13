@@ -29,9 +29,10 @@ prior exchanges. Telegram and Open WebUI use the same routing, capability and
 memory layer; `/new` clears shared short context and `/forget` deletes shared
 memory, while each channel retains its own visible chat history. Open WebUI is
 restricted to its authenticated administrator mapped to the single lab operator.
-Telegram voice notes receive voice-only answers, while text receives text-only
-answers. Slack/WhatsApp adapters remain future work and must plug into this same
-router. See
+Telegram voice notes are transcribed locally and receive written answers, just
+like text. Telegram sends a short acknowledgement and one source-specific
+progress message when needed, followed by a concise final response. Slack and
+WhatsApp adapters remain future work and must plug into this same router. See
 [secretary operation](../secretary-operation.md). Telegram polling is active;
 OAuth enrollment and live connector access are documented in the operation
 guide. The channel boundary must authenticate the operator and preserve action

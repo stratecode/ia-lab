@@ -81,6 +81,7 @@ type voiceTestState struct {
 	getFileCalls int
 	downloads    int
 	textReplies  []string
+	parseModes   []string
 	voiceReplies int
 }
 
@@ -135,12 +136,14 @@ func newVoiceTestBot(t *testing.T, cfg voiceTestConfig) (*Bot, *voiceTestSpeech,
 			w.Write(cfg.fileBytes)
 		case "POST sendMessage":
 			var body struct {
-				Text string `json:"text"`
+				Text      string `json:"text"`
+				ParseMode string `json:"parse_mode"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Errorf("decode sendMessage: %v", err)
 			}
 			state.textReplies = append(state.textReplies, body.Text)
+			state.parseModes = append(state.parseModes, body.ParseMode)
 			state.events = append(state.events, "sendMessage")
 			io.WriteString(w, `{"ok":true,"result":{}}`)
 		case "POST sendVoice":
@@ -220,43 +223,43 @@ func TestVoiceRejectsOversizedAndOverDurationUpdates(t *testing.T) {
 	}
 }
 
-func TestVoiceTranscribesRepliesOnlyVoice(t *testing.T) {
+func TestVoiceTranscribesAndRepliesWithTextOnly(t *testing.T) {
 	bot, speech, audio, state := newVoiceTestBot(t, voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg-input"), fileSize: 9, duration: 4})
 	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: 4, FileSize: 9}}
-	if err := bot.processVoice(context.Background(), message); err != nil {
+	if err := bot.processUpdate(context.Background(), Update{Message: message}); err != nil {
 		t.Fatal(err)
 	}
-	wantEvents := []string{"getFile", "download", "synthesize", "sendVoice"}
+	wantEvents := []string{"sendMessage", "getFile", "download", "sendMessage"}
 	if strings.Join(state.events, ",") != strings.Join(wantEvents, ",") {
 		t.Fatalf("flow events = %v, want %v", state.events, wantEvents)
 	}
-	if speech.transCalls != 1 || speech.synthCalls != 1 || audio.toWAVCalls != 1 || audio.toOGGCalls != 1 || state.modelCalls != 1 || state.voiceReplies != 1 {
+	if speech.transCalls != 1 || speech.synthCalls != 0 || audio.toWAVCalls != 1 || audio.toOGGCalls != 0 || state.modelCalls != 1 || state.voiceReplies != 0 {
 		t.Fatalf("unexpected flow counts: state=%+v speech=%+v audio=%+v", state, speech, audio)
 	}
-	if len(state.textReplies) != 0 {
-		t.Fatalf("voice request was duplicated as text: %+v", state.textReplies)
+	if len(state.textReplies) != 2 || state.textReplies[0] != "Recibido. Voy enseguida." || strings.TrimSpace(state.textReplies[1]) == "" {
+		t.Fatalf("voice request should receive a short acknowledgement and one text answer: %+v", state.textReplies)
+	}
+	if len(state.parseModes) != 2 || state.parseModes[1] != "HTML" {
+		t.Fatalf("Telegram reply did not enable safe Markdown rendering: %v", state.parseModes)
 	}
 }
 
 func TestVoiceSTTFailureDoesNotCallModel(t *testing.T) {
 	bot, speech, _, state := newVoiceTestBot(t, voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg"), fileSize: 3, duration: 3, transErr: io.ErrUnexpectedEOF})
 	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: 3, FileSize: 3}}
-	if err := bot.processVoice(context.Background(), message); err != nil {
+	if err := bot.processUpdate(context.Background(), Update{Message: message}); err != nil {
 		t.Fatal(err)
 	}
-	if state.modelCalls != 0 || speech.synthCalls != 1 || len(state.textReplies) != 0 || state.voiceReplies != 1 {
-		t.Fatalf("failed transcription did not remain voice-only: state=%+v speech=%+v", state, speech)
+	if state.modelCalls != 0 || speech.synthCalls != 0 || len(state.textReplies) != 2 || state.voiceReplies != 0 {
+		t.Fatalf("failed transcription should report in text without TTS: state=%+v speech=%+v", state, speech)
 	}
 }
 
-func TestVoiceTTSFailureDoesNotSendTextReply(t *testing.T) {
-	bot, speech, _, state := newVoiceTestBot(t, voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg"), fileSize: 3, duration: 3, synthErr: io.ErrUnexpectedEOF})
-	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: 3, FileSize: 3}}
-	if err := bot.processVoice(context.Background(), message); err == nil {
-		t.Fatal("expected a TTS failure after the text reply was sent")
-	}
-	if len(state.textReplies) != 0 || speech.synthCalls != 1 || state.voiceReplies != 0 {
-		t.Fatalf("TTS failure sent a duplicate text answer: state=%+v speech=%+v", state, speech)
+func TestTelegramTextEscapesHTMLAndRendersBoldMarkdown(t *testing.T) {
+	got := telegramHTML("**Importante**: <revisar> & aprobar")
+	want := "<b>Importante</b>: &lt;revisar&gt; &amp; aprobar"
+	if got != want {
+		t.Fatalf("telegramHTML() = %q, want %q", got, want)
 	}
 }
 
@@ -278,7 +281,8 @@ func TestPollingPersistsOffsetRejectsOtherUsersAndDeliversReply(t *testing.T) {
 		io.WriteString(w, `{"choices":[{"message":{"content":"Respuesta real"}}]}`)
 	}))
 	defer model.Close()
-	polls, sent, rejected := 0, 0, 0
+	polls, rejected := 0, 0
+	var sent []string
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch strings.TrimPrefix(r.URL.Path, "/botsecret/") {
 		case "getMe":
@@ -306,10 +310,10 @@ func TestPollingPersistsOffsetRejectsOtherUsersAndDeliversReply(t *testing.T) {
 				Text   string `json:"text"`
 			}
 			json.NewDecoder(r.Body).Decode(&body)
-			if body.ChatID != 7 || body.Text != "Respuesta real" {
+			if body.ChatID != 7 {
 				t.Errorf("unexpected delivery: %+v", body)
 			}
-			sent++
+			sent = append(sent, body.Text)
 			io.WriteString(w, `{"ok":true,"result":{}}`)
 		case "sendChatAction":
 			io.WriteString(w, `{"ok":true,"result":true}`)
@@ -329,8 +333,8 @@ func TestPollingPersistsOffsetRejectsOtherUsersAndDeliversReply(t *testing.T) {
 	if err := b.Run(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if sent != 1 || modelCalls != 1 || rejected != 2 {
-		t.Fatalf("sent %d model %d rejected %d", sent, modelCalls, rejected)
+	if len(sent) != 2 || sent[0] != "Recibido. Voy enseguida." || sent[1] != "Respuesta real" || modelCalls != 1 || rejected != 2 {
+		t.Fatalf("sent %v model %d rejected %d", sent, modelCalls, rejected)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "offset.json"))
 	if err != nil || string(raw) != "13" {

@@ -146,18 +146,20 @@ cause a duplicate notification.
 The first voice path accepts complete Telegram voice notes up to 20 MiB and 120
 seconds, only after the private-chat sender and chat pass the same allowlist as
 text. The adapter downloads the note, converts OGG/Opus to WAV in memory, sends
-it to local Whisper with Spanish recognition, asks the principal model, then
-synthesizes and sends only a Telegram voice reply. Text input receives only a
-text reply. If speech synthesis or audio delivery fails, the voice request fails
-without sending a duplicate text answer. No audio or transcript is written to
-application logs or metrics; scratch conversion data is held in memory, and
-Whisper runs with a private temporary directory.
+it to local Whisper with Spanish recognition, then asks the principal model.
+Both voice and text input receive written responses; Telegram speech synthesis
+is currently disabled. The adapter sends a brief written acknowledgement before
+processing and, when a registered source is selected, one short progress
+message before reading it. It finishes with one concise answer. No audio or
+transcript is written to application logs or metrics; scratch conversion data
+is held in memory, and Whisper runs with a private temporary directory. Telegram
+renders Markdown bold as HTML and escapes other markup.
 
 Whisper runs CPU-only from `whisper.cpp` v1.9.5 using the multilingual
-`ggml-small-q5_1.bin` model with four threads by default. Piper runs
-`piper-tts` 1.8.0 with the Spanish `es_ES-sharvard-medium` voice, female speaker
-1, at length scale `0.96`. The repository defaults keep the speaker and pace
-adjustable. Both services
+`ggml-small-q5_1.bin` model with four threads by default. Piper remains
+configured as a local service with the Spanish `es_ES-sharvard-medium` voice,
+female speaker 1, at length scale `0.96`, but the Telegram reply path does not
+invoke it. The repository defaults keep the speaker and pace adjustable. Both services
 bind only to `127.0.0.1`: Whisper on port 8083 and Piper on 8084. Their systemd
 units have separate memory and CPU ceilings. Tune `lab_whisper_threads`,
 `lab_whisper_cpu_quota`, `lab_whisper_memory_max`, `lab_piper_cpu_quota`, and
