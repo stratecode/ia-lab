@@ -63,9 +63,11 @@ Telegram reply but before local completion can duplicate that reply.
 ## Commands and permissions
 
 After building the Linux binary, update only this service with
-`ansible-playbook playbooks/deploy-secretary-runtime.yml`. The narrower playbook
-reuses the existing private inventory and vault configuration and leaves
-Open WebUI, telemetry, and the speech services untouched.
+`ansible-playbook playbooks/deploy-secretary-runtime.yml`. It replaces only the
+secretary executable, restarts `lab-secretary`, checks its health endpoint and
+restores the previous binary if health verification fails. Existing credentials
+and service configuration stay in place; Open WebUI, telemetry and speech
+services are not restarted.
 
 | Command | Result |
 |---|---|
