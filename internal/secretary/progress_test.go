@@ -1,9 +1,69 @@
 package secretary
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
+
+func TestInteractionProgressReportsLatestStageOnceAfterDelay(t *testing.T) {
+	delayed := make(chan InteractionEvent, 2)
+	tracker := newInteractionProgressTracker(120*time.Millisecond, func(event InteractionEvent) {
+		if event.Kind == EventWorkDelayed {
+			delayed <- event
+		}
+	})
+	tracker.Observe(InteractionEvent{Kind: EventIntentRecognized, Meaning: InteractionLookup})
+	tracker.Observe(InteractionEvent{Kind: EventLookupStarted, Meaning: InteractionLookup, Source: "Granola"})
+	time.Sleep(30 * time.Millisecond)
+	tracker.Observe(InteractionEvent{Kind: EventStageChanged, Stage: "sintetizando la respuesta"})
+	defer tracker.Close()
+
+	select {
+	case event := <-delayed:
+		if event.Kind != EventWorkDelayed || event.Stage != "sintetizando la respuesta" {
+			t.Fatalf("delayed interaction = %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected a delayed interaction event")
+	}
+
+	select {
+	case event := <-delayed:
+		t.Fatalf("unexpected repeated delayed interaction: %+v", event)
+	case <-time.After(160 * time.Millisecond):
+	}
+}
+
+func TestInteractionProgressSuppressesUpdateWhenWorkFinishesBeforeDelay(t *testing.T) {
+	var mu sync.Mutex
+	var events []InteractionEvent
+	tracker := newInteractionProgressTracker(80*time.Millisecond, func(event InteractionEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		events = append(events, event)
+	})
+	tracker.Observe(InteractionEvent{Kind: EventIntentRecognized, Meaning: InteractionNeutral})
+	tracker.Observe(InteractionEvent{Kind: EventCompleted})
+	time.Sleep(120 * time.Millisecond)
+	tracker.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	for _, event := range events {
+		if event.Kind == EventWorkDelayed {
+			t.Fatalf("fast completion emitted delayed progress: %+v", events)
+		}
+	}
+}
+
+func TestInteractionProgressDefaultsToThirtySeconds(t *testing.T) {
+	tracker := newInteractionProgressTracker(0, nil)
+	defer tracker.Close()
+	if tracker.delay != 30*time.Second {
+		t.Fatalf("default interaction delay = %s, want 30s", tracker.delay)
+	}
+}
 
 func TestProgressTrackerReportsLatestStageOnceAfterDelay(t *testing.T) {
 	updates := make(chan string, 2)

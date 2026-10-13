@@ -3,6 +3,7 @@ package secretary
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,6 +27,138 @@ func TestPrivateAllowlistAndNoLegacyCommands(t *testing.T) {
 	reply, err := s.Reply(context.Background(), 7, "/launch 123")
 	if err != nil || !strings.Contains(reply, "/help") {
 		t.Fatalf("legacy command must not execute: %q %v", reply, err)
+	}
+}
+
+func TestReplyWithInteractionEmitsIntentAndLookupLifecycle(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"choices":[{"message":{"content":"Hay un correo pendiente."}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	var events []InteractionEvent
+	s.Capabilities = []ReadCapability{{
+		Name: "Correo", Description: "mensajes recientes",
+		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "correo") },
+		Read: func(context.Context, string) (string, error) {
+			if len(events) < 2 || events[0].Kind != EventIntentRecognized || events[1].Kind != EventLookupStarted || events[1].Source != "Correo" {
+				t.Errorf("lookup started before intent/source events: %+v", events)
+			}
+			return "Hay un correo pendiente.", nil
+		},
+	}}
+
+	answer, err := s.ReplyWithInteraction(context.Background(), 7, "telegram", "chat-7", "¿Tengo algún correo pendiente?", func(event InteractionEvent) {
+		events = append(events, event)
+	})
+	if err != nil || !strings.Contains(answer, "Hay un correo pendiente") {
+		t.Fatalf("answer=%q err=%v", answer, err)
+	}
+	if len(events) < 3 || events[0].Kind != EventIntentRecognized || events[0].Meaning != InteractionLookup || events[1] != (InteractionEvent{Kind: EventLookupStarted, Meaning: InteractionLookup, Source: "Correo"}) || events[len(events)-1].Kind != EventCompleted {
+		t.Fatalf("unexpected interaction lifecycle: %+v", events)
+	}
+}
+
+func TestReadOnlyActionNeverEmitsActionStarted(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"choices":[{"message":{"content":"La tarea aparece abierta."}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	s.Capabilities = []ReadCapability{{
+		Name: "Jira", Description: "tareas del equipo",
+		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "jira") },
+		Read:  func(context.Context, string) (string, error) { return "La tarea STRAT-42 aparece abierta.", nil },
+	}}
+	var events []InteractionEvent
+	answer, err := s.ReplyWithInteraction(context.Background(), 7, "telegram", "chat-7", "Cierra la tarea STRAT-42 en Jira", func(event InteractionEvent) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events[0].Meaning != InteractionAction {
+		t.Fatalf("meaning = %q, want action; events=%+v", events[0].Meaning, events)
+	}
+	for _, event := range events {
+		if event.Kind == EventActionStarted {
+			t.Fatalf("read-only Jira emitted action_started: %+v", events)
+		}
+	}
+	if !strings.Contains(strings.ToLower(answer), "solo he consultado") || !strings.Contains(strings.ToLower(answer), "no he cambiado") {
+		t.Fatalf("read-only action answer must state no change was made: %q", answer)
+	}
+}
+
+func TestUnsupportedActionDoesNotAnnounceLookup(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"choices":[{"message":{"content":"{\"intent\":\"clarify\"}"}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	var events []InteractionEvent
+	answer, err := s.ReplyWithInteraction(context.Background(), 7, "telegram", "chat-7", "Cierra la tarea STRAT-42", func(event InteractionEvent) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Kind == EventLookupStarted || event.Kind == EventActionStarted || event.Kind == EventCompleted {
+			t.Fatalf("unsupported action announced work/completion: %+v", events)
+		}
+	}
+	if len(events) < 2 || events[0].Meaning != InteractionAction || events[len(events)-1] != (InteractionEvent{Kind: EventBlocked, Meaning: InteractionAction, Reason: BlockUnavailable}) {
+		t.Fatalf("unsupported action lifecycle = %+v", events)
+	}
+	if !strings.Contains(strings.ToLower(answer), "no tengo") {
+		t.Fatalf("answer should explain the unavailable action: %q", answer)
+	}
+}
+
+func TestCapabilityFailureEmitsBlockedNotCompleted(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("synthesizer should not run after the connector failed")
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	s.Capabilities = []ReadCapability{{
+		Name: "Correo", Description: "mensajes recientes",
+		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "correo") },
+		Read:  func(context.Context, string) (string, error) { return "", errors.New("private connector detail") },
+	}}
+	var events []InteractionEvent
+	answer, err := s.ReplyWithInteraction(context.Background(), 7, "telegram", "chat-7", "¿Tengo algún correo pendiente?", func(event InteractionEvent) {
+		events = append(events, event)
+	})
+	if err != nil || !strings.Contains(strings.ToLower(answer), "no he podido verificar") {
+		t.Fatalf("answer=%q err=%v", answer, err)
+	}
+	if events[len(events)-1] != (InteractionEvent{Kind: EventBlocked, Meaning: InteractionLookup, Source: "Correo", Reason: BlockConnectorFailure}) {
+		t.Fatalf("connector failure must end blocked, events=%+v", events)
+	}
+	for _, event := range events {
+		if event.Kind == EventCompleted {
+			t.Fatalf("connector failure emitted completed: %+v", events)
+		}
+	}
+}
+
+func TestNeutralMessageEmitsNoLookupOrAction(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"choices":[{"message":{"content":"Buenos días."}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	var events []InteractionEvent
+	_, err := s.ReplyWithInteraction(context.Background(), 7, "webui", "chat-web-7", "Buenos días", func(event InteractionEvent) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[0] != (InteractionEvent{Kind: EventIntentRecognized, Meaning: InteractionNeutral}) || events[1].Kind != EventCompleted {
+		t.Fatalf("neutral message emitted unexpected interaction: %+v", events)
 	}
 }
 

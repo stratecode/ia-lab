@@ -19,6 +19,101 @@ type progressTracker struct {
 	prefix string
 }
 
+type interactionProgressTracker struct {
+	mu     sync.Mutex
+	delay  time.Duration
+	stage  string
+	timer  *time.Timer
+	sent   bool
+	closed bool
+	emit   InteractionObserver
+}
+
+func newInteractionProgressTracker(delay time.Duration, emit InteractionObserver) *interactionProgressTracker {
+	if delay <= 0 {
+		delay = DefaultProgressDelay
+	}
+	p := &interactionProgressTracker{delay: delay, stage: "interpretando la consulta", emit: emit}
+	if emit != nil {
+		p.timer = time.AfterFunc(delay, p.sendDelayed)
+	}
+	return p
+}
+
+func (p *interactionProgressTracker) Observe(event InteractionEvent) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return
+	}
+	switch event.Kind {
+	case EventIntentRecognized:
+		p.stage = "preparando la respuesta"
+	case EventStageChanged:
+		if strings.TrimSpace(event.Stage) != "" {
+			p.stage = strings.TrimSpace(event.Stage)
+		}
+	case EventLookupStarted:
+		p.stage = "consultando " + boundedLabel(event.Source)
+	case EventActionRecognized:
+		p.stage = "comprobando la acción solicitada"
+	case EventActionStarted:
+		p.stage = "ejecutando " + boundedLabel(event.Action)
+	case EventWorkDelayed:
+		p.stage = strings.TrimSpace(event.Stage)
+	}
+	if event.Kind == EventCompleted || event.Kind == EventBlocked {
+		p.closed = true
+		if p.timer != nil {
+			p.timer.Stop()
+		}
+	}
+	emit := p.emit
+	p.mu.Unlock()
+	if event.Kind != EventStageChanged && event.Kind != EventWorkDelayed && emit != nil {
+		emit(event)
+	}
+}
+
+func (p *interactionProgressTracker) sendDelayed() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	if p.closed || p.sent || p.emit == nil || p.stage == "" {
+		p.mu.Unlock()
+		return
+	}
+	p.sent = true
+	event := InteractionEvent{Kind: EventWorkDelayed, Stage: p.stage}
+	emit := p.emit
+	p.mu.Unlock()
+	emit(event)
+}
+
+func (p *interactionProgressTracker) Close() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.closed = true
+	if p.timer != nil {
+		p.timer.Stop()
+	}
+}
+
+func boundedLabel(value string) string {
+	value = strings.TrimSpace(value)
+	if len([]rune(value)) > 80 {
+		return string([]rune(value)[:80])
+	}
+	return value
+}
+
 func newProgressTracker(delay time.Duration, emit func(string)) *progressTracker {
 	if delay <= 0 {
 		delay = DefaultProgressDelay

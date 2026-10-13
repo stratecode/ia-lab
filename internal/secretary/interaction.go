@@ -15,6 +15,7 @@ type InteractionEventKind string
 
 const (
 	EventIntentRecognized InteractionEventKind = "intent_recognized"
+	EventStageChanged     InteractionEventKind = "stage_changed"
 	EventLookupStarted    InteractionEventKind = "lookup_started"
 	EventActionRecognized InteractionEventKind = "action_recognized"
 	EventActionStarted    InteractionEventKind = "action_started"
@@ -26,9 +27,10 @@ const (
 type InteractionBlockReason string
 
 const (
-	BlockUnavailable      InteractionBlockReason = "unavailable"
-	BlockConnectorFailure InteractionBlockReason = "connector_failure"
-	BlockTimeout          InteractionBlockReason = "timeout"
+	BlockUnavailable       InteractionBlockReason = "unavailable"
+	BlockConnectorFailure  InteractionBlockReason = "connector_failure"
+	BlockProcessingFailure InteractionBlockReason = "processing_failure"
+	BlockTimeout           InteractionBlockReason = "timeout"
 )
 
 // InteractionEvent is a channel-neutral progress signal. Source, Action, and

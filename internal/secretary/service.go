@@ -105,28 +105,59 @@ func (s *Service) historyPath(user int64) string {
 	return filepath.Join(s.StateDir, fmt.Sprintf("telegram-%d.json", user))
 }
 func (s *Service) Reply(ctx context.Context, user int64, text string) (string, error) {
-	return s.reply(ctx, user, "telegram", fmt.Sprintf("%d", user), text, nil, nil)
+	return s.reply(ctx, user, "telegram", fmt.Sprintf("%d", user), text, nil, nil, nil)
 }
 
 // ReplyWithProgress runs the shared intent and capability router while
 // reporting the selected read source before its connector is called.
 func (s *Service) ReplyWithProgress(ctx context.Context, user int64, text string, progress func(string)) (string, error) {
-	return s.reply(ctx, user, "telegram", fmt.Sprintf("%d", user), text, nil, progress)
+	return s.reply(ctx, user, "telegram", fmt.Sprintf("%d", user), text, nil, progress, nil)
 }
 
 // ReplyInConversation handles a turn with history isolated to one channel conversation.
 func (s *Service) ReplyInConversation(ctx context.Context, user int64, channel, conversation, text string) (string, error) {
-	return s.reply(ctx, user, channel, conversation, text, nil, nil)
+	return s.reply(ctx, user, channel, conversation, text, nil, nil, nil)
 }
 
 // ReplyWithProgressInConversation is ReplyInConversation with a progress callback.
 func (s *Service) ReplyWithProgressInConversation(ctx context.Context, user int64, channel, conversation, text string, progress func(string)) (string, error) {
-	return s.reply(ctx, user, channel, conversation, text, nil, progress)
+	return s.reply(ctx, user, channel, conversation, text, nil, progress, nil)
 }
 
-func (s *Service) reply(ctx context.Context, user int64, channel, conversation, text string, stream func(string), progress func(string)) (string, error) {
+// ReplyWithInteraction runs the shared router and emits channel-neutral
+// semantic events. Channel adapters decide how to present those events.
+func (s *Service) ReplyWithInteraction(ctx context.Context, user int64, channel, conversation, text string, observer InteractionObserver) (string, error) {
+	tracker := newInteractionProgressTracker(DefaultProgressDelay, observer)
+	defer tracker.Close()
+	return s.reply(ctx, user, channel, conversation, text, nil, nil, tracker.Observe)
+}
+
+func (s *Service) reply(ctx context.Context, user int64, channel, conversation, text string, stream func(string), progress func(string), observer InteractionObserver) (result string, replyErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	lifecycleStarted := false
+	terminalEventEmitted := false
+	emitInteraction := func(event InteractionEvent) {
+		if observer == nil {
+			return
+		}
+		if event.Kind == EventCompleted || event.Kind == EventBlocked {
+			terminalEventEmitted = true
+		}
+		observer(event)
+	}
+	defer func() {
+		if !lifecycleStarted || terminalEventEmitted || observer == nil {
+			return
+		}
+		reason := InteractionBlockReason("")
+		kind := EventCompleted
+		if replyErr != nil {
+			kind = EventBlocked
+			reason = BlockProcessingFailure
+		}
+		emitInteraction(InteractionEvent{Kind: kind, Reason: reason})
+	}()
 	key := s.historyKey(user, channel, conversation)
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -244,6 +275,17 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 			}
 		}
 	}
+	meaning := interactionMeaning(intent, text)
+	lifecycleStarted = true
+	emitInteraction(InteractionEvent{Kind: EventIntentRecognized, Meaning: meaning})
+	if meaning == InteractionAction {
+		emitInteraction(InteractionEvent{Kind: EventActionRecognized, Meaning: meaning, Action: "requested_change"})
+	}
+	if meaning == InteractionAction && !capabilityMatched {
+		answer := "Entiendo la acción que pides, pero no tengo una herramienta autorizada para realizarla."
+		emitInteraction(InteractionEvent{Kind: EventBlocked, Meaning: meaning, Reason: BlockUnavailable})
+		return answer, nil
+	}
 	var (
 		memories []conversationMemory
 		err      error
@@ -259,16 +301,31 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 	case intentCapability:
 		if !capabilityMatched {
 			answer = "No encuentro una herramienta de solo lectura configurada para esa consulta."
+			emitInteraction(InteractionEvent{Kind: EventBlocked, Meaning: meaning, Reason: BlockUnavailable})
 		} else {
+			emitInteraction(InteractionEvent{Kind: EventLookupStarted, Meaning: meaning, Source: boundedLabel(capability.Name)})
 			if progress != nil {
 				progress("Voy a revisar " + capability.Name + ".")
 			}
-			answer, err = s.answerFromCapability(ctx, text, capability, memories, stream, progress)
+			var blockReason InteractionBlockReason
+			var capabilityErr error
+			answer, blockReason, capabilityErr = s.answerFromCapability(ctx, text, capability, memories, stream, progress, emitInteraction)
+			if capabilityErr != nil {
+				err = capabilityErr
+			} else if blockReason != "" {
+				emitInteraction(InteractionEvent{Kind: EventBlocked, Meaning: meaning, Source: boundedLabel(capability.Name), Reason: blockReason})
+				if meaning == InteractionAction {
+					answer += " No he aplicado cambios; solo puedo consultar " + capability.Name + "."
+				}
+			} else if meaning == InteractionAction {
+				answer += "\n\nNo he cambiado nada; solo he consultado " + capability.Name + "."
+			}
 		}
 	case intentMemory:
 		if len(memories) == 0 {
 			answer = "No encuentro en la memoria de la secretaria una conversación anterior relacionada con ese tema."
 		} else {
+			emitInteraction(InteractionEvent{Kind: EventStageChanged, Stage: "recuperando memoria"})
 			if progress != nil {
 				progress("preparando la respuesta")
 			}
@@ -277,6 +334,7 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 	case intentClarify:
 		answer = "¿Qué fuente o información quieres que consulte?"
 	default:
+		emitInteraction(InteractionEvent{Kind: EventStageChanged, Stage: "sintetizando la respuesta"})
 		if progress != nil {
 			progress("preparando la respuesta")
 		}
@@ -406,18 +464,25 @@ func (s *Service) capabilityForFollowUp(query string, history []Turn) (ReadCapab
 	return ReadCapability{}, false
 }
 
-func (s *Service) answerFromCapability(ctx context.Context, question string, capability ReadCapability, memories []conversationMemory, stream func(string), progress func(string)) (string, error) {
+func (s *Service) answerFromCapability(ctx context.Context, question string, capability ReadCapability, memories []conversationMemory, stream func(string), progress func(string), observer InteractionObserver) (string, InteractionBlockReason, error) {
 	source, err := capability.Read(ctx, question)
 	if err != nil {
-		return capability.Name + " no está disponible; no he podido verificar la información.", nil
+		return capability.Name + " no está disponible; no he podido verificar la información.", BlockConnectorFailure, nil
 	}
 	if strings.TrimSpace(source) == "" {
-		return "No he encontrado notas en " + capability.Name + " que permitan verificarlo.", nil
+		return "No he encontrado notas en " + capability.Name + " que permitan verificarlo.", "", nil
+	}
+	if observer != nil {
+		observer(InteractionEvent{Kind: EventStageChanged, Stage: "sintetizando la respuesta"})
 	}
 	if progress != nil {
 		progress("preparando la respuesta")
 	}
-	return s.answerWithContext(ctx, question, nil, memories, false, stream, source, capability.Name+" — "+capability.Description)
+	answer, err := s.answerWithContext(ctx, question, nil, memories, false, stream, source, capability.Name+" — "+capability.Description)
+	if err != nil {
+		return "", BlockProcessingFailure, err
+	}
+	return answer, "", nil
 }
 
 func (s *Service) answerWithContext(ctx context.Context, question string, history []Turn, memories []conversationMemory, memoryOnly bool, stream func(string), sources ...string) (string, error) {
@@ -711,7 +776,7 @@ func (s *Service) Handler() http.Handler {
 			if streaming {
 				streamFn = emit
 			}
-			answer, err := s.reply(r.Context(), operator, "openwebui", conversation, prompt, streamFn, nil)
+			answer, err := s.reply(r.Context(), operator, "openwebui", conversation, prompt, streamFn, nil, nil)
 			if err != nil {
 				if !streamed {
 					http.Error(w, "secretary could not complete the request", http.StatusBadGateway)

@@ -27,7 +27,7 @@
 - [ ] Add failing unit tests for `TestInteractionMeaningForIntent` covering lookup, explicit agreement, requested action, ordinary conversation, and ambiguous intent. Ambiguous input must return `neutral`, not a guessed reaction.
 - [ ] Add typed core values in `interaction.go`:
   - `type InteractionMeaning string` with `InteractionLookup`, `InteractionAgreement`, `InteractionAction`, and `InteractionNeutral`.
-  - `type InteractionEventKind string` with `EventIntentRecognized`, `EventLookupStarted`, `EventActionRecognized`, `EventActionStarted`, `EventWorkDelayed`, `EventCompleted`, and `EventBlocked`.
+  - `type InteractionEventKind string` with `EventIntentRecognized`, `EventStageChanged`, `EventLookupStarted`, `EventActionRecognized`, `EventActionStarted`, `EventWorkDelayed`, `EventCompleted`, and `EventBlocked`.
   - `type InteractionBlockReason string` with bounded values such as `BlockUnavailable`, `BlockConnectorFailure`, and `BlockTimeout`.
   - `type InteractionEvent struct { Kind InteractionEventKind; Meaning InteractionMeaning; Source string; Action string; Stage string; Reason InteractionBlockReason }`.
   - `type InteractionObserver func(InteractionEvent)`.
@@ -44,9 +44,9 @@
 - [ ] Add failing tests for action recognition with only read capability (`TestReadOnlyActionNeverEmitsActionStarted`), no matching capability (`TestUnsupportedActionDoesNotAnnounceLookup`), connector failure (`TestCapabilityFailureEmitsBlockedNotCompleted`), and neutral/ambiguous prompts (no emoji meaning beyond neutral).
 - [ ] Add a shared entry point `ReplyWithInteraction(ctx context.Context, user int64, channel, conversation, text string, observer InteractionObserver) (string, error)` and route the existing conversation APIs through the same internal `reply` path. Keep compatibility wrappers for existing callers.
 - [ ] Emit `EventIntentRecognized` only after identity is already authorized by the caller and intent classification has completed. Emit `EventLookupStarted` immediately before invoking a selected `ReadCapability`. Emit `EventActionRecognized` for understood action requests. Emit `EventActionStarted` only after an authorized registered write capability is actually invoked; with today's registry this event must never be emitted. Emit exactly one terminal `EventCompleted` or `EventBlocked` for routed capability work.
-- [ ] Replace string-only core progress with typed events while preserving current source wording. Keep the single delayed-progress threshold at 30 seconds and emit `EventWorkDelayed` once with the current stage; cancel the timer on return. Do not emit repeated “still working” events or delay fast replies.
+- [ ] Replace string-only core progress with typed events while preserving current source wording. Keep the single delayed-progress threshold at 30 seconds and emit `EventWorkDelayed` once with the current stage; cancel the timer on return. Emit `EventStageChanged` only to update the core timer's stage; adapters do not render it immediately. Do not emit repeated “still working” events or delay fast replies.
 - [ ] Assert against false-positive completion: an upstream error emits blocked and the answer must not say the information was verified. Keep interaction events transient; do not add persistence.
-- [ ] Run focused tests in the repository's Go container: `docker run --rm -v "$PWD:/workspace" -w /workspace golang:1.23 /bin/bash -lc 'export PATH=/usr/local/go/bin:$PATH; export GOTELEMETRY=off; go test ./internal/secretary -run "TestReplyWithInteraction|TestReadOnlyAction|TestUnsupportedAction|TestCapabilityFailure|TestProgress"'`. Commit as `Emit shared secretary interaction lifecycle`.
+- [ ] Run focused tests in the repository's Go container: `docker run --rm -v "$PWD:/workspace" -w /workspace golang:1.23 /bin/bash -lc 'export PATH=/usr/local/go/bin:$PATH; export GOTELEMETRY=off; go test ./internal/secretary -run "TestReplyWithInteraction|TestReadOnlyAction|TestUnsupportedAction|TestCapabilityFailure|TestNeutralMessage|TestProgress"'`. Commit as `Emit shared secretary interaction lifecycle`.
 
 ## Task 3 — Render events in Telegram and OpenWebUI
 
