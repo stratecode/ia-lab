@@ -32,7 +32,7 @@
   - `type InteractionEvent struct { Kind InteractionEventKind; Meaning InteractionMeaning; Source string; Action string; Stage string; Reason InteractionBlockReason }`.
   - `type InteractionObserver func(InteractionEvent)`.
   - `func interactionMeaning(intent secretaryIntent, text string) InteractionMeaning`.
-- [ ] Implement classification by reusing the already-produced `intentKind` and existing local intent rules. Do not invoke the model a second time for reaction selection. Return neutral when the current router cannot distinguish an explicit agreement or an action reliably.
+- [ ] Implement classification by reusing the already-produced `secretaryIntent` and existing local intent rules. Do not invoke the model a second time for reaction selection. Return neutral when the current router cannot distinguish an explicit agreement or an action reliably.
 - [ ] Add table tests proving the event values contain only semantic fields and have no Telegram/OpenWebUI types or message IDs.
 - [ ] Run the focused package tests in the repository's Go container: `docker run --rm -v "$PWD:/workspace" -w /workspace golang:1.23 /bin/bash -lc 'export PATH=/usr/local/go/bin:$PATH; export GOTELEMETRY=off; go test ./internal/secretary'`. Commit as `Add shared secretary interaction events`.
 
