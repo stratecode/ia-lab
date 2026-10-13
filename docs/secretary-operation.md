@@ -65,10 +65,10 @@ Telegram reply but before local completion can duplicate that reply.
 
 After building the Linux binary, update only this service with
 `ansible-playbook playbooks/deploy-secretary-runtime.yml`. It replaces only the
-secretary executable, restarts `lab-secretary`, checks its health endpoint and
-restores the previous binary if health verification fails. Existing credentials
-and service configuration stay in place; Open WebUI, telemetry and speech
-services are not restarted.
+secretary executable and updates only its non-secret progress-delay setting,
+restarts `lab-secretary`, checks its health endpoint and restores the previous
+binary if health verification fails. Credentials and other service configuration
+stay in place; Open WebUI, telemetry and speech services are not restarted.
 
 To deploy only Piper voice settings and shared response instructions, run
 `ansible-playbook playbooks/deploy-secretary-voice.yml`. This restarts `lab-piper`
