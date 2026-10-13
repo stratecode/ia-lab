@@ -22,6 +22,8 @@ required = {
     "unknown path rejection": "location / {\n              return 404;",
     "assistant CNAME target": "route53_assistant_cname_target:",
     "conflicting DNS type check": "route53_assistant_existing_types",
+    "vault credentials guard": "route53_ddns_has_managed_credentials | default(false)",
+    "host credential probe": "- sts\n      - get-caller-identity",
 }
 sources = {
     "assistant domain variable": group_vars,
@@ -35,6 +37,8 @@ sources = {
     "unknown path rejection": monitor,
     "assistant CNAME target": group_vars,
     "conflicting DNS type check": route53,
+    "vault credentials guard": route53,
+    "host credential probe": route53,
 }
 missing = [name for name, needle in required.items() if needle not in sources[name]]
 if missing:

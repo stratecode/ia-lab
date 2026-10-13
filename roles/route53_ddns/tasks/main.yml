@@ -1,6 +1,16 @@
 - name: Gather service facts for Route53 DDNS
   ansible.builtin.service_facts:
 
+- name: Check for managed Route53 credentials in the vault
+  ansible.builtin.set_fact:
+    route53_ddns_has_managed_credentials: >-
+      {{
+        (aws_cli_profiles[route53_ddns_aws_profile] is defined)
+        and ((aws_cli_profiles[route53_ddns_aws_profile].aws_access_key_id | default('')) | length > 0)
+        and ((aws_cli_profiles[route53_ddns_aws_profile].aws_secret_access_key | default('')) | length > 0)
+      }}
+  when: route53_ddns_enabled
+
 - name: Check whether Route53 DDNS timer unit exists
   ansible.builtin.stat:
     path: /etc/systemd/system/route53-ddns.timer
@@ -48,7 +58,10 @@
       {% endif %}
 
       {% endfor %}
-  when: route53_ddns_enabled
+  when:
+    - route53_ddns_enabled
+    - route53_ddns_has_managed_credentials | default(false)
+  no_log: true
 
 - name: Install AWS shared config file
   ansible.builtin.copy:
@@ -63,7 +76,10 @@
       output=json
 
       {% endfor %}
-  when: route53_ddns_enabled
+  when:
+    - route53_ddns_enabled
+    - route53_ddns_has_managed_credentials | default(false)
+  no_log: true
 
 - name: Install Route53 DDNS updater script
   ansible.builtin.copy:
@@ -231,14 +247,27 @@
   ansible.builtin.meta: flush_handlers
   when: route53_ddns_enabled
 
-- name: Check whether Route53 DDNS has usable AWS credentials
+- name: Verify the configured Route53 AWS profile without exposing identity data
+  ansible.builtin.command:
+    argv:
+      - aws
+      - sts
+      - get-caller-identity
+      - --output
+      - json
+  register: route53_ddns_aws_identity_check
+  changed_when: false
+  failed_when: false
+  no_log: true
+  environment:
+    AWS_PROFILE: "{{ route53_ddns_aws_profile }}"
+    AWS_SHARED_CREDENTIALS_FILE: /root/.aws/credentials
+    AWS_CONFIG_FILE: /root/.aws/config
+  when: route53_ddns_enabled
+
+- name: Set Route53 credential availability
   ansible.builtin.set_fact:
-    route53_ddns_has_credentials: >-
-      {{
-        (aws_cli_profiles[route53_ddns_aws_profile] is defined)
-        and ((aws_cli_profiles[route53_ddns_aws_profile].aws_access_key_id | default('')) | length > 0)
-        and ((aws_cli_profiles[route53_ddns_aws_profile].aws_secret_access_key | default('')) | length > 0)
-      }}
+    route53_ddns_has_credentials: "{{ route53_ddns_aws_identity_check.rc | default(1) == 0 }}"
   when: route53_ddns_enabled
 
 - name: Resolve Route53 zone for the assistant alias
@@ -391,9 +420,8 @@
   ansible.builtin.debug:
     msg: >-
       Route53 DDNS is installed but disabled because AWS profile
-      {{ route53_ddns_aws_profile }} is missing credentials.
-      Populate aws_cli_profiles.{{ route53_ddns_aws_profile }} via ansible-vault,
-      then rerun the playbook.
+      {{ route53_ddns_aws_profile }} is not usable. Configure the vaulted
+      profile or the host's AWS credential provider, then rerun the playbook.
   when:
     - route53_ddns_enabled
     - not route53_ddns_has_credentials | default(false)
