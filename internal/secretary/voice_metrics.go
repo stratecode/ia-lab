@@ -27,15 +27,16 @@ const (
 )
 
 type VoiceMetrics struct {
-	registry        *prometheus.Registry
-	phaseDuration   *prometheus.HistogramVec
-	phaseCalls      *prometheus.CounterVec
-	requestDuration *prometheus.HistogramVec
-	interactions    *prometheus.CounterVec
-	interactionTime *prometheus.HistogramVec
-	memoryRetrieval *prometheus.CounterVec
-	memoryHits      prometheus.Histogram
-	traceWriteError prometheus.Counter
+	registry         *prometheus.Registry
+	phaseDuration    *prometheus.HistogramVec
+	phaseCalls       *prometheus.CounterVec
+	requestDuration  *prometheus.HistogramVec
+	interactions     *prometheus.CounterVec
+	interactionTime  *prometheus.HistogramVec
+	memoryRetrieval  *prometheus.CounterVec
+	memoryHits       prometheus.Histogram
+	traceWriteError  prometheus.Counter
+	maintenanceError prometheus.Counter
 }
 
 func NewVoiceMetrics() *VoiceMetrics {
@@ -79,8 +80,12 @@ func NewVoiceMetrics() *VoiceMetrics {
 			Name: "lab_secretary_trace_write_errors_total",
 			Help: "Learning trace writes that failed without affecting the response.",
 		}),
+		maintenanceError: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "lab_secretary_learning_maintenance_errors_total",
+			Help: "Private learning retention cleanup failures.",
+		}),
 	}
-	registry.MustRegister(metrics.phaseDuration, metrics.phaseCalls, metrics.requestDuration, metrics.interactions, metrics.interactionTime, metrics.memoryRetrieval, metrics.memoryHits, metrics.traceWriteError)
+	registry.MustRegister(metrics.phaseDuration, metrics.phaseCalls, metrics.requestDuration, metrics.interactions, metrics.interactionTime, metrics.memoryRetrieval, metrics.memoryHits, metrics.traceWriteError, metrics.maintenanceError)
 	return metrics
 }
 
@@ -111,6 +116,12 @@ func (m *VoiceMetrics) ObserveMemoryRetrieval(outcome string, hits int) {
 func (m *VoiceMetrics) ObserveTraceWriteError() {
 	if m != nil {
 		m.traceWriteError.Inc()
+	}
+}
+
+func (m *VoiceMetrics) ObserveMaintenanceError() {
+	if m != nil {
+		m.maintenanceError.Inc()
 	}
 }
 

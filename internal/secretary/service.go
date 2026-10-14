@@ -58,6 +58,42 @@ func New(upstream, key, instructions, stateDir string, allowed map[int64]bool) *
 	return &Service{Upstream: strings.TrimRight(upstream, "/"), Key: key, Instructions: instructions, StateDir: stateDir, Allowed: allowed, Client: &http.Client{Timeout: 120 * time.Second}, history: map[string][]Turn{}, Learning: NewJSONLLearningStore(stateDir), Retention: LearningRetention{TraceDays: 90, CandidateDays: 30}}
 }
 
+// RunLearningMaintenance prunes private learning records at startup and every 24 hours.
+// Failures are observable but never prevent the HTTP service from running.
+func (s *Service) RunLearningMaintenance(ctx context.Context, retention LearningRetention) {
+	s.runLearningMaintenance(ctx, retention, 24*time.Hour)
+}
+
+func (s *Service) runLearningMaintenance(ctx context.Context, retention LearningRetention, interval time.Duration) {
+	if retention.TraceDays <= 0 {
+		retention.TraceDays = 90
+	}
+	if retention.CandidateDays <= 0 {
+		retention.CandidateDays = 30
+	}
+	if interval <= 0 {
+		interval = 24 * time.Hour
+	}
+	prune := func() {
+		if s.Learning != nil {
+			if err := s.Learning.Prune(time.Now().UTC(), retention.TraceDays, retention.CandidateDays); err != nil {
+				s.VoiceMetrics().ObserveMaintenanceError()
+			}
+		}
+	}
+	prune()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			prune()
+		}
+	}
+}
+
 func (s *Service) VoiceMetrics() *VoiceMetrics {
 	s.voiceMetricsOnce.Do(func() {
 		if s.voiceMetrics == nil {

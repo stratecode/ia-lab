@@ -127,6 +127,11 @@ func (s *Service) forget(user int64) error {
 			delete(s.history, key)
 		}
 	}
+	if s.Learning != nil {
+		if err := s.Learning.Forget(user); err != nil {
+			return errors.New("cannot remove learning memory")
+		}
+	}
 	return nil
 }
 

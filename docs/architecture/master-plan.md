@@ -45,7 +45,16 @@ Secretary tooling and skill priorities are analyzed in
 the deployed LFM exposed an incorrect attribution of a commitment deadline and
 several omissions. This is exploratory evidence, not acceptance of autonomous
 secretary actions. External connector code is present but live access is not yet accepted; prioritize
-grounded read flows and reviewed drafts before bounded writes.
+grounded read flows and reviewed drafts before bounded writes. Live reads remain
+subject to source-by-source canary verification; no external write is enabled.
+
+The supervised memory increment adds versioned local traces, explicit operator
+feedback, candidate review, approved knowledge retrieval, deterministic entity
+resolution and bounded retention. It does not train model weights or mutate
+production prompts/rules. Current task state must still come from a live source;
+approved memory supplies historical context and reviewed aliases only. See
+`../secretary-operation.md` for the commands, retention defaults, privacy limits
+and verification procedure.
 
 The legacy initiative control plane remains in source as a possible governed
 execution foundation, but is retired on the host. The sections below preserve

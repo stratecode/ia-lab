@@ -79,7 +79,12 @@ when its unit changes and `lab-secretary` when the instructions change.
 | Plain text | Natural-language routing, shared operator memory and principal LFM synthesis, from Telegram or Open WebUI |
 | `/help`, `/start` | Secretary help |
 | `/new` | Clear the secretary's recent shared context; channel-native chat histories and durable memory remain |
-| `/forget` | Delete the operator's durable secretary memory and recent shared context |
+| `/forget` | Delete the operator's conversation memory, traces, feedback, knowledge and recent shared context |
+| `/feedback bien` | Mark the latest response in this channel conversation as correct |
+| `/feedback mal: motivo` | Record a negative rating and create a private candidate for review |
+| `/feedback corrige: corrección` | Record a correction as an unapproved candidate; it cannot affect answers until reviewed |
+| `/aprendizaje` | List candidate correction IDs and brief descriptions |
+| `/aprueba ID`, `/descarta ID` | Approve or reject one candidate owned by this operator |
 | `/status` | Connector configuration status; does not prove provider connectivity |
 | `/jira` | Up to five open issues assigned to the authorised Jira account |
 | `/reuniones` | Executive summary of up to five Granola notes from the last seven days; uses note summaries, never transcripts |
@@ -118,6 +123,35 @@ retrieved content is
 treated as untrusted source data. If a source is unavailable or returns no results,
 the service says so directly instead of asking the model to improvise from an empty
 result.
+
+## Supervised memory and evaluation
+
+Each eligible natural-language request stores a versioned interaction trace under
+the service's private `StateDirectory`. A trace records channel, a one-way
+conversation fingerprint, intent, selected capability, outcome, latency, result
+count, provider-backed evidence references and trusted model/router labels. It
+does not store the prompt, answer, transcript or complete connector payload.
+Trace retention defaults to 90 days; unresolved candidates default to 30 days.
+Both values are configurable through the tracked Ansible variables
+`lab_secretary_trace_retention_days` and
+`lab_secretary_candidate_retention_days`. Cleanup runs at service startup and
+every 24 hours. Cleanup failures are counted in
+`lab_secretary_learning_maintenance_errors_total` and do not stop the service.
+
+Feedback binds to the latest interaction for the same authenticated operator,
+channel and conversation. A correction remains a candidate until `/aprueba ID`;
+only approved items enter retrieval, with their source and validity dates. Similar
+person names remain unresolved unless an exact external ID or approved alias
+identifies one person. Live Jira/Rovo or Granola data remains authoritative for
+current state. `/forget` also removes all learning records for that operator.
+
+The metrics endpoint exposes bounded interaction outcome and duration labels,
+memory retrieval counts/hits, trace-write failures and maintenance failures.
+Labels exclude user text, names, issue keys, source URLs, provider IDs and
+conversation IDs. No automatic weight updates, prompt mutation or rule learning
+occurs; this is a supervised feedback and regression loop, not reinforcement
+training. Real interaction records stay on the lab; repository fixtures must be
+synthetic or redacted.
 
 ## Shared interaction feedback
 
@@ -211,13 +245,13 @@ through Sunday partitions. Queries without a date search the latest 30 days and
 the legacy archive. `/forget` removes both formats and every short-term history
 for the operator.
 
-Retrieval currently uses normalized Spanish keywords and recency, with a maximum
-of eight exchanges supplied to the model. It needs no vector database or extra
-model. Evaluate missed synonyms and irrelevant matches against real queries first;
-if lexical retrieval is insufficient, add local embeddings and an index only then.
-To decide, evaluate a small set of real queries for retrieval hits, irrelevant
-matches, context size and latency. Those retrieval counters are not exposed as
-Prometheus metrics yet; when added, they must not contain conversation content.
+Conversation retrieval currently uses normalized Spanish keywords and recency,
+with a maximum of eight exchanges supplied to the model. Approved work knowledge
+uses a separate bounded lexical lookup (up to five items) and includes validity
+and evidence references. It needs no vector database or extra model. Evaluate
+missed synonyms and irrelevant matches against real queries first; if lexical
+retrieval is insufficient, add local embeddings and an index only then. Prometheus
+tracks bounded retrieval outcomes and hit counts without conversation content.
 
 Whisper runs CPU-only from `whisper.cpp` v1.9.5 using the multilingual
 `ggml-small-q5_1.bin` model with four threads by default. Piper remains

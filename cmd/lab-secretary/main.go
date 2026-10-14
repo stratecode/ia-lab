@@ -59,6 +59,7 @@ func main() {
 	service.Sources = secretary.NewConnectors(connectorConfig, service.StateDir)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
+	go service.RunLearningMaintenance(ctx, service.Retention)
 	mux := http.NewServeMux()
 	mux.Handle("/", service.Handler())
 	voiceMaxDuration := 120 * time.Second
