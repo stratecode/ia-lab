@@ -219,6 +219,11 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 		return "Para el temporizador, indica una duración de 1 segundo a 24 horas; por ejemplo: «temporizador de 10 minutos». Por ahora enviaré un aviso al terminar.", nil
 	}
 	switch strings.Fields(text)[0] {
+	case "/feedback", "/aprendizaje", "/aprueba", "/descarta":
+		answer, handled := s.learningCommand(user, channel, conversation, text)
+		if handled {
+			return answer, nil
+		}
 	case "/start", "/help":
 		return "Soy tu secretaria del lab. Puedes escribirme en español o enviarme una nota de voz.\n/new: conversación nueva\n/forget: borrar memoria e historial\n/status: conexiones\n/jira: pendientes\n/reuniones: reuniones recientes\n/resumen: tareas y reuniones\n/timer 10m: temporizador\n/timers: ver temporizadores\n/cancel ID: cancelar temporizador", nil
 	case "/timers":
