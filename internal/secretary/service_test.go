@@ -365,6 +365,44 @@ func TestOpenWebUINaturalLanguageUsesSharedRouterAndMemory(t *testing.T) {
 	}
 }
 
+func TestOpenWebUITaskQuestionUsesRovoThroughSharedRouter(t *testing.T) {
+	const question = "¿Qué tareas importantes debería priorizar hoy?"
+	const source = "Rovo: STRAT-18 · Preparar el plan de despliegue antes del mediodía."
+	const summary = "Prioriza preparar el plan de despliegue antes del mediodía."
+	var modelCalls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
+		var body struct {
+			Messages []Turn `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		joined := ""
+		for _, message := range body.Messages {
+			joined += message.Content + "\n"
+		}
+		if !strings.Contains(joined, source) || !strings.Contains(joined, question) {
+			t.Errorf("shared router did not pass Rovo results to the model: %q", joined)
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "shared secretary instructions", t.TempDir(), map[int64]bool{7: true})
+	reader := &rovoIntentSource{intentSource: intentSource{granola: "Granola not queried for this task request."}, rovo: source}
+	s.Sources = reader
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"main","stream":false,"messages":[{"role":"user","content":"`+question+`"}]}`))
+	request.Header.Set("Authorization", "Bearer key")
+	request.Header.Set("X-OpenWebUI-User-Id", "owner")
+	request.Header.Set("X-OpenWebUI-User-Role", "admin")
+	request.Header.Set("X-OpenWebUI-Chat-Id", "rovo-task-test")
+	result := httptest.NewRecorder()
+	s.Handler().ServeHTTP(result, request)
+	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), summary) || reader.rovoCalls != 1 || reader.lastQuery != question || reader.granolaCalls != 0 || modelCalls != 1 {
+		t.Fatalf("Open WebUI answer=%q status=%d Rovo=%d Granola=%d model=%d", result.Body.String(), result.Code, reader.rovoCalls, reader.granolaCalls, modelCalls)
+	}
+}
+
 func TestOpenWebUIRejectsUntrustedOrAmbiguousIdentity(t *testing.T) {
 	calls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -587,6 +625,85 @@ func (s *intentSource) Granola(context.Context) (string, error) {
 	return s.granola, nil
 }
 func (s *intentSource) Status() map[string]bool { return map[string]bool{"Granola": true} }
+
+type rovoIntentSource struct {
+	intentSource
+	rovo      string
+	rovoCalls int
+	lastQuery string
+}
+
+func (s *rovoIntentSource) Rovo(_ context.Context, query string) (string, error) {
+	s.rovoCalls++
+	s.lastQuery = query
+	return s.rovo, nil
+}
+
+func TestTaskQuestionRoutesToRovoEvenWhenItMentionsMeetings(t *testing.T) {
+	const question = "¿Qué tareas importantes tengo pendientes hoy según las reuniones de esta mañana?"
+	const source = "Rovo: Plan de lanzamiento · Revisar propuesta antes de las 16:00."
+	const summary = "Prioriza revisar la propuesta antes de las 16:00."
+	var modelCalls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
+		var body struct {
+			Messages []Turn `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		joined := ""
+		for _, message := range body.Messages {
+			joined += message.Content + "\n"
+		}
+		if !strings.Contains(joined, source) || !strings.Contains(joined, question) {
+			t.Errorf("model did not receive the question and Rovo results: %q", joined)
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
+	}))
+	defer upstream.Close()
+	sourceReader := &rovoIntentSource{intentSource: intentSource{granola: "Granola must wait until the correlation phase."}, rovo: source}
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	s.Sources = sourceReader
+
+	answer, err := s.Reply(context.Background(), 7, question)
+	if err != nil || answer != summary || modelCalls != 1 || sourceReader.rovoCalls != 1 || sourceReader.lastQuery != question || sourceReader.granolaCalls != 0 {
+		t.Fatalf("answer=%q model=%d Rovo=%d Granola=%d query=%q err=%v", answer, modelCalls, sourceReader.rovoCalls, sourceReader.granolaCalls, sourceReader.lastQuery, err)
+	}
+}
+
+func TestMeetingSummaryRoutesToGranolaWhenNoTaskIntentIsPresent(t *testing.T) {
+	const question = "Resúmeme las reuniones de esta mañana y las decisiones que tomamos."
+	const source = "Notas de Granola: planificación · Acordamos mantener el calendario actual."
+	const summary = "Acordasteis mantener el calendario actual."
+	var modelCalls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
+		var body struct {
+			Messages []Turn `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		joined := ""
+		for _, message := range body.Messages {
+			joined += message.Content + "\n"
+		}
+		if !strings.Contains(joined, source) || !strings.Contains(joined, question) {
+			t.Errorf("model did not receive Granola notes and question: %q", joined)
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
+	}))
+	defer upstream.Close()
+	sourceReader := &rovoIntentSource{intentSource: intentSource{granola: source}, rovo: "Rovo must not be consulted for a meeting summary."}
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	s.Sources = sourceReader
+
+	answer, err := s.Reply(context.Background(), 7, question)
+	if err != nil || answer != summary || modelCalls != 1 || sourceReader.granolaCalls != 1 || sourceReader.rovoCalls != 0 {
+		t.Fatalf("answer=%q model=%d Granola=%d Rovo=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.rovoCalls, err)
+	}
+}
 
 func TestNaturalLanguageMeetingQuestionQueriesGranolaAndSummarizes(t *testing.T) {
 	const question = "Hola, dona. Oye, ¿qué tareas tengo pendientes de hacer según las reuniones que tenéis?"

@@ -116,3 +116,120 @@ func TestCredentialsDoNotCrossProviderBoundary(t *testing.T) {
 		t.Fatal("Jira credential sent to another provider")
 	}
 }
+
+func TestRovoSearchPassesNaturalLanguageToReadOnlyMCP(t *testing.T) {
+	var gotName string
+	var gotArgs map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		switch req.Method {
+		case "initialize":
+			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`)
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			gotName, gotArgs = req.Params.Name, req.Params.Arguments
+			io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"results\":[{\"title\":\"Plan de lanzamiento\",\"snippet\":\"Revisar tareas pendientes\"}]}"}]}}`)
+		default:
+			t.Errorf("unexpected MCP method %q", req.Method)
+		}
+	}))
+	defer server.Close()
+	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: server.URL, AccessToken: "secret", CloudID: "cloud-1"}}, Client: server.Client(), allowTestHTTP: true}
+
+	const question = "¿Qué tareas importantes tengo pendientes esta semana?"
+	result, err := c.Rovo(context.Background(), question)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotName != "search" || gotArgs["cloudId"] != "cloud-1" || gotArgs["query"] != question || gotArgs["targetApp"] != "ALL" || gotArgs["mode"] != "STANDARD" || gotArgs["limit"] != float64(10) {
+		t.Fatalf("unexpected Rovo call %q %#v", gotName, gotArgs)
+	}
+	if !strings.Contains(result, "Plan de lanzamiento") || !strings.Contains(result, "Revisar tareas pendientes") {
+		t.Fatalf("Rovo results were not preserved for synthesis: %q", result)
+	}
+}
+
+func TestRovoResolvesCloudIDFromActualAtlassianResourceEnvelope(t *testing.T) {
+	var searchCloudID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		switch req.Method {
+		case "initialize":
+			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`)
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			var text string
+			switch req.Params.Name {
+			case "getAccessibleAtlassianResources":
+				text = `{"data":{"resources":[{"cloudId":"stratecode-cloud","url":"https://stratecode.atlassian.net"}]}}`
+			case "search":
+				searchCloudID = req.Params.Arguments["cloudId"].(string)
+				text = `{"results":[{"title":"Roadmap","snippet":"Plan aprobado"}]}`
+			default:
+				t.Errorf("unexpected MCP tool %q", req.Params.Name)
+			}
+			b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": text}}}})
+			w.Write(b)
+		default:
+			t.Errorf("unexpected MCP method %q", req.Method)
+		}
+	}))
+	defer server.Close()
+	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: server.URL, AccessToken: "secret"}}, Client: server.Client(), allowTestHTTP: true}
+	if _, err := c.Rovo(context.Background(), "¿Qué plan está aprobado?"); err != nil {
+		t.Fatal(err)
+	}
+	if searchCloudID != "stratecode-cloud" {
+		t.Fatalf("Rovo search used cloud id %q", searchCloudID)
+	}
+}
+
+func TestRovoEmptySearchDoesNotBecomeSynthesisContext(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		switch req.Method {
+		case "initialize":
+			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`)
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"results":[]}}}`)
+		default:
+			t.Errorf("unexpected MCP method %q", req.Method)
+		}
+	}))
+	defer server.Close()
+	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: server.URL, AccessToken: "secret", CloudID: "cloud-1"}}, Client: server.Client(), allowTestHTTP: true}
+	result, err := c.Rovo(context.Background(), "¿Qué tareas quedan pendientes?")
+	if err != nil || result != "" {
+		t.Fatalf("empty Rovo results=%q err=%v", result, err)
+	}
+}

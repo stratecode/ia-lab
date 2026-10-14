@@ -56,7 +56,7 @@ func NewConnectors(config ConnectorConfig, stateDir string) *Connectors {
 func (c *Connectors) Status() map[string]bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return map[string]bool{"Jira": c.Config.Jira.AccessToken != "", "Granola": c.Config.Granola.AccessToken != ""}
+	return map[string]bool{"Jira": c.Config.Jira.AccessToken != "", "Rovo": c.Config.Jira.AccessToken != "", "Granola": c.Config.Granola.AccessToken != ""}
 }
 func (c *Connectors) validServer(raw string) bool {
 	if raw == "https://mcp.atlassian.com/v2/mcp" || raw == "https://mcp.granola.ai/mcp" {
@@ -190,7 +190,7 @@ func (c *Connectors) session(ctx context.Context, config OAuthConfig) (*mcpSessi
 	return s, err
 }
 
-var readTools = map[string]bool{"getAccessibleAtlassianResources": true, "searchJiraIssuesUsingJql": true, "list_meetings": true, "get_meetings": true}
+var readTools = map[string]bool{"getAccessibleAtlassianResources": true, "searchJiraIssuesUsingJql": true, "search": true, "list_meetings": true, "get_meetings": true}
 
 func (c *Connectors) tool(ctx context.Context, config OAuthConfig, name string, args map[string]any) (json.RawMessage, error) {
 	if !readTools[name] {
@@ -303,6 +303,141 @@ func (c *Connectors) Jira(ctx context.Context) (string, error) {
 		lines = append(lines, fmt.Sprintf("[%s] %s · %s · %s", short(item.Key), short(item.Fields.Summary), short(item.Fields.Status.Name), short(due)))
 	}
 	return strings.Join(lines, "\n"), nil
+}
+
+// Rovo searches Jira and Confluence together so the shared router can answer
+// natural-language questions about plans, tasks, and pending activities.
+func (c *Connectors) Rovo(ctx context.Context, query string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.Config.Jira.AccessToken == "" {
+		return "", errors.New("Rovo no conectado")
+	}
+	if c.Config.Jira.ServerURL != "https://mcp.atlassian.com/v2/mcp" && !c.allowTestHTTP {
+		return "", errors.New("Rovo credential destination rejected")
+	}
+	query = strings.TrimSpace(query)
+	if query == "" || len([]rune(query)) > 2000 {
+		return "", errors.New("Rovo query length rejected")
+	}
+	if err := c.access(ctx, &c.Config.Jira); err != nil {
+		return "", err
+	}
+	s, err := c.session(ctx, c.Config.Jira)
+	if err != nil {
+		return "", err
+	}
+	cloud := c.Config.Jira.CloudID
+	if cloud == "" {
+		cloud, err = accessibleCloudID(ctx, s)
+		if err != nil {
+			return "", err
+		}
+	}
+	raw, err := s.callTool(ctx, "search", map[string]any{
+		"cloudId": cloud, "query": query, "targetApp": "ALL", "mode": "STANDARD", "limit": 10,
+	})
+	if err != nil {
+		return "", err
+	}
+	if rovoHasNoResults(raw) {
+		return "", nil
+	}
+	text := strings.TrimSpace(string(raw))
+	if len(text) > 12000 {
+		text = string([]rune(text)[:12000])
+	}
+	if text == "" || text == `""` {
+		return "", nil
+	}
+	return "Atlassian Rovo · resultados de Jira y Confluence:\n" + text, nil
+}
+
+func accessibleCloudID(ctx context.Context, s *mcpSession) (string, error) {
+	raw, err := s.callTool(ctx, "getAccessibleAtlassianResources", map[string]any{})
+	if err != nil {
+		return "", err
+	}
+	var response struct {
+		ID      string `json:"id"`
+		CloudID string `json:"cloudId"`
+		Data    struct {
+			Resources []struct {
+				ID      string `json:"id"`
+				CloudID string `json:"cloudId"`
+			} `json:"resources"`
+		} `json:"data"`
+		Resources []struct {
+			ID      string `json:"id"`
+			CloudID string `json:"cloudId"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return "", errors.New("unexpected Atlassian sites response")
+	}
+	resources := response.Resources
+	if len(resources) == 0 {
+		resources = response.Data.Resources
+	}
+	if len(resources) == 1 {
+		if resources[0].CloudID != "" {
+			return resources[0].CloudID, nil
+		}
+		if resources[0].ID != "" {
+			return resources[0].ID, nil
+		}
+	}
+	if len(resources) == 0 && (response.CloudID != "" || response.ID != "") {
+		if response.CloudID != "" {
+			return response.CloudID, nil
+		}
+		return response.ID, nil
+	}
+	return "", errors.New("select a single Atlassian cloud_id before querying")
+}
+
+func rovoHasNoResults(raw json.RawMessage) bool {
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return false
+	}
+	var inspect func(any) (bool, bool)
+	inspect = func(node any) (bool, bool) {
+		switch typed := node.(type) {
+		case map[string]any:
+			found := false
+			for key, child := range typed {
+				if key == "results" || key == "items" || key == "issues" || key == "matches" {
+					if rows, ok := child.([]any); ok {
+						found = true
+						if len(rows) > 0 {
+							return false, true
+						}
+						continue
+					}
+				}
+				if empty, nestedFound := inspect(child); nestedFound {
+					if !empty {
+						return false, true
+					}
+					found = true
+				}
+			}
+			return found, found
+		case []any:
+			for _, child := range typed {
+				if empty, found := inspect(child); found {
+					if !empty {
+						return false, true
+					}
+					return true, true
+				}
+			}
+		}
+		return false, false
+	}
+	empty, found := inspect(value)
+	return found && empty
 }
 func (c *Connectors) Granola(ctx context.Context) (string, error) {
 	c.mu.Lock()

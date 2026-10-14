@@ -106,15 +106,18 @@ actions and reminders. The source window is the last seven days, not a full cale
 query; missing owners and dates are never inferred, and transcripts are excluded.
 Jira and `/resumen` still return source-labelled fields directly. Natural-language
 routing selects from a registry of read-only capabilities, each with its own
-matching rule, retrieval function and description. Granola is the first registered
-capability for actions, decisions or follow-ups from recent meetings; adding a
-source means registering another capability, not changing Telegram or the shared
-conversation pipeline. Task-oriented questions that do not name a source use a
-constrained intent classification against the registered capabilities; a task
-follow-up also reuses the capability selected by the preceding user turn. The
-principal model synthesizes retrieved data and must not invent facts. If a source
-is unavailable or returns no notes, the service says so directly instead of
-asking the model to improvise from an empty result.
+matching rule, retrieval function and description. Questions about plans, tasks,
+priorities or pending activities route to Atlassian Rovo across Jira and Confluence,
+even if the question mentions a meeting. Meeting summaries and decisions without a
+task request route to Granola. Cross-source correlation between Granola, Rovo and
+company people or customers is a later phase. Adding a source means registering
+another capability, not changing Telegram or the shared conversation pipeline.
+The principal model synthesizes retrieved data and must not invent facts. Rovo
+uses standard semantic search with the MCP server's minimum ten-result request;
+retrieved content is
+treated as untrusted source data. If a source is unavailable or returns no results,
+the service says so directly instead of asking the model to improvise from an empty
+result.
 
 ## Shared interaction feedback
 
@@ -262,14 +265,20 @@ on loopback. Tokens are written with mode 0600 to
 `.env`, vault or SSH credentials are needed. `--discover` probes public metadata
 without enrollment. A failed consent is not a connected account.
 
-Jira requests `read:me`, `read:jira:agent-interface`,
-`search:jira:agent-interface` and `offline_access`, without write scopes. If the
-account exposes multiple Jira sites, enroll with `--cloud-id <selected-site-id>`;
-the adapter refuses to guess. Granola exposes its general `mcp` OAuth scope;
+Jira OAuth requests `read:me`, `read:jira:agent-interface`,
+`search:jira:agent-interface` and `offline_access`, without write scopes. The
+natural-language Rovo capability uses the Atlassian MCP `search` tool and needs an
+API key with `search:rovo:agent-interface`; `/jira` continues to use JQL and needs
+`search:jira:agent-interface`. Do not add write scopes. If the account exposes
+multiple Jira sites, enroll with `--cloud-id <selected-site-id>`; the adapter
+refuses to guess. Granola exposes its general `mcp` OAuth scope;
 the adapter's hard allowlist permits `list_meetings` only. Its current response
 is markup rather than JSON, so the adapter extracts only meeting ID, title and
 date; it does not pass transcript or note bodies into chat. Verify remote tool
-and result schemas with the authorised account before POC acceptance.
+and result schemas with the authorised account before POC acceptance. Atlassian's
+[Rovo supported-tools reference](https://developer.atlassian.com/cloud/rovo-mcp/guides/supported-tools/)
+lists `search:rovo:agent-interface` for semantic search and
+`search:jira:agent-interface` for JQL.
 
 ```bash
 ./scripts/test-orchestrator-go.sh

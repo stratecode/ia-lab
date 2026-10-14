@@ -42,6 +42,19 @@ func localIntent(text string) secretaryIntent {
 	return intentGeneral
 }
 
+// rovoTaskIntent keeps planning and pending-work questions on the broader
+// Atlassian source, even when the user mentions meetings. Meeting summaries
+// without an action request continue to use Granola.
+func rovoTaskIntent(text string) bool {
+	query := normalizedIntentText(text)
+	return containsAny(query,
+		"rovo", "jira", "confluence", "plan", "planificacion", "planificar",
+		"tarea", "pendiente", "actividad", "accion",
+		"acciones por hacer", "que debo hacer", "que tengo que hacer",
+		"siguiente paso", "prioridad", "priorizar",
+	)
+}
+
 func normalizedIntentText(text string) string {
 	plain := norm.NFD.String(strings.ToLower(text))
 	var out strings.Builder

@@ -418,11 +418,24 @@ func (s *Service) capabilities() []ReadCapability {
 	if s.Sources == nil {
 		return nil
 	}
-	return []ReadCapability{{
+	capabilities := []ReadCapability{{
 		Name: "Granola", Description: "notas recientes de reuniones",
-		Match: func(query string) bool { return localIntent(query) == intentCapability },
+		Match: func(query string) bool { return localIntent(query) == intentCapability && !rovoTaskIntent(query) },
 		Read:  func(ctx context.Context, _ string) (string, error) { return s.Sources.Granola(ctx) },
 	}}
+	if rovo, ok := s.Sources.(interface {
+		Rovo(context.Context, string) (string, error)
+	}); ok {
+		capabilities = append(capabilities, ReadCapability{
+			Name:        "Rovo",
+			Description: "búsqueda semántica de planes, tareas y actividades pendientes en Jira y Confluence",
+			Match:       rovoTaskIntent,
+			Read: func(ctx context.Context, query string) (string, error) {
+				return rovo.Rovo(ctx, query)
+			},
+		})
+	}
+	return capabilities
 }
 
 func (s *Service) capabilityFor(query string) (ReadCapability, bool) {
@@ -611,7 +624,7 @@ func (s *Service) sourceStatus() string {
 		status = s.Sources.Status()
 	}
 	lines := []string{}
-	for _, name := range []string{"Jira", "Granola"} {
+	for _, name := range []string{"Jira", "Rovo", "Granola"} {
 		state := "no conectado"
 		if status[name] {
 			state = "configurado (validar consulta)"
