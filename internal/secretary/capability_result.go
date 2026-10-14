@@ -14,11 +14,11 @@ type CapabilityResult struct {
 }
 
 type EvidenceRef struct {
-	Provider    string
-	ID          string
-	Title       string
-	URL         string
-	RetrievedAt time.Time
+	Provider    string    `json:"provider,omitempty"`
+	ID          string    `json:"id,omitempty"`
+	Title       string    `json:"title,omitempty"`
+	URL         string    `json:"url,omitempty"`
+	RetrievedAt time.Time `json:"retrieved_at,omitempty"`
 }
 
 type CapabilityOutcome struct {

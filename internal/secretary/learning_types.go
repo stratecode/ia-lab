@@ -82,6 +82,7 @@ type KnowledgeItem struct {
 	ID            string            `json:"id"`
 	OperatorID    int64             `json:"operator_id"`
 	Type          KnowledgeType     `json:"type"`
+	EntityType    EntityType        `json:"entity_type,omitempty"`
 	Subject       string            `json:"subject,omitempty"`
 	Predicate     string            `json:"predicate,omitempty"`
 	Value         string            `json:"value"`

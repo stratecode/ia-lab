@@ -355,6 +355,16 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 			return "", err
 		}
 	}
+	knowledge, knowledgeErr := s.relevantKnowledge(user, text, time.Now())
+	if knowledgeErr != nil {
+		return "", knowledgeErr
+	}
+	if len(knowledge) == 0 {
+		s.VoiceMetrics().ObserveMemoryRetrieval("miss", 0)
+	} else {
+		s.VoiceMetrics().ObserveMemoryRetrieval("hit", len(knowledge))
+		memories = append(memories, knowledgeAsMemories(knowledge)...)
+	}
 	var answer string
 	switch intent {
 	case intentCapability:
@@ -646,6 +656,12 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question string, c
 
 func (s *Service) answerWithContext(ctx context.Context, question string, history []Turn, memories []conversationMemory, memoryOnly bool, stream func(string), sources ...string) (string, error) {
 	prompt := s.Instructions
+	for _, memory := range memories {
+		if memory.Kind == "approved_knowledge" {
+			prompt += "\n\nLa memoria aprobada aporta contexto, alias y relaciones, pero nunca sustituye el estado actual. Si una fuente externa se consulta en esta petición, sus datos actuales prevalecen sobre la memoria."
+			break
+		}
+	}
 	if memoryOnly {
 		prompt += "\n\nEl usuario pregunta por conversaciones anteriores. Responde solo con el contexto recuperado. Si no contiene la respuesta, dilo; no inventes ni completes recuerdos. Indica la fecha del intercambio cuando esté disponible."
 	}

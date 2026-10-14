@@ -271,7 +271,7 @@ func (s *JSONLLearningStore) ListKnowledge(operatorID int64, status KnowledgeSta
 	}
 	items := make([]KnowledgeItem, 0, len(latestByID))
 	for _, item := range latestByID {
-		if (status == "" || item.Status == status) && (item.ValidUntil.IsZero() || item.ValidUntil.After(time.Now())) {
+		if status == "" || item.Status == status {
 			items = append(items, item)
 		}
 	}
