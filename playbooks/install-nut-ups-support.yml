@@ -1,0 +1,77 @@
+---
+- name: Install read-only discovery support for the lab UPS
+  hosts: all
+  become: true
+  tasks:
+    - name: Install Network UPS Tools packages
+      ansible.builtin.apt:
+        name:
+          - nut-server
+          - nut-client
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+        policy_rc_d: 101
+
+    - name: Keep NUT daemons stopped until monitoring and shutdown policy is configured
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop:
+        - nut-monitor.service
+        - nut-server.service
+        - nut-driver-enumerator-daemon-activator.path
+        - nut-driver-enumerator-daemon.service
+        - nut-driver-enumerator.path
+        - nut-driver-enumerator.service
+        - nut-driver.target
+
+    - name: Clear failed states from package first-start attempts
+      ansible.builtin.command: systemctl reset-failed nut-monitor.service nut-server.service
+      changed_when: false
+
+    - name: Apply the packaged NUT USB permissions rule to an already connected UPS
+      ansible.builtin.command: >-
+        udevadm trigger --action=add --subsystem-match=usb
+        --attr-match=idVendor=0764 --attr-match=idProduct=0501
+      changed_when: false
+
+    - name: Wait for the UPS USB permissions to settle
+      ansible.builtin.command: udevadm settle
+      changed_when: false
+
+    - name: Verify the USB HID UPS driver is installed
+      ansible.builtin.command: /usr/libexec/nut/usbhid-ups -V
+      changed_when: false
+
+    - name: Verify the NUT USB discovery utility is installed
+      ansible.builtin.command: nut-scanner --help
+      changed_when: false
+
+    - name: Read UPS telemetry once without starting a service or testing the battery
+      ansible.builtin.command:
+        argv:
+          - /usr/libexec/nut/usbhid-ups
+          - -s
+          - ups-probe
+          - -x
+          - port=auto
+          - -x
+          - vendorid=0764
+          - -x
+          - productid=0501
+          - -d
+          - "1"
+      environment:
+        NUT_STATEPATH: /tmp
+      register: nut_ups_probe
+      changed_when: false
+
+    - name: Confirm the expected UPS and online status were read
+      ansible.builtin.assert:
+        that:
+          - "'device.model: VP700ELCD' in nut_ups_probe.stdout"
+          - "'ups.status: OL' in nut_ups_probe.stdout"
+        fail_msg: The USB UPS was not identified as an online VP700ELCD.
+        success_msg: The VP700ELCD responded over USB and reports online power.
