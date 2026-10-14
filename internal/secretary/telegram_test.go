@@ -58,7 +58,9 @@ func TestTelegramRendersInteractionReactionAndProgress(t *testing.T) {
 	service.Capabilities = []ReadCapability{{
 		Name: "Jira", Description: "tareas actuales",
 		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "jira") },
-		Read:  func(context.Context, string) (string, error) { return "Tarea A y tarea B.", nil },
+		Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{Text: "Tarea A y tarea B.", ResultCount: 1}, nil
+		},
 	}}
 	bot := &Bot{Base: telegramAPI.URL, Token: "bot-token", Client: telegramAPI.Client(), Service: service}
 	update := Update{Message: &Message{ID: 42, From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Text: "¿Qué tareas importantes tengo en Jira?"}}
@@ -144,7 +146,9 @@ func TestTelegramReactionFailureStillDeliversReply(t *testing.T) {
 	service.Capabilities = []ReadCapability{{
 		Name: "Correo", Description: "mensajes recientes",
 		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "correo") },
-		Read:  func(context.Context, string) (string, error) { return "Un correo pendiente.", nil },
+		Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{Text: "Un correo pendiente.", ResultCount: 1}, nil
+		},
 	}}
 	bot := &Bot{Base: telegramAPI.URL, Token: "bot-token", Client: telegramAPI.Client(), Service: service, OnEvent: func(name string) { events = append(events, name) }}
 	update := Update{Message: &Message{ID: 43, From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Text: "¿Tengo algún correo pendiente?"}}

@@ -308,49 +308,139 @@ func (c *Connectors) Jira(ctx context.Context) (string, error) {
 // Rovo searches Jira and Confluence together so the shared router can answer
 // natural-language questions about plans, tasks, and pending activities.
 func (c *Connectors) Rovo(ctx context.Context, query string) (string, error) {
+	result, err := c.RovoResult(ctx, query)
+	return result.Text, err
+}
+
+func (c *Connectors) RovoResult(ctx context.Context, query string) (CapabilityResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.Config.Jira.AccessToken == "" {
-		return "", errors.New("Rovo no conectado")
+		return CapabilityResult{}, errors.New("Rovo no conectado")
 	}
 	if c.Config.Jira.ServerURL != "https://mcp.atlassian.com/v2/mcp" && !c.allowTestHTTP {
-		return "", errors.New("Rovo credential destination rejected")
+		return CapabilityResult{}, errors.New("Rovo credential destination rejected")
 	}
 	query = strings.TrimSpace(query)
 	if query == "" || len([]rune(query)) > 2000 {
-		return "", errors.New("Rovo query length rejected")
+		return CapabilityResult{}, errors.New("Rovo query length rejected")
 	}
 	if err := c.access(ctx, &c.Config.Jira); err != nil {
-		return "", err
+		return CapabilityResult{}, err
 	}
 	s, err := c.session(ctx, c.Config.Jira)
 	if err != nil {
-		return "", err
+		return CapabilityResult{}, err
 	}
 	cloud := c.Config.Jira.CloudID
 	if cloud == "" {
 		cloud, err = accessibleCloudID(ctx, s)
 		if err != nil {
-			return "", err
+			return CapabilityResult{}, err
 		}
 	}
 	raw, err := s.callTool(ctx, "search", map[string]any{
 		"cloudId": cloud, "query": query, "targetApp": "ALL", "mode": "STANDARD", "limit": 10,
 	})
 	if err != nil {
-		return "", err
+		return CapabilityResult{}, err
 	}
 	if rovoHasNoResults(raw) {
-		return "", nil
+		return CapabilityResult{}, nil
 	}
 	text := strings.TrimSpace(string(raw))
 	if len(text) > 12000 {
 		text = string([]rune(text)[:12000])
 	}
 	if text == "" || text == `""` {
-		return "", nil
+		return CapabilityResult{}, nil
 	}
-	return "Atlassian Rovo · resultados de Jira y Confluence:\n" + text, nil
+	evidence := parseRovoEvidence(raw)
+	count := len(evidence)
+	if count == 0 {
+		count = 1
+	}
+	return CapabilityResult{Text: "Atlassian Rovo · resultados de Jira y Confluence:\n" + text, ResultCount: count, Evidence: evidence}, nil
+}
+
+func parseRovoEvidence(raw json.RawMessage) []EvidenceRef {
+	var root any
+	if json.Unmarshal(raw, &root) != nil {
+		return nil
+	}
+	var evidence []EvidenceRef
+	seen := map[string]bool{}
+	addRecord := func(node map[string]any) {
+		ref := EvidenceRef{Provider: "Rovo", RetrievedAt: time.Now()}
+		for key, child := range node {
+			text, ok := child.(string)
+			if !ok {
+				continue
+			}
+			switch strings.ToLower(key) {
+			case "id", "issuekey", "pageid", "contentid", "key":
+				if ref.ID == "" {
+					ref.ID = strings.TrimSpace(text)
+				}
+			case "title", "summary", "name":
+				if ref.Title == "" {
+					ref.Title = strings.TrimSpace(text)
+				}
+			case "url", "weburl", "link":
+				if validEvidenceURL(text) {
+					ref.URL = text
+				}
+			}
+		}
+		if ref.ID == "" && ref.URL == "" {
+			return
+		}
+		identity := ref.ID + "|" + ref.URL
+		if !seen[identity] {
+			seen[identity] = true
+			evidence = append(evidence, ref)
+		}
+	}
+	var findResults func(any)
+	findResults = func(value any) {
+		switch node := value.(type) {
+		case map[string]any:
+			for key, child := range node {
+				lower := strings.ToLower(key)
+				if lower == "results" || lower == "items" || lower == "issues" || lower == "matches" {
+					if rows, ok := child.([]any); ok {
+						for _, row := range rows {
+							if record, ok := row.(map[string]any); ok {
+								addRecord(record)
+							}
+						}
+					}
+					continue
+				}
+				if lower == "text" {
+					if encoded, ok := child.(string); ok {
+						var nested any
+						if json.Unmarshal([]byte(encoded), &nested) == nil {
+							findResults(nested)
+						}
+					}
+					continue
+				}
+				findResults(child)
+			}
+		case []any:
+			for _, child := range node {
+				findResults(child)
+			}
+		}
+	}
+	findResults(root)
+	return evidence
+}
+
+func validEvidenceURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil
 }
 
 func accessibleCloudID(ctx context.Context, s *mcpSession) (string, error) {
@@ -440,25 +530,30 @@ func rovoHasNoResults(raw json.RawMessage) bool {
 	return found && empty
 }
 func (c *Connectors) Granola(ctx context.Context) (string, error) {
+	result, err := c.GranolaResult(ctx)
+	return result.Text, err
+}
+
+func (c *Connectors) GranolaResult(ctx context.Context) (CapabilityResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.Config.Granola.AccessToken == "" {
-		return "", errors.New("Granola no conectado")
+		return CapabilityResult{}, errors.New("Granola no conectado")
 	}
 	if c.Config.Granola.ServerURL != "https://mcp.granola.ai/mcp" && !c.allowTestHTTP {
-		return "", errors.New("Granola credential destination rejected")
+		return CapabilityResult{}, errors.New("Granola credential destination rejected")
 	}
 	if err := c.access(ctx, &c.Config.Granola); err != nil {
-		return "", err
+		return CapabilityResult{}, err
 	}
 	s, err := c.session(ctx, c.Config.Granola)
 	if err != nil {
-		return "", err
+		return CapabilityResult{}, err
 	}
 	// Verify the actual remote schema before choosing arguments; do not guess.
 	raw, err := s.rpc(ctx, "tools/list", map[string]any{}, false)
 	if err != nil {
-		return "", err
+		return CapabilityResult{}, err
 	}
 	var tools struct {
 		Tools []struct {
@@ -474,24 +569,23 @@ func (c *Connectors) Granola(ctx context.Context) (string, error) {
 		if tool.Name == "list_meetings" || tool.Name == "get_meetings" {
 			found[tool.Name] = true
 			if len(tool.Schema.Required) > 0 {
-				return "", fmt.Errorf("Granola %s schema needs explicit arguments", tool.Name)
+				return CapabilityResult{}, fmt.Errorf("Granola %s schema needs explicit arguments", tool.Name)
 			}
 		}
 	}
 	if !found["list_meetings"] || !found["get_meetings"] {
-		return "", errors.New("Granola meeting summary tools unavailable")
+		return CapabilityResult{}, errors.New("Granola meeting summary tools unavailable")
 	}
 	raw, err = s.callTool(ctx, "list_meetings", map[string]any{"time_range": "last_7_days"})
 	if err != nil {
-		return "", err
+		return CapabilityResult{}, err
 	}
 	meetings, valid := parseGranolaMeetings(raw)
 	if !valid {
-		return "", errors.New("unexpected Granola source schema")
+		return CapabilityResult{}, errors.New("unexpected Granola source schema")
 	}
-	lines := []string{"Notas de Granola (últimos 7 días; muestra de hasta 5 reuniones):"}
 	if len(meetings) == 0 {
-		return "", nil
+		return CapabilityResult{}, nil
 	}
 	ids := make([]string, 0, 5)
 	for i, item := range meetings {
@@ -499,18 +593,20 @@ func (c *Connectors) Granola(ctx context.Context) (string, error) {
 			break
 		}
 		if item.ID == "" {
-			return "", errors.New("Granola source ID missing")
+			return CapabilityResult{}, errors.New("Granola source ID missing")
 		}
 		ids = append(ids, item.ID)
 	}
 	raw, err = s.callTool(ctx, "get_meetings", map[string]any{"meeting_ids": ids})
 	if err != nil {
-		return "", err
+		return CapabilityResult{}, err
 	}
 	summaries, valid := parseGranolaSummaries(raw)
 	if !valid {
-		return "", errors.New("unexpected Granola meeting detail schema")
+		return CapabilityResult{}, errors.New("unexpected Granola meeting detail schema")
 	}
+	lines := []string{"Notas de Granola (últimos 7 días; muestra de hasta 5 reuniones):"}
+	evidence := make([]EvidenceRef, 0, len(ids))
 	for _, item := range meetings {
 		if len(ids) == 0 {
 			break
@@ -523,14 +619,16 @@ func (c *Connectors) Granola(ctx context.Context) (string, error) {
 			summary = "Sin resumen disponible en la nota."
 		}
 		lines = append(lines, fmt.Sprintf("%s · %s\n%s", short(item.Title), short(item.Date), summary))
+		evidence = append(evidence, EvidenceRef{Provider: "Granola", ID: item.ID, Title: item.Title, URL: item.URL, RetrievedAt: time.Now()})
 	}
-	return strings.Join(lines, "\n\n"), nil
+	return CapabilityResult{Text: strings.Join(lines, "\n\n"), ResultCount: len(evidence), Evidence: evidence}, nil
 }
 
 type granolaMeeting struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
 	Date  string `json:"date"`
+	URL   string `json:"url"`
 }
 
 var (
@@ -615,7 +713,7 @@ func parseGranolaMeetings(raw json.RawMessage) ([]granolaMeeting, bool) {
 		for _, pair := range granolaAttribute.FindAllStringSubmatch(match[1], -1) {
 			attrs[pair[1]] = html.UnescapeString(pair[2])
 		}
-		meetings = append(meetings, granolaMeeting{ID: attrs["id"], Title: attrs["title"], Date: attrs["date"]})
+		meetings = append(meetings, granolaMeeting{ID: attrs["id"], Title: attrs["title"], Date: attrs["date"], URL: attrs["url"]})
 	}
 	return meetings, true
 }

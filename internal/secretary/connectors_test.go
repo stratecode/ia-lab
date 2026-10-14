@@ -56,9 +56,12 @@ func TestReadOnlyMCPKeepsSourcesAndRejectsWrites(t *testing.T) {
 	if err != nil || !strings.Contains(jira, "STRAT-42") {
 		t.Fatalf("Jira %q %v", jira, err)
 	}
-	meetings, err := c.Granola(context.Background())
-	if err != nil || !strings.Contains(meetings, "Atlas & Team") || !strings.Contains(meetings, "2026-10-10") || !strings.Contains(meetings, "Ana preparará la propuesta") || strings.Contains(meetings, "private discussion details") {
-		t.Fatalf("Granola %q %v", meetings, err)
+	meetings, err := c.GranolaResult(context.Background())
+	if err != nil || !strings.Contains(meetings.Text, "Atlas & Team") || !strings.Contains(meetings.Text, "2026-10-10") || !strings.Contains(meetings.Text, "Ana preparará la propuesta") || strings.Contains(meetings.Text, "private discussion details") {
+		t.Fatalf("Granola %q %v", meetings.Text, err)
+	}
+	if meetings.ResultCount != 1 || len(meetings.Evidence) != 1 || meetings.Evidence[0].Provider != "Granola" || meetings.Evidence[0].ID != "meet-1" || meetings.Evidence[0].Title != "Atlas & Team" {
+		t.Fatalf("Granola evidence missing provider-backed meeting reference: %+v", meetings)
 	}
 	if len(calls) != 4 {
 		t.Fatalf("unexpected calls %v", calls)
@@ -139,7 +142,7 @@ func TestRovoSearchPassesNaturalLanguageToReadOnlyMCP(t *testing.T) {
 			w.WriteHeader(http.StatusAccepted)
 		case "tools/call":
 			gotName, gotArgs = req.Params.Name, req.Params.Arguments
-			io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"results\":[{\"title\":\"Plan de lanzamiento\",\"snippet\":\"Revisar tareas pendientes\"}]}"}]}}`)
+			io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"results\":[{\"key\":\"STRAT-42\",\"title\":\"Plan de lanzamiento\",\"snippet\":\"Revisar tareas pendientes\",\"url\":\"https://stratecode.atlassian.net/browse/STRAT-42\"}]}"}]}}`)
 		default:
 			t.Errorf("unexpected MCP method %q", req.Method)
 		}
@@ -148,15 +151,25 @@ func TestRovoSearchPassesNaturalLanguageToReadOnlyMCP(t *testing.T) {
 	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: server.URL, AccessToken: "secret", CloudID: "cloud-1"}}, Client: server.Client(), allowTestHTTP: true}
 
 	const question = "¿Qué tareas importantes tengo pendientes esta semana?"
-	result, err := c.Rovo(context.Background(), question)
+	result, err := c.RovoResult(context.Background(), question)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if gotName != "search" || gotArgs["cloudId"] != "cloud-1" || gotArgs["query"] != question || gotArgs["targetApp"] != "ALL" || gotArgs["mode"] != "STANDARD" || gotArgs["limit"] != float64(10) {
 		t.Fatalf("unexpected Rovo call %q %#v", gotName, gotArgs)
 	}
-	if !strings.Contains(result, "Plan de lanzamiento") || !strings.Contains(result, "Revisar tareas pendientes") {
-		t.Fatalf("Rovo results were not preserved for synthesis: %q", result)
+	if !strings.Contains(result.Text, "Plan de lanzamiento") || !strings.Contains(result.Text, "Revisar tareas pendientes") {
+		t.Fatalf("Rovo results were not preserved for synthesis: %q", result.Text)
+	}
+	if result.ResultCount != 1 || len(result.Evidence) != 1 || result.Evidence[0].ID != "STRAT-42" || result.Evidence[0].URL != "https://stratecode.atlassian.net/browse/STRAT-42" {
+		t.Fatalf("Rovo evidence was not sourced from the provider response: %+v", result)
+	}
+}
+
+func TestRovoEvidenceDoesNotPromoteRequestIDsToSourceEvidence(t *testing.T) {
+	raw := json.RawMessage(`{"request":{"id":"request-123"},"results":[{"title":"Plan sin referencia estable"}]}`)
+	if evidence := parseRovoEvidence(raw); len(evidence) != 0 {
+		t.Fatalf("non-source request metadata became evidence: %+v", evidence)
 	}
 }
 

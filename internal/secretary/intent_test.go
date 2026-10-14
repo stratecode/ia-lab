@@ -10,8 +10,10 @@ func TestRovoTaskIntentCoversWorkQuestionsButNotMeetingSummaries(t *testing.T) {
 	}{
 		{name: "pending tasks with meeting context", text: "¿Qué tareas tengo pendientes según las reuniones de esta mañana?", want: true},
 		{name: "action items with meeting context", text: "¿Qué acciones se acordaron hoy?", want: true},
+		{name: "execution request with meeting context", text: "¿Qué tengo que ejecutar según las reuniones de esta mañana?", want: true},
 		{name: "planning", text: "Ayúdame a revisar el plan de la semana.", want: true},
 		{name: "meeting summary", text: "Resúmeme las reuniones de esta mañana.", want: false},
+		{name: "follow-up wording", text: "¿Qué cosas tenemos que hacer para hoy?", want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -19,5 +21,11 @@ func TestRovoTaskIntentCoversWorkQuestionsButNotMeetingSummaries(t *testing.T) {
 				t.Fatalf("rovoTaskIntent(%q) = %t, want %t", tt.text, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestMeetingImperativeSummaryIsRecognizedLocally(t *testing.T) {
+	if got := localIntent("Resume las reuniones que he tenido."); got != intentCapability {
+		t.Fatalf("localIntent(summary imperative) = %q, want %q", got, intentCapability)
 	}
 }

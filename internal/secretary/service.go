@@ -36,7 +36,7 @@ type ReadCapability struct {
 	Name        string
 	Description string
 	Match       func(string) bool
-	Read        func(context.Context, string) (string, error)
+	Read        func(context.Context, string) (CapabilityResult, error)
 }
 type Service struct {
 	Upstream, Key, Instructions, StateDir string
@@ -248,10 +248,10 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 	if err := s.loadHistory(user, channel, conversation); err != nil {
 		return "", err
 	}
-	capability, capabilityMatched := s.capabilityFor(text)
+	capabilities, capabilityMatched := s.capabilitiesFor(text, s.history[key])
 	intent := localIntent(text)
 	if !capabilityMatched && (intent == intentGeneral || intent == intentAmbiguous) {
-		capability, capabilityMatched = s.capabilityForFollowUp(text, s.history[key])
+		capabilities, capabilityMatched = s.capabilitiesFor(text, s.history[key])
 	}
 	if capabilityMatched {
 		intent = intentCapability
@@ -268,7 +268,7 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 			if intent == intentCapability && !capabilityMatched {
 				available := s.capabilities()
 				if len(available) == 1 && available[0].Read != nil {
-					capability, capabilityMatched = available[0], true
+					capabilities, capabilityMatched = available, true
 				} else {
 					intent = intentClarify
 				}
@@ -303,22 +303,28 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 			answer = "No encuentro una herramienta de solo lectura configurada para esa consulta."
 			emitInteraction(InteractionEvent{Kind: EventBlocked, Meaning: meaning, Reason: BlockUnavailable})
 		} else {
-			emitInteraction(InteractionEvent{Kind: EventLookupStarted, Meaning: meaning, Source: boundedLabel(capability.Name)})
-			if progress != nil {
-				progress("Voy a revisar " + capability.Name + ".")
+			for _, capability := range capabilities {
+				emitInteraction(InteractionEvent{Kind: EventLookupStarted, Meaning: meaning, Source: boundedLabel(capability.Name)})
+				if progress != nil {
+					progress("Voy a revisar " + capability.Name + ".")
+				}
 			}
+			var outcomes []CapabilityOutcome
 			var blockReason InteractionBlockReason
 			var capabilityErr error
-			answer, blockReason, capabilityErr = s.answerFromCapability(ctx, text, capability, memories, stream, progress, emitInteraction)
+			answer, outcomes, blockReason, capabilityErr = s.answerFromCapabilities(ctx, text, capabilities, memories, stream, progress, emitInteraction)
+			_ = outcomes // consumed by the learning trace introduced in Task 3
 			if capabilityErr != nil {
 				err = capabilityErr
 			} else if blockReason != "" {
-				emitInteraction(InteractionEvent{Kind: EventBlocked, Meaning: meaning, Source: boundedLabel(capability.Name), Reason: blockReason})
+				for _, capability := range capabilities {
+					emitInteraction(InteractionEvent{Kind: EventBlocked, Meaning: meaning, Source: boundedLabel(capability.Name), Reason: blockReason})
+				}
 				if meaning == InteractionAction {
-					answer += " No he aplicado cambios; solo puedo consultar " + capability.Name + "."
+					answer += " No he aplicado cambios; solo puedo consultar " + capabilityNamesText(capabilities) + "."
 				}
 			} else if meaning == InteractionAction {
-				answer += "\n\nNo he cambiado nada; solo he consultado " + capability.Name + "."
+				answer += "\n\nNo he cambiado nada; solo he consultado " + capabilityNamesText(capabilities) + "."
 			}
 		}
 	case intentMemory:
@@ -420,8 +426,16 @@ func (s *Service) capabilities() []ReadCapability {
 	}
 	capabilities := []ReadCapability{{
 		Name: "Granola", Description: "notas recientes de reuniones",
-		Match: func(query string) bool { return localIntent(query) == intentCapability && !rovoTaskIntent(query) },
-		Read:  func(ctx context.Context, _ string) (string, error) { return s.Sources.Granola(ctx) },
+		Match: func(query string) bool {
+			return localIntent(query) == intentCapability && containsAny(normalizedIntentText(query), "reunion", "reuniones", "granola")
+		},
+		Read: func(ctx context.Context, _ string) (CapabilityResult, error) {
+			if structured, ok := s.Sources.(StructuredSourceReader); ok {
+				return structured.GranolaResult(ctx)
+			}
+			text, err := s.Sources.Granola(ctx)
+			return capabilityResultFromText(text), err
+		},
 	}}
 	if rovo, ok := s.Sources.(interface {
 		Rovo(context.Context, string) (string, error)
@@ -430,60 +444,133 @@ func (s *Service) capabilities() []ReadCapability {
 			Name:        "Rovo",
 			Description: "búsqueda semántica de planes, tareas y actividades pendientes en Jira y Confluence",
 			Match:       rovoTaskIntent,
-			Read: func(ctx context.Context, query string) (string, error) {
-				return rovo.Rovo(ctx, query)
+			Read: func(ctx context.Context, query string) (CapabilityResult, error) {
+				if structured, ok := s.Sources.(StructuredSourceReader); ok {
+					return structured.RovoResult(ctx, query)
+				}
+				text, err := rovo.Rovo(ctx, query)
+				return capabilityResultFromText(text), err
 			},
 		})
 	}
 	return capabilities
 }
 
-func (s *Service) capabilityFor(query string) (ReadCapability, bool) {
-	var match *ReadCapability
-	for _, capability := range s.capabilities() {
-		if capability.Name == "" || capability.Read == nil || capability.Match == nil || !capability.Match(query) {
+func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapability, bool) {
+	registered := s.capabilities()
+	if len(registered) == 0 {
+		return nil, false
+	}
+
+	meetingIntent := localIntent(query) == intentCapability && containsAny(normalizedIntentText(query), "reunion", "reuniones", "granola")
+	taskIntent := rovoTaskIntent(query)
+	var previousMeetingQuery string
+	if !meetingIntent && taskIntent {
+		for i := len(history) - 1; i >= 0; i-- {
+			if history[i].Role != "user" {
+				continue
+			}
+			previous := normalizedIntentText(history[i].Content)
+			if containsAny(previous, "reunion", "reuniones", "granola") {
+				meetingIntent = true
+				previousMeetingQuery = history[i].Content
+			}
+			break
+		}
+	}
+
+	matched := make([]ReadCapability, 0, len(registered))
+	for _, capability := range registered {
+		if capability.Name == "" || capability.Read == nil || capability.Match == nil {
 			continue
 		}
-		if match != nil {
-			return ReadCapability{}, false
-		}
-		copy := capability
-		match = &copy
-	}
-	if match == nil && len(s.capabilities()) == 1 && localIntent(query) == intentCapability {
-		capability := s.capabilities()[0]
-		if capability.Name != "" && capability.Read != nil {
-			return capability, true
+		if capability.Match(query) || (taskIntent && meetingIntent && previousMeetingQuery != "" && capability.Match(previousMeetingQuery)) {
+			matched = append(matched, capability)
 		}
 	}
-	if match == nil {
-		return ReadCapability{}, false
+	if taskIntent && meetingIntent {
+		if len(matched) > 1 {
+			return matched, true
+		}
+		return nil, false
 	}
-	return *match, true
+	if len(matched) == 1 {
+		return matched, true
+	}
+	if len(matched) > 1 {
+		return nil, false
+	}
+	if len(registered) == 1 && localIntent(query) == intentCapability && registered[0].Read != nil && registered[0].Name != "" {
+		return registered, true
+	}
+	return nil, false
 }
 
-func (s *Service) capabilityForFollowUp(query string, history []Turn) (ReadCapability, bool) {
-	if !containsAny(normalizedIntentText(query), "tarea", "pendiente", "accion", "hacer", "prioridad", "toca", "siguiente paso") {
-		return ReadCapability{}, false
+func capabilityResultFromText(text string) CapabilityResult {
+	text = strings.TrimSpace(text)
+	result := CapabilityResult{Text: text}
+	if text != "" {
+		result.ResultCount = 1
 	}
-	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Role != "user" {
+	return result
+}
+
+func capabilityNamesText(capabilities []ReadCapability) string {
+	names := make([]string, 0, len(capabilities))
+	for _, capability := range capabilities {
+		name := capability.Name
+		if description := strings.TrimSpace(capability.Description); description != "" {
+			name += " — " + description
+		}
+		names = append(names, name)
+	}
+	return strings.Join(names, " y ")
+}
+
+func (s *Service) answerFromCapabilities(ctx context.Context, question string, capabilities []ReadCapability, memories []conversationMemory, stream func(string), progress func(string), observer InteractionObserver) (string, []CapabilityOutcome, InteractionBlockReason, error) {
+	outcomes := make([]CapabilityOutcome, 0, len(capabilities))
+	var sourceBlocks []string
+	var failures []string
+	var successes int
+	for _, capability := range capabilities {
+		started := time.Now()
+		result, err := capability.Read(ctx, question)
+		outcome := CapabilityOutcome{Capability: capability.Name, Duration: time.Since(started)}
+		if err != nil {
+			outcome.Outcome = "error"
+			failures = append(failures, capability.Name)
+			outcomes = append(outcomes, outcome)
 			continue
 		}
-		if capability, ok := s.capabilityFor(history[i].Content); ok {
-			return capability, true
+		outcome.ResultCount = result.ResultCount
+		outcome.Evidence = append([]EvidenceRef(nil), result.Evidence...)
+		if result.ResultCount == 0 || strings.TrimSpace(result.Text) == "" {
+			outcome.Outcome = "empty"
+			sourceBlocks = append(sourceBlocks, capability.Name+": la consulta no devolvió resultados.")
+			outcomes = append(outcomes, outcome)
+			continue
 		}
+		outcome.Outcome = "success"
+		successes++
+		block := capability.Name + " — " + capability.Description + ":\n" + strings.TrimSpace(result.Text)
+		for _, evidence := range result.Evidence {
+			if evidence.Provider == "" && evidence.ID == "" && evidence.URL == "" {
+				continue
+			}
+			ref := strings.TrimSpace(evidence.Provider + " " + evidence.ID + " " + evidence.Title + " " + evidence.URL)
+			block += "\n[Referencia disponible: " + ref + "]"
+		}
+		sourceBlocks = append(sourceBlocks, block)
+		outcomes = append(outcomes, outcome)
 	}
-	return ReadCapability{}, false
-}
-
-func (s *Service) answerFromCapability(ctx context.Context, question string, capability ReadCapability, memories []conversationMemory, stream func(string), progress func(string), observer InteractionObserver) (string, InteractionBlockReason, error) {
-	source, err := capability.Read(ctx, question)
-	if err != nil {
-		return capability.Name + " no está disponible; no he podido verificar la información.", BlockConnectorFailure, nil
+	for _, failure := range failures {
+		sourceBlocks = append(sourceBlocks, failure+": no disponible; no he podido verificar esa fuente.")
 	}
-	if strings.TrimSpace(source) == "" {
-		return "No he encontrado notas en " + capability.Name + " que permitan verificarlo.", "", nil
+	if successes == 0 {
+		if len(failures) > 0 {
+			return "No he podido verificar la información: " + strings.Join(failures, " y ") + " no está disponible.", outcomes, BlockConnectorFailure, nil
+		}
+		return "No he encontrado notas o resultados en " + capabilityNamesText(capabilities) + " que permitan verificarlo.", outcomes, "", nil
 	}
 	if observer != nil {
 		observer(InteractionEvent{Kind: EventStageChanged, Stage: "sintetizando la respuesta"})
@@ -491,11 +578,11 @@ func (s *Service) answerFromCapability(ctx context.Context, question string, cap
 	if progress != nil {
 		progress("preparando la respuesta")
 	}
-	answer, err := s.answerWithContext(ctx, question, nil, memories, false, stream, source, capability.Name+" — "+capability.Description)
+	answer, err := s.answerWithContext(ctx, question, nil, memories, false, stream, strings.Join(sourceBlocks, "\n\n"), capabilityNamesText(capabilities))
 	if err != nil {
-		return "", BlockProcessingFailure, err
+		return "", outcomes, BlockProcessingFailure, err
 	}
-	return answer, "", nil
+	return answer, outcomes, "", nil
 }
 
 func (s *Service) answerWithContext(ctx context.Context, question string, history []Turn, memories []conversationMemory, memoryOnly bool, stream func(string), sources ...string) (string, error) {

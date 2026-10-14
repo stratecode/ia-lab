@@ -40,11 +40,11 @@ func TestReplyWithInteractionEmitsIntentAndLookupLifecycle(t *testing.T) {
 	s.Capabilities = []ReadCapability{{
 		Name: "Correo", Description: "mensajes recientes",
 		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "correo") },
-		Read: func(context.Context, string) (string, error) {
+		Read: func(context.Context, string) (CapabilityResult, error) {
 			if len(events) < 2 || events[0].Kind != EventIntentRecognized || events[1].Kind != EventLookupStarted || events[1].Source != "Correo" {
 				t.Errorf("lookup started before intent/source events: %+v", events)
 			}
-			return "Hay un correo pendiente.", nil
+			return CapabilityResult{Text: "Hay un correo pendiente.", ResultCount: 1}, nil
 		},
 	}}
 
@@ -68,7 +68,9 @@ func TestReadOnlyActionNeverEmitsActionStarted(t *testing.T) {
 	s.Capabilities = []ReadCapability{{
 		Name: "Jira", Description: "tareas del equipo",
 		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "jira") },
-		Read:  func(context.Context, string) (string, error) { return "La tarea STRAT-42 aparece abierta.", nil },
+		Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{Text: "La tarea STRAT-42 aparece abierta.", ResultCount: 1}, nil
+		},
 	}}
 	var events []InteractionEvent
 	answer, err := s.ReplyWithInteraction(context.Background(), 7, "telegram", "chat-7", "Cierra la tarea STRAT-42 en Jira", func(event InteractionEvent) {
@@ -125,7 +127,9 @@ func TestCapabilityFailureEmitsBlockedNotCompleted(t *testing.T) {
 	s.Capabilities = []ReadCapability{{
 		Name: "Correo", Description: "mensajes recientes",
 		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "correo") },
-		Read:  func(context.Context, string) (string, error) { return "", errors.New("private connector detail") },
+		Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{}, errors.New("private connector detail")
+		},
 	}}
 	var events []InteractionEvent
 	answer, err := s.ReplyWithInteraction(context.Background(), 7, "telegram", "chat-7", "¿Tengo algún correo pendiente?", func(event InteractionEvent) {
@@ -210,9 +214,11 @@ func TestSharedChatStreamingRendersInteractionBeforeAnswer(t *testing.T) {
 	s.Capabilities = []ReadCapability{{
 		Name: "Granola", Description: "reuniones recientes",
 		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "reuniones") },
-		Read:  func(context.Context, string) (string, error) { return "Notas de las reuniones de hoy.", nil },
+		Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{Text: "Notas de las reuniones de hoy.", ResultCount: 1}, nil
+		},
 	}}
-	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"main","stream":true,"messages":[{"role":"user","content":"¿Qué tareas salen de las reuniones de hoy?"}]}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"main","stream":true,"messages":[{"role":"user","content":"Resume las reuniones de hoy."}]}`))
 	request.Header.Set("Authorization", "Bearer key")
 	request.Header.Set("X-OpenWebUI-User-Id", "owner")
 	request.Header.Set("X-OpenWebUI-User-Role", "admin")
@@ -238,7 +244,9 @@ func TestSharedChatNonStreamingProgressOnlyWhenLookupStarts(t *testing.T) {
 		s.Capabilities = []ReadCapability{{
 			Name: "Jira", Description: "tareas actuales",
 			Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "jira") },
-			Read:  func(context.Context, string) (string, error) { return "Tarea uno y tarea dos.", nil },
+			Read: func(context.Context, string) (CapabilityResult, error) {
+				return CapabilityResult{Text: "Tarea uno y tarea dos.", ResultCount: 1}, nil
+			},
 		}}
 		result := performOpenWebUIChat(t, s, "¿Qué tareas tengo en Jira?", false)
 		var response struct {
@@ -275,11 +283,13 @@ func TestSharedChatNonStreamingProgressOnlyWhenLookupStarts(t *testing.T) {
 		s.Capabilities = []ReadCapability{{
 			Name: "Jira", Description: "tareas actuales",
 			Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "jira") },
-			Read:  func(context.Context, string) (string, error) { return "La tarea STRAT-42 sigue abierta.", nil },
+			Read: func(context.Context, string) (CapabilityResult, error) {
+				return CapabilityResult{Text: "La tarea STRAT-42 sigue abierta.", ResultCount: 1}, nil
+			},
 		}}
 		result := performOpenWebUIChat(t, s, "Cierra la tarea STRAT-42 en Jira", false)
 		body := result.Body.String()
-		if !strings.Contains(body, "👍") || !strings.Contains(body, "Buscando en Jira; esta conexión solo permite consultar.") || !strings.Contains(body, "No he cambiado nada; solo he consultado Jira.") {
+		if !strings.Contains(body, "👍") || !strings.Contains(body, "Buscando en Jira; esta conexión solo permite consultar.") || !strings.Contains(body, "No he cambiado nada; solo he consultado Jira") {
 			t.Fatalf("read-only action feedback is missing or claims a write: %q", body)
 		}
 	})
@@ -346,7 +356,7 @@ func TestOpenWebUINaturalLanguageUsesSharedRouterAndMemory(t *testing.T) {
 	s := New(upstream.URL, "key", "shared secretary instructions", dir, map[int64]bool{7: true})
 	reader := &intentSource{granola: source}
 	s.Sources = reader
-	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"main","stream":false,"messages":[{"role":"user","content":"¿Tengo algo pendiente según las reuniones que he tenido?"}]}`))
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"main","stream":false,"messages":[{"role":"user","content":"Resume las reuniones que he tenido."}]}`))
 	request.Header.Set("Authorization", "Bearer key")
 	request.Header.Set("X-OpenWebUI-User-Id", "owner")
 	request.Header.Set("X-OpenWebUI-User-Role", "admin")
@@ -357,7 +367,7 @@ func TestOpenWebUINaturalLanguageUsesSharedRouterAndMemory(t *testing.T) {
 		t.Fatalf("Open WebUI answer=%q status=%d Granola=%d model=%d", result.Body.String(), result.Code, reader.granolaCalls, modelCalls)
 	}
 	webHistory := s.history[s.historyKey(7, "openwebui", "natural-language-test")]
-	if len(webHistory) != 2 || webHistory[0].Content != "¿Tengo algo pendiente según las reuniones que he tenido?" {
+	if len(webHistory) != 2 || webHistory[0].Content != "Resume las reuniones que he tenido." {
 		t.Fatalf("Open WebUI exchange did not enter its conversation history: %#v", webHistory)
 	}
 	if _, err := os.Stat(s.dailyMemoryPath(7, time.Now())); err != nil {
@@ -639,8 +649,9 @@ func (s *rovoIntentSource) Rovo(_ context.Context, query string) (string, error)
 	return s.rovo, nil
 }
 
-func TestTaskQuestionRoutesToRovoEvenWhenItMentionsMeetings(t *testing.T) {
+func TestMeetingTaskQuestionRoutesToGranolaAndRovo(t *testing.T) {
 	const question = "¿Qué tareas importantes tengo pendientes hoy según las reuniones de esta mañana?"
+	const granolaSource = "Granola: Plan de lanzamiento · Revisar propuesta antes de las 16:00."
 	const source = "Rovo: Plan de lanzamiento · Revisar propuesta antes de las 16:00."
 	const summary = "Prioriza revisar la propuesta antes de las 16:00."
 	var modelCalls int
@@ -656,18 +667,18 @@ func TestTaskQuestionRoutesToRovoEvenWhenItMentionsMeetings(t *testing.T) {
 		for _, message := range body.Messages {
 			joined += message.Content + "\n"
 		}
-		if !strings.Contains(joined, source) || !strings.Contains(joined, question) {
-			t.Errorf("model did not receive the question and Rovo results: %q", joined)
+		if !strings.Contains(joined, source) || !strings.Contains(joined, granolaSource) || !strings.Contains(joined, question) {
+			t.Errorf("model did not receive the question and both source results: %q", joined)
 		}
 		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
 	}))
 	defer upstream.Close()
-	sourceReader := &rovoIntentSource{intentSource: intentSource{granola: "Granola must wait until the correlation phase."}, rovo: source}
+	sourceReader := &rovoIntentSource{intentSource: intentSource{granola: granolaSource}, rovo: source}
 	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
 	s.Sources = sourceReader
 
 	answer, err := s.Reply(context.Background(), 7, question)
-	if err != nil || answer != summary || modelCalls != 1 || sourceReader.rovoCalls != 1 || sourceReader.lastQuery != question || sourceReader.granolaCalls != 0 {
+	if err != nil || answer != summary || modelCalls != 1 || sourceReader.rovoCalls != 1 || sourceReader.lastQuery != question || sourceReader.granolaCalls != 1 {
 		t.Fatalf("answer=%q model=%d Rovo=%d Granola=%d query=%q err=%v", answer, modelCalls, sourceReader.rovoCalls, sourceReader.granolaCalls, sourceReader.lastQuery, err)
 	}
 }
@@ -705,9 +716,10 @@ func TestMeetingSummaryRoutesToGranolaWhenNoTaskIntentIsPresent(t *testing.T) {
 	}
 }
 
-func TestNaturalLanguageMeetingQuestionQueriesGranolaAndSummarizes(t *testing.T) {
+func TestNaturalLanguageMeetingTaskQueriesGranolaAndRovoAndSummarizes(t *testing.T) {
 	const question = "Hola, dona. Oye, ¿qué tareas tengo pendientes de hacer según las reuniones que tenéis?"
 	const source = "Notas de Granola (últimos 7 días):\nPlanificación · 2026-10-12\nAcordamos publicar el viernes."
+	const rovoSource = "Rovo: buscar tareas asociadas a las decisiones."
 	const summary = "Pendiente: publicar el viernes, según Planificación del 12 de octubre."
 	var modelCalls int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -722,18 +734,18 @@ func TestNaturalLanguageMeetingQuestionQueriesGranolaAndSummarizes(t *testing.T)
 		for _, message := range body.Messages {
 			joined += message.Content + "\n"
 		}
-		if !strings.Contains(joined, source) || !strings.Contains(joined, question) {
-			t.Errorf("model did not receive the user question and Granola notes: %q", joined)
+		if !strings.Contains(joined, source) || !strings.Contains(joined, rovoSource) || !strings.Contains(joined, question) {
+			t.Errorf("model did not receive the user question and both source results: %q", joined)
 		}
 		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
 	}))
 	defer upstream.Close()
-	sourceReader := &intentSource{granola: source}
+	sourceReader := &rovoIntentSource{intentSource: intentSource{granola: source}, rovo: rovoSource}
 	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
 	s.Sources = sourceReader
 	answer, err := s.Reply(context.Background(), 7, question)
-	if err != nil || answer != summary || modelCalls != 1 || sourceReader.granolaCalls != 1 || sourceReader.jiraCalls != 0 {
-		t.Fatalf("answer=%q model=%d granola=%d jira=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.jiraCalls, err)
+	if err != nil || answer != summary || modelCalls != 1 || sourceReader.granolaCalls != 1 || sourceReader.rovoCalls != 1 || sourceReader.jiraCalls != 0 {
+		t.Fatalf("answer=%q model=%d granola=%d rovo=%d jira=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.rovoCalls, sourceReader.jiraCalls, err)
 	}
 }
 
@@ -761,15 +773,15 @@ func TestGranolaCapabilityCarriesToNaturalTaskFollowUp(t *testing.T) {
 		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
 	}))
 	defer upstream.Close()
-	sourceReader := &intentSource{granola: source}
+	sourceReader := &rovoIntentSource{intentSource: intentSource{granola: source}, rovo: "Rovo: acción asociada a la reunión."}
 	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
 	s.Sources = sourceReader
 	if _, err := s.Reply(context.Background(), 7, firstQuestion); err != nil {
 		t.Fatal(err)
 	}
 	answer, err := s.Reply(context.Background(), 7, followUp)
-	if err != nil || answer != summary || modelCalls != 2 || sourceReader.granolaCalls != 2 || sourceReader.jiraCalls != 0 {
-		t.Fatalf("answer=%q model=%d granola=%d jira=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.jiraCalls, err)
+	if err != nil || answer != summary || modelCalls != 2 || sourceReader.granolaCalls != 2 || sourceReader.rovoCalls != 2 || sourceReader.jiraCalls != 0 {
+		t.Fatalf("answer=%q model=%d granola=%d rovo=%d jira=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.rovoCalls, sourceReader.jiraCalls, err)
 	}
 }
 
@@ -783,8 +795,8 @@ func TestGranolaEmptyResultDoesNotLetModelInventGenericAdvice(t *testing.T) {
 	sourceReader := &intentSource{}
 	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
 	s.Sources = sourceReader
-	answer, err := s.Reply(context.Background(), 7, "¿Qué tareas tengo pendientes de las reuniones de esta mañana?")
-	if err != nil || answer != "No he encontrado notas en Granola que permitan verificarlo." || modelCalls != 0 || sourceReader.granolaCalls != 1 {
+	answer, err := s.Reply(context.Background(), 7, "Resume las reuniones de esta mañana.")
+	if err != nil || !strings.Contains(answer, "No he encontrado notas o resultados") || modelCalls != 0 || sourceReader.granolaCalls != 1 {
 		t.Fatalf("answer=%q model=%d granola=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, err)
 	}
 }
@@ -895,9 +907,9 @@ func TestRegisteredCapabilityRoutesWithoutGranolaConnector(t *testing.T) {
 	s.Capabilities = []ReadCapability{{
 		Name: "Correo", Description: "mensajes recientes",
 		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "correo") },
-		Read: func(context.Context, string) (string, error) {
+		Read: func(context.Context, string) (CapabilityResult, error) {
 			reads++
-			return "Ana: revisar presupuesto", nil
+			return CapabilityResult{Text: "Ana: revisar presupuesto", ResultCount: 1}, nil
 		},
 	}}
 	answer, err := s.Reply(context.Background(), 7, "¿Tengo algún correo pendiente?")
@@ -916,11 +928,11 @@ func TestReplyWithProgressAnnouncesSelectedCapabilityBeforeReading(t *testing.T)
 	s.Capabilities = []ReadCapability{{
 		Name: "Correo", Description: "mensajes recientes",
 		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "correo") },
-		Read: func(context.Context, string) (string, error) {
+		Read: func(context.Context, string) (CapabilityResult, error) {
 			if len(progress) != 1 || progress[0] != "Voy a revisar Correo." {
 				t.Errorf("source read began before its progress message: %v", progress)
 			}
-			return "Hay un mensaje pendiente.", nil
+			return CapabilityResult{Text: "Hay un mensaje pendiente.", ResultCount: 1}, nil
 		},
 	}}
 	answer, err := s.ReplyWithProgress(context.Background(), 7, "¿Tengo algún correo pendiente?", func(message string) {

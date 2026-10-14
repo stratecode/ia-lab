@@ -27,7 +27,7 @@ func localIntent(text string) secretaryIntent {
 	if !hasMeeting && containsAny(query, "que hablamos", "que comentamos", "que acordamos") {
 		return intentMemory
 	}
-	if hasMeeting && containsAny(query, "pendiente", "accion", "decision", "resumen", "recuerd", "ultima", "reciente", "acordamos", "hablamos", "compromiso", "tarea", "seguimiento", "que salio", "que se dijo") {
+	if hasMeeting && containsAny(query, "pendiente", "accion", "decision", "resum", "recuerd", "ultima", "reciente", "acordamos", "hablamos", "compromiso", "tarea", "seguimiento", "ejecut", "realizar", "llevar a cabo", "que salio", "que se dijo") {
 		return intentCapability
 	}
 	if containsAny(query, "ya me habias dicho", "me habias respondido", "me respondiste antes", "ya me contestaste", "te pregunte antes", "que te pregunte", "que me dijiste", "que hablamos antes", "que hablamos la semana", "que hablamos esta semana", "que hablamos ayer", "que hablamos hoy", "que comentamos la semana", "que comentamos ayer", "que acordamos la semana", "hablamos anteriormente", "en otra conversacion", "recuerdas que te", "recuerdame que te dije") {
@@ -49,7 +49,7 @@ func rovoTaskIntent(text string) bool {
 	query := normalizedIntentText(text)
 	return containsAny(query,
 		"rovo", "jira", "confluence", "plan", "planificacion", "planificar",
-		"tarea", "pendiente", "actividad", "accion",
+		"tarea", "pendiente", "actividad", "accion", "hacer", "ejecut", "realizar", "llevar a cabo",
 		"acciones por hacer", "que debo hacer", "que tengo que hacer",
 		"siguiente paso", "prioridad", "priorizar",
 	)
