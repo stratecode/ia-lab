@@ -43,6 +43,9 @@ type Service struct {
 	Allowed                               map[int64]bool
 	Sources                               SourceReader
 	Capabilities                          []ReadCapability
+	Learning                              LearningStore
+	Retention                             LearningRetention
+	ModelLabel                            string
 	Client                                *http.Client
 	mu                                    sync.Mutex
 	timerMu                               sync.Mutex
@@ -52,7 +55,7 @@ type Service struct {
 }
 
 func New(upstream, key, instructions, stateDir string, allowed map[int64]bool) *Service {
-	return &Service{Upstream: strings.TrimRight(upstream, "/"), Key: key, Instructions: instructions, StateDir: stateDir, Allowed: allowed, Client: &http.Client{Timeout: 120 * time.Second}, history: map[string][]Turn{}}
+	return &Service{Upstream: strings.TrimRight(upstream, "/"), Key: key, Instructions: instructions, StateDir: stateDir, Allowed: allowed, Client: &http.Client{Timeout: 120 * time.Second}, history: map[string][]Turn{}, Learning: NewJSONLLearningStore(stateDir), Retention: LearningRetention{TraceDays: 90, CandidateDays: 30}}
 }
 
 func (s *Service) VoiceMetrics() *VoiceMetrics {

@@ -281,6 +281,9 @@ lab_secretary_port: 8082
 lab_secretary_voice_enabled: false
 lab_secretary_voice_max_duration_seconds: 120
 lab_secretary_progress_delay_seconds: 30
+lab_secretary_trace_retention_days: "{{ lookup('env', 'LAB_SECRETARY_TRACE_RETENTION_DAYS') | default('90', true) | int }}"
+lab_secretary_candidate_retention_days: "{{ lookup('env', 'LAB_SECRETARY_CANDIDATE_RETENTION_DAYS') | default('30', true) | int }}"
+lab_secretary_model_label: "{{ lookup('env', 'LAB_SECRETARY_MODEL_LABEL') | default('', true) }}"
 lab_whisper_url: "http://127.0.0.1:8083"
 lab_piper_url: "http://127.0.0.1:8084"
 # Keep the normal deployment on polling until public ingress acceptance succeeds.

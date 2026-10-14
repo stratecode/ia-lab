@@ -22,11 +22,11 @@ type EvidenceRef struct {
 }
 
 type CapabilityOutcome struct {
-	Capability  string
-	Outcome     string
-	Duration    time.Duration
-	ResultCount int
-	Evidence    []EvidenceRef
+	Capability  string        `json:"capability"`
+	Outcome     string        `json:"outcome"`
+	Duration    time.Duration `json:"duration"`
+	ResultCount int           `json:"result_count"`
+	Evidence    []EvidenceRef `json:"evidence,omitempty"`
 }
 
 // StructuredSourceReader supplements the legacy direct-command interface with

@@ -46,6 +46,25 @@ func TestParseProgressDelay(t *testing.T) {
 	}
 }
 
+func TestParseLearningRetentionDefaultsAndBounds(t *testing.T) {
+	got, err := parseLearningRetention("", "")
+	if err != nil || got.TraceDays != 90 || got.CandidateDays != 30 {
+		t.Fatalf("default retention = %+v, %v", got, err)
+	}
+	got, err = parseLearningRetention("120", "14")
+	if err != nil || got.TraceDays != 120 || got.CandidateDays != 14 {
+		t.Fatalf("configured retention = %+v, %v", got, err)
+	}
+	for _, invalid := range []string{"0", "3651", "bad"} {
+		if _, err := parseLearningRetention(invalid, "30"); err == nil {
+			t.Errorf("parseLearningRetention(%q) accepted an invalid trace retention", invalid)
+		}
+		if _, err := parseLearningRetention("90", invalid); err == nil {
+			t.Errorf("parseLearningRetention(candidate=%q) accepted invalid retention", invalid)
+		}
+	}
+}
+
 func TestWebhookModeDoesNotStartPolling(t *testing.T) {
 	telegramCalls := 0
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

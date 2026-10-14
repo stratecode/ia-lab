@@ -45,6 +45,11 @@ func main() {
 		log.Fatal("instructions file required")
 	}
 	service := secretary.New(env("LAB_SECRETARY_UPSTREAM", "http://127.0.0.1:8081"), os.Getenv("LAB_SECRETARY_MODEL_KEY"), string(instructions), env("STATE_DIRECTORY", "/var/lib/lab-secretary"), allowed)
+	service.Retention, err = parseLearningRetention(os.Getenv("LAB_SECRETARY_TRACE_RETENTION_DAYS"), os.Getenv("LAB_SECRETARY_CANDIDATE_RETENTION_DAYS"))
+	if err != nil {
+		log.Fatal("valid secretary learning retention required")
+	}
+	service.ModelLabel = strings.TrimSpace(os.Getenv("LAB_SECRETARY_MODEL_LABEL"))
 	var connectorConfig secretary.ConnectorConfig
 	encoded := env("LAB_SECRETARY_CONNECTORS", "e30=")
 	raw, err := base64.StdEncoding.DecodeString(encoded)
@@ -116,6 +121,28 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal("HTTP service failed")
 	}
+}
+
+func parseLearningRetention(traceDays, candidateDays string) (secretary.LearningRetention, error) {
+	parse := func(raw string, fallback int) (int, error) {
+		if strings.TrimSpace(raw) == "" {
+			return fallback, nil
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 3650 {
+			return 0, errors.New("invalid retention")
+		}
+		return n, nil
+	}
+	traces, err := parse(traceDays, 90)
+	if err != nil {
+		return secretary.LearningRetention{}, err
+	}
+	candidates, err := parse(candidateDays, 30)
+	if err != nil {
+		return secretary.LearningRetention{}, err
+	}
+	return secretary.LearningRetention{TraceDays: traces, CandidateDays: candidates}, nil
 }
 
 type telegramMode string
