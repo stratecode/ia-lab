@@ -138,17 +138,59 @@ func (s *Service) ReplyWithInteraction(ctx context.Context, user int64, channel,
 func (s *Service) reply(ctx context.Context, user int64, channel, conversation, text string, stream func(string), progress func(string), observer InteractionObserver) (result string, replyErr error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	requestStarted := time.Now()
+	trace := InteractionTrace{OperatorID: user, Channel: channel, ConversationRef: conversationDigest(channel, conversation), At: requestStarted.UTC(), ModelLabel: s.ModelLabel, RouterVersion: secretaryRouterVersion}
+	traceEligible := false
+	traceOutcome := "success"
 	lifecycleStarted := false
 	terminalEventEmitted := false
 	emitInteraction := func(event InteractionEvent) {
-		if observer == nil {
-			return
+		if event.Meaning != "" {
+			trace.Meaning = string(event.Meaning)
 		}
 		if event.Kind == EventCompleted || event.Kind == EventBlocked {
 			terminalEventEmitted = true
 		}
-		observer(event)
+		if event.Kind == EventBlocked {
+			traceOutcome = "blocked"
+		}
+		if observer != nil {
+			observer(event)
+		}
 	}
+	defer func() {
+		if !traceEligible || s.Learning == nil {
+			return
+		}
+		if replyErr != nil {
+			traceOutcome = "error"
+		}
+		if traceOutcome == "success" && len(trace.Capabilities) > 0 {
+			allEmpty := true
+			for _, capability := range trace.Capabilities {
+				if capability.Outcome != "empty" {
+					allEmpty = false
+					break
+				}
+			}
+			if allEmpty {
+				traceOutcome = "empty"
+			}
+		}
+		trace.Outcome = traceOutcome
+		trace.TotalDuration = time.Since(requestStarted)
+		if err := s.Learning.AppendTrace(trace); err != nil {
+			s.VoiceMetrics().ObserveTraceWriteError()
+			return
+		}
+		if len(trace.Capabilities) == 0 {
+			s.VoiceMetrics().ObserveInteraction(trace.Intent, "none", traceOutcome, trace.TotalDuration)
+		} else {
+			for _, capability := range trace.Capabilities {
+				s.VoiceMetrics().ObserveInteraction(trace.Intent, capability.Capability, capability.Outcome, capability.Duration)
+			}
+		}
+	}()
 	defer func() {
 		if !lifecycleStarted || terminalEventEmitted || observer == nil {
 			return
@@ -248,6 +290,7 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 	if len([]rune(text)) > 4000 {
 		return "La consulta es demasiado larga; envía un fragmento de hasta 4.000 caracteres.", nil
 	}
+	traceEligible = true
 	if err := s.loadHistory(user, channel, conversation); err != nil {
 		return "", err
 	}
@@ -259,6 +302,7 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 	if capabilityMatched {
 		intent = intentCapability
 	}
+	trace.Intent = string(intent)
 	if intent == intentAmbiguous {
 		if progress != nil {
 			progress("interpretando tu consulta")
@@ -296,6 +340,13 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 	if intent != intentCapability {
 		memories, err = s.relevantMemoriesAt(user, "", text, intent == intentMemory, time.Now())
 		if err != nil {
+			s.VoiceMetrics().ObserveMemoryRetrieval("error", 0)
+		} else if len(memories) == 0 {
+			s.VoiceMetrics().ObserveMemoryRetrieval("miss", 0)
+		} else {
+			s.VoiceMetrics().ObserveMemoryRetrieval("hit", len(memories))
+		}
+		if err != nil {
 			return "", err
 		}
 	}
@@ -316,7 +367,7 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 			var blockReason InteractionBlockReason
 			var capabilityErr error
 			answer, outcomes, blockReason, capabilityErr = s.answerFromCapabilities(ctx, text, capabilities, memories, stream, progress, emitInteraction)
-			_ = outcomes // consumed by the learning trace introduced in Task 3
+			trace.Capabilities = append([]CapabilityOutcome(nil), outcomes...)
 			if capabilityErr != nil {
 				err = capabilityErr
 			} else if blockReason != "" {
