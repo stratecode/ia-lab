@@ -714,6 +714,7 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question, readQuer
 	var failures []string
 	var emptyCapabilities []string
 	var successfulCapabilities []string
+	var successfulResults []CapabilityResult
 	var successes int
 	var directAnswer *CapabilityResult
 	for _, capability := range capabilities {
@@ -738,6 +739,7 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question, readQuer
 		outcome.Outcome = "success"
 		successes++
 		successfulCapabilities = append(successfulCapabilities, capability.Name)
+		successfulResults = append(successfulResults, result)
 		if result.DirectAnswer {
 			copy := result
 			directAnswer = &copy
@@ -771,6 +773,11 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question, readQuer
 	if successes == 1 && directAnswer != nil && strings.TrimSpace(directAnswer.Text) != "" {
 		answer := strings.TrimSpace(directAnswer.Text)
 		return answer + capabilityCoverageNote(emptyCapabilities, failures), outcomes, "", nil
+	}
+	if successes == 1 && len(successfulResults) == 1 {
+		if answer, ok := explicitAssignmentAnswer(question, successfulResults[0].Text, successfulResults[0].Evidence); ok {
+			return answer + capabilityCoverageNote(emptyCapabilities, failures), outcomes, "", nil
+		}
 	}
 	var approvedMemories []conversationMemory
 	for _, memory := range memories {
