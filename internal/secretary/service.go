@@ -335,10 +335,10 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 	if err := s.loadHistory(user, channel, conversation); err != nil {
 		return "", err
 	}
-	capabilities, capabilityMatched := s.capabilitiesFor(text, s.history[key])
+	capabilities, capabilityMatched, readQuery := s.capabilitiesFor(text, s.history[key])
 	intent := localIntent(text)
 	if !capabilityMatched && (intent == intentGeneral || intent == intentAmbiguous) {
-		capabilities, capabilityMatched = s.capabilitiesFor(text, s.history[key])
+		capabilities, capabilityMatched, readQuery = s.capabilitiesFor(text, s.history[key])
 	}
 	if capabilityMatched {
 		intent = intentCapability
@@ -417,7 +417,7 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 			var outcomes []CapabilityOutcome
 			var blockReason InteractionBlockReason
 			var capabilityErr error
-			answer, outcomes, blockReason, capabilityErr = s.answerFromCapabilities(ctx, text, capabilities, memories, stream, progress, emitInteraction)
+			answer, outcomes, blockReason, capabilityErr = s.answerFromCapabilities(ctx, text, readQuery, capabilities, memories, stream, progress, emitInteraction)
 			trace.Capabilities = append([]CapabilityOutcome(nil), outcomes...)
 			if capabilityErr != nil {
 				err = capabilityErr
@@ -564,27 +564,36 @@ func (s *Service) capabilities() []ReadCapability {
 	return capabilities
 }
 
-func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapability, bool) {
+func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapability, bool, string) {
 	registered := s.capabilities()
 	if len(registered) == 0 {
-		return nil, false
+		return nil, false, query
 	}
 
 	meetingIntent := localIntent(query) == intentCapability && containsAny(normalizedIntentText(query), "reunion", "reuniones", "granola")
 	taskIntent := rovoTaskIntent(query)
 	var previousMeetingQuery string
-	if !meetingIntent && taskIntent {
+	if taskIntent && (refersToPriorMeeting(query) || !meetingIntent) {
+		userTurns := 0
 		for i := len(history) - 1; i >= 0; i-- {
 			if history[i].Role != "user" {
 				continue
+			}
+			userTurns++
+			if userTurns > 4 {
+				break
 			}
 			previous := normalizedIntentText(history[i].Content)
 			if containsAny(previous, "reunion", "reuniones", "granola") {
 				meetingIntent = true
 				previousMeetingQuery = history[i].Content
+				break
 			}
-			break
 		}
+	}
+	readQuery := query
+	if previousMeetingQuery != "" {
+		readQuery = "Reunión de referencia: " + previousMeetingQuery + "\nSeguimiento: " + query
 	}
 
 	matched := make([]ReadCapability, 0, len(registered))
@@ -598,20 +607,24 @@ func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapabilit
 	}
 	if taskIntent && meetingIntent {
 		if len(matched) > 1 {
-			return matched, true
+			return matched, true, readQuery
 		}
-		return nil, false
+		return nil, false, query
 	}
 	if len(matched) == 1 {
-		return matched, true
+		return matched, true, readQuery
 	}
 	if len(matched) > 1 {
-		return nil, false
+		return nil, false, query
 	}
 	if len(registered) == 1 && localIntent(query) == intentCapability && registered[0].Read != nil && registered[0].Name != "" {
-		return registered, true
+		return registered, true, readQuery
 	}
-	return nil, false
+	return nil, false, query
+}
+
+func refersToPriorMeeting(query string) bool {
+	return containsAny(normalizedIntentText(query), "esa reunion", "esta reunion", "dicha reunion", "aquella reunion")
 }
 
 func capabilityResultFromText(text string) CapabilityResult {
@@ -653,7 +666,7 @@ func capabilityFailureLabel(name string, err error) string {
 	return name + " (faltan permisos: " + strings.Join(scopes, ", ") + ")"
 }
 
-func (s *Service) answerFromCapabilities(ctx context.Context, question string, capabilities []ReadCapability, memories []conversationMemory, stream func(string), progress func(string), observer InteractionObserver) (string, []CapabilityOutcome, InteractionBlockReason, error) {
+func (s *Service) answerFromCapabilities(ctx context.Context, question, readQuery string, capabilities []ReadCapability, memories []conversationMemory, stream func(string), progress func(string), observer InteractionObserver) (string, []CapabilityOutcome, InteractionBlockReason, error) {
 	outcomes := make([]CapabilityOutcome, 0, len(capabilities))
 	var sourceBlocks []string
 	var failures []string
@@ -661,7 +674,7 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question string, c
 	var directAnswer *CapabilityResult
 	for _, capability := range capabilities {
 		started := time.Now()
-		result, err := capability.Read(ctx, question)
+		result, err := capability.Read(ctx, readQuery)
 		outcome := CapabilityOutcome{Capability: capability.Name, Duration: time.Since(started)}
 		if err != nil {
 			outcome.Outcome = "error"

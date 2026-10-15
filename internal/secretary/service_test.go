@@ -156,7 +156,7 @@ func TestCapabilityFailureExplainsMissingRovoScopes(t *testing.T) {
 			return CapabilityResult{}, errors.New("Rovo missing required scopes: read:jira:agent-interface, search:jira:agent-interface")
 		},
 	}
-	answer, outcomes, reason, err := s.answerFromCapabilities(context.Background(), "Dame las tareas de SW-76", []ReadCapability{capability}, nil, nil, nil, nil)
+	answer, outcomes, reason, err := s.answerFromCapabilities(context.Background(), "Dame las tareas de SW-76", "Dame las tareas de SW-76", []ReadCapability{capability}, nil, nil, nil, nil)
 	if err != nil || reason != BlockConnectorFailure || len(outcomes) != 1 {
 		t.Fatalf("unexpected connector failure result: %q %#v %q %v", answer, outcomes, reason, err)
 	}
@@ -816,7 +816,7 @@ func TestSourcedAnswerDoesNotMixConversationMemory(t *testing.T) {
 	capability := ReadCapability{Name: "Granola", Description: "notas", Read: func(context.Context, string) (CapabilityResult, error) {
 		return CapabilityResult{Text: source, ResultCount: 1}, nil
 	}}
-	_, _, _, err := s.answerFromCapabilities(context.Background(), "¿Quién revisa Stonecare?", []ReadCapability{capability}, []conversationMemory{{User: "qué pasó", Assistant: unrelated}}, nil, nil, nil)
+	_, _, _, err := s.answerFromCapabilities(context.Background(), "¿Quién revisa Stonecare?", "¿Quién revisa Stonecare?", []ReadCapability{capability}, []conversationMemory{{User: "qué pasó", Assistant: unrelated}}, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -858,6 +858,45 @@ func TestGranolaCapabilityCarriesToNaturalTaskFollowUp(t *testing.T) {
 	answer, err := s.Reply(context.Background(), 7, followUp)
 	if err != nil || answer != summary || modelCalls != 2 || sourceReader.granolaCalls != 2 || sourceReader.rovoCalls != 2 || sourceReader.jiraCalls != 0 {
 		t.Fatalf("answer=%q model=%d granola=%d rovo=%d jira=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.rovoCalls, sourceReader.jiraCalls, err)
+	}
+}
+
+func TestMeetingFollowUpKeepsMeetingContextInConnectorQuery(t *testing.T) {
+	const firstQuestion = "Resume la reunión de Stonecare del 14 de octubre."
+	const followUp = "¿Qué tareas concretas quedaron asignadas a cada persona en esa reunión y cuáles me corresponden a mí?"
+	const source = "Granola: Iris revisa los textos y Fran implementa los cambios."
+	const summary = "Iris revisa los textos; Fran implementa los cambios."
+	var gotQuery string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	s.Capabilities = []ReadCapability{{
+		Name: "Granola", Description: "notas de reuniones",
+		Match: func(query string) bool {
+			return localIntent(query) == intentCapability && containsAny(normalizedIntentText(query), "reunion", "reuniones")
+		},
+		Read: func(_ context.Context, query string) (CapabilityResult, error) {
+			gotQuery = query
+			return CapabilityResult{Text: source, ResultCount: 1}, nil
+		},
+	}, {
+		Name: "Rovo", Description: "tareas",
+		Match: rovoTaskIntent,
+		Read: func(_ context.Context, query string) (CapabilityResult, error) {
+			return CapabilityResult{Text: "Rovo sin coincidencias", ResultCount: 0}, nil
+		},
+	}}
+	if _, err := s.Reply(context.Background(), 7, firstQuestion); err != nil {
+		t.Fatal(err)
+	}
+	answer, err := s.Reply(context.Background(), 7, followUp)
+	if err != nil || answer != summary {
+		t.Fatalf("answer=%q err=%v", answer, err)
+	}
+	if !strings.Contains(gotQuery, firstQuestion) || !strings.Contains(gotQuery, followUp) {
+		t.Fatalf("connector query lost meeting reference: %q", gotQuery)
 	}
 }
 

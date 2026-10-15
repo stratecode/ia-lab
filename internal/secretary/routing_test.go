@@ -43,7 +43,7 @@ func TestCapabilitiesForIntentSelectsExpectedSources(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			capabilities, ok := routingServiceForTest().capabilitiesFor(tt.query, nil)
+			capabilities, ok, _ := routingServiceForTest().capabilitiesFor(tt.query, nil)
 			if !ok {
 				t.Fatalf("capabilitiesFor(%q) reported no route", tt.query)
 			}
@@ -60,14 +60,14 @@ func TestCapabilitiesForIntentSelectsExpectedSources(t *testing.T) {
 
 func TestMeetingTaskQuestionUsesGranolaAndRovo(t *testing.T) {
 	query := "¿Tengo algo importante que ejecutar según las reuniones de esta mañana?"
-	capabilities, ok := routingServiceForTest().capabilitiesFor(query, nil)
+	capabilities, ok, _ := routingServiceForTest().capabilitiesFor(query, nil)
 	if !ok || len(capabilities) != 2 || capabilities[0].Name != "Granola" || capabilities[1].Name != "Rovo" {
 		t.Fatalf("meeting task route = %v, %t; want Granola then Rovo", capabilityNames(capabilities), ok)
 	}
 }
 
 func TestMeetingSummaryUsesGranolaOnly(t *testing.T) {
-	capabilities, ok := routingServiceForTest().capabilitiesFor("Resume las reuniones de esta mañana", nil)
+	capabilities, ok, _ := routingServiceForTest().capabilitiesFor("Resume las reuniones de esta mañana", nil)
 	if !ok || len(capabilities) != 1 || capabilities[0].Name != "Granola" {
 		t.Fatalf("meeting summary route = %v, %t; want Granola only", capabilityNames(capabilities), ok)
 	}
@@ -78,7 +78,7 @@ func TestAmbiguousCapabilityMatchFailsClosed(t *testing.T) {
 		{Name: "Uno", Match: func(string) bool { return true }, Read: func(context.Context, string) (CapabilityResult, error) { return CapabilityResult{}, nil }},
 		{Name: "Dos", Match: func(string) bool { return true }, Read: func(context.Context, string) (CapabilityResult, error) { return CapabilityResult{}, nil }},
 	}}
-	if capabilities, ok := s.capabilitiesFor("consulta ambigua", nil); ok || len(capabilities) != 0 {
+	if capabilities, ok, _ := s.capabilitiesFor("consulta ambigua", nil); ok || len(capabilities) != 0 {
 		t.Fatalf("ambiguous route = %v, %t; want no capabilities and false", capabilityNames(capabilities), ok)
 	}
 }
