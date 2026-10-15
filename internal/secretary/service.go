@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -564,6 +565,12 @@ func (s *Service) capabilities() []ReadCapability {
 	return capabilities
 }
 
+var meetingAnchorPattern = regexp.MustCompile(`(?i)\b(?:reunión|reunion|reuniones)\b[^,.;?!]*`)
+
+func meetingAnchorFromQuery(query string) string {
+	return strings.TrimSpace(meetingAnchorPattern.FindString(query))
+}
+
 func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapability, bool, string) {
 	registered := s.capabilities()
 	if len(registered) == 0 {
@@ -592,7 +599,9 @@ func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapabilit
 	}
 	readQuery := query
 	if previousMeetingQuery != "" {
-		readQuery = "Reunión de referencia: " + previousMeetingQuery + "\nSeguimiento: " + query
+		if anchor := meetingAnchorFromQuery(previousMeetingQuery); anchor != "" {
+			readQuery = "Reunión de referencia: " + anchor + "\nSeguimiento: " + query
+		}
 	}
 
 	matched := make([]ReadCapability, 0, len(registered))

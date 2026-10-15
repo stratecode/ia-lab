@@ -90,7 +90,7 @@ func TestMeetingFollowUpResolvesAnaphoraWithinRecentHistory(t *testing.T) {
 	if !ok {
 		t.Fatal("meeting follow-up did not route")
 	}
-	if !strings.Contains(readQuery, anchor) || !strings.Contains(readQuery, query) {
+	if !strings.Contains(readQuery, "Stonecare del 14 de octubre") || !strings.Contains(readQuery, query) {
 		t.Fatalf("follow-up query lost its meeting anchor: %q", readQuery)
 	}
 }

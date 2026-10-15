@@ -795,6 +795,25 @@ func TestGranolaCapabilityPassesQuestionToQueryAwareConnector(t *testing.T) {
 	}
 }
 
+func TestMeetingFollowUpUsesAnchorWithoutRepeatingPreviousTaskDetails(t *testing.T) {
+	s := &Service{Capabilities: []ReadCapability{
+		{Name: "Granola", Match: func(string) bool { return true }, Read: func(context.Context, string) (CapabilityResult, error) { return CapabilityResult{}, nil }},
+		{Name: "Rovo", Match: func(string) bool { return true }, Read: func(context.Context, string) (CapabilityResult, error) { return CapabilityResult{}, nil }},
+	}}
+	previous := "En la reunión de Stonecare del 14 de octubre, dime quién debía enviar las imágenes y qué tareas tenía Fran para dejar la web lista."
+	followUp := "¿Y qué tareas relacionadas con los textos en castellano e inglés le quedan a Fran?"
+	capabilities, matched, readQuery := s.capabilitiesFor(followUp, []Turn{{Role: "user", Content: previous}})
+	if !matched || len(capabilities) != 2 {
+		t.Fatalf("capabilities=%v matched=%v query=%q", capabilities, matched, readQuery)
+	}
+	if !strings.Contains(readQuery, "Stonecare del 14 de octubre") || !strings.Contains(readQuery, followUp) {
+		t.Fatalf("read query lost meeting anchor or follow-up: %q", readQuery)
+	}
+	if strings.Contains(readQuery, "debía enviar las imágenes") || strings.Contains(readQuery, "qué tareas tenía Fran") {
+		t.Fatalf("read query repeated unrelated details from the previous task, which can bias attribution: %q", readQuery)
+	}
+}
+
 func TestDirectSourceAnswerSurvivesSecondaryConnectorFailure(t *testing.T) {
 	const sourceAnswer = "Fran: aplicar los cambios de la web. Paula y Alba: enviar las imágenes. [[1]](https://notes.granola.ai/d/meeting-1)"
 	modelCalls := 0
@@ -948,7 +967,7 @@ func TestMeetingFollowUpKeepsMeetingContextInConnectorQuery(t *testing.T) {
 	if err != nil || answer != summary {
 		t.Fatalf("answer=%q err=%v", answer, err)
 	}
-	if !strings.Contains(gotQuery, firstQuestion) || !strings.Contains(gotQuery, followUp) {
+	if !strings.Contains(gotQuery, "Stonecare del 14 de octubre") || !strings.Contains(gotQuery, followUp) {
 		t.Fatalf("connector query lost meeting reference: %q", gotQuery)
 	}
 }
