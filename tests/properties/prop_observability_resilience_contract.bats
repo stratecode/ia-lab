@@ -11,7 +11,7 @@ import sys
 
 root = Path(sys.argv[1])
 tasks = (root / "roles/observability/tasks/main.yml").read_text()
-for job in ("grafana", "alertmanager", "llama-cpp-code"):
+for job in ("grafana", "alertmanager", "llama-cpp-main", "llm-telemetry", "lab-secretary"):
     if f'job_name: "{job}"' not in tasks:
         raise SystemExit(f"missing Prometheus job: {job}")
 PY
@@ -35,7 +35,7 @@ required_alerts = [
 missing = [name for name in required_alerts if f"alert: {name}" not in tasks]
 if missing:
     raise SystemExit("missing alerts: " + ", ".join(missing))
-for job in ("node", "grafana", "alertmanager", "llama-cpp-code"):
+for job in ("node", "grafana", "alertmanager", "llama-cpp-main"):
     expected = f'absent(up{{job="{job}"}})'
     if expected not in tasks:
         raise SystemExit(f"{job} down alert must handle missing targets")
@@ -59,6 +59,23 @@ if "promtool check rules" not in handlers:
     raise SystemExit("Prometheus handler must validate rules")
 if handlers.count("listen: Restart prometheus") != 3:
     raise SystemExit("Prometheus validation and restart handlers must share the notification")
+PY
+  [ "$status" -eq 0 ]
+}
+
+@test "observability leaves Alertmanager ownership to lab_alerting and avoids inline model credentials" {
+  run python3 - "$repo_root" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+tasks = (root / "roles/observability/tasks/main.yml").read_text()
+if "dest: /etc/alertmanager/alertmanager.yml" in tasks:
+    raise SystemExit("observability must not write a second Alertmanager config")
+if "credentials_file: /var/snap/prometheus/current/llama-api-key" not in tasks:
+    raise SystemExit("Prometheus must read llama.cpp credentials from the managed file")
+if 'instance: "llama-cpp-main"' not in tasks:
+    raise SystemExit("llama.cpp target must retain the instance label used by alerts")
 PY
   [ "$status" -eq 0 ]
 }

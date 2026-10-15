@@ -10,7 +10,6 @@
     - /srv/ai-lab/observability/grafana/provisioning/datasources
     - /srv/ai-lab/observability/grafana/provisioning/dashboards
     - /srv/ai-lab/observability/grafana/dashboards
-    - /etc/alertmanager
     - /var/snap/prometheus/current/promreg
   when: grafana_enabled or alertmanager_enabled
 
@@ -30,40 +29,6 @@
     content: |
       ARGS="--web.listen-address=127.0.0.1:9100"
   notify: Restart node-exporter
-  when: alertmanager_enabled
-
-- name: Configure Alertmanager
-  ansible.builtin.copy:
-    dest: /etc/alertmanager/alertmanager.yml
-    mode: "0644"
-    content: |
-      global:
-        resolve_timeout: 5m
-
-      route:
-        receiver: default
-        group_by: ['alertname']
-        group_wait: 30s
-        group_interval: 5m
-        repeat_interval: 4h
-
-      receivers:
-        - name: default
-      {% if alertmanager_slack_webhook_url | length > 0 %}
-          slack_configs:
-            - api_url: {{ alertmanager_slack_webhook_url | to_json }}
-              send_resolved: true
-              username: "alertmanager"
-              title: >-
-                [{{ '{{' }} .Status | toUpper {{ '}}' }}]
-                {{ '{{' }} .CommonLabels.alertname {{ '}}' }}
-              text: >-
-                {{ '{{' }} range .Alerts {{ '}}' }}
-                *Summary:* {{ '{{' }} .Annotations.summary {{ '}}' }}
-                *Description:* {{ '{{' }} .Annotations.description {{ '}}' }}
-                {{ '{{' }} end {{ '}}' }}
-      {% endif %}
-  notify: Restart alertmanager
   when: alertmanager_enabled
 
 - name: Configure Prometheus alert rules
@@ -261,9 +226,11 @@
         - job_name: "llama-cpp-main"
           metrics_path: /metrics
           authorization:
-            credentials: "{{ (llama_cpp_instances | first).api_key }}"
+            credentials_file: /var/snap/prometheus/current/llama-api-key
           static_configs:
             - targets: ["127.0.0.1:{{ (llama_cpp_instances | first).port }}"]
+              labels:
+                instance: "llama-cpp-main"
   notify: Restart prometheus
   when: alertmanager_enabled
 
