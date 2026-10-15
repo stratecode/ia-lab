@@ -339,6 +339,24 @@ func (c *Connectors) RovoResult(ctx context.Context, query string) (CapabilityRe
 			return CapabilityResult{}, err
 		}
 	}
+	if issueKey := jiraIssueKeyMention.FindString(strings.ToUpper(query)); issueKey != "" {
+		issueRaw, err := s.callTool(ctx, "getJiraIssue", map[string]any{
+			"cloudId": cloud, "issueIdOrKey": issueKey,
+			"fields": []string{"summary", "status", "assignee", "duedate", "updated", "project"},
+			"updateHistory": false,
+		})
+		if err != nil {
+			return CapabilityResult{}, err
+		}
+		line, issueEvidence, ok := parseJiraIssueEvidence(issueRaw, EvidenceRef{ID: issueKey, Provider: "Jira"})
+		if !ok {
+			return CapabilityResult{}, errors.New("Jira issue fields could not be verified")
+		}
+		return CapabilityResult{
+			Text: "Jira · incidencia verificada en la consulta actual:\n" + line,
+			ResultCount: 1, Evidence: []EvidenceRef{issueEvidence}, DirectAnswer: true,
+		}, nil
+	}
 	raw, err := s.callTool(ctx, "search", map[string]any{
 		"cloudId": cloud, "query": query, "targetApp": "JIRA", "mode": "STANDARD", "limit": 10,
 	})
@@ -448,7 +466,11 @@ func parseJiraIssueEvidence(raw json.RawMessage, candidate EvidenceRef) (string,
 	if strings.TrimSpace(due) == "" {
 		due = "sin vencimiento"
 	}
-	line := fmt.Sprintf("[%s](%s) %s · Estado: %s · Responsable: %s · Vencimiento: %s", candidate.ID, candidate.URL, short(summary), short(status), short(assignee), short(due))
+	issueLabel := candidate.ID
+	if validEvidenceURL(candidate.URL) {
+		issueLabel = fmt.Sprintf("[%s](%s)", candidate.ID, candidate.URL)
+	}
+	line := fmt.Sprintf("%s %s · Estado: %s · Responsable: %s · Vencimiento: %s", issueLabel, short(summary), short(status), short(assignee), short(due))
 	if updated != "" {
 		line += " · Actualizada: " + short(updated)
 	}

@@ -231,6 +231,57 @@ func TestRovoSearchPassesNaturalLanguageToReadOnlyMCP(t *testing.T) {
 	}
 }
 
+func TestRovoIssueKeyQueryReadsIssueDirectlyWhenSearchWouldBeEmpty(t *testing.T) {
+	var gotIssueLookup bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		switch req.Method {
+		case "initialize":
+			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`)
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			if req.Params.Name != "getJiraIssue" {
+				t.Errorf("issue-key lookup must bypass semantic search; got tool %q", req.Params.Name)
+			}
+			if req.Params.Arguments["issueIdOrKey"] != "SW-76" {
+				t.Errorf("issue key was not preserved: %#v", req.Params.Arguments)
+			}
+			gotIssueLookup = true
+			body := `{"key":"SW-76","fields":{"summary":"Actualizar importador de locations","status":{"name":"En curso"},"assignee":{"displayName":"Gonzalo Sánchez"},"duedate":null}}`
+			b, _ := json.Marshal(map[string]any{"jsonrpc":"2.0","id":req.ID,"result":map[string]any{"content":[]any{map[string]string{"type":"text","text":body}}}})
+			w.Write(b)
+		default:
+			t.Errorf("unexpected MCP method %q", req.Method)
+		}
+	}))
+	defer server.Close()
+	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: server.URL, AccessToken: "secret", CloudID: "cloud-1"}}, Client: server.Client(), allowTestHTTP: true}
+
+	result, err := c.RovoResult(context.Background(), "Dame el estado, la persona asignada y el vencimiento de SW-76, actualizar importador de locations.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gotIssueLookup || !result.DirectAnswer || result.ResultCount != 1 {
+		t.Fatalf("exact Jira issue was not read as a verified direct answer: lookup=%v result=%+v", gotIssueLookup, result)
+	}
+	for _, want := range []string{"SW-76", "En curso", "Gonzalo Sánchez", "sin vencimiento"} {
+		if !strings.Contains(result.Text, want) {
+			t.Errorf("verified Jira answer %q missing from %q", want, result.Text)
+		}
+	}
+}
+
 func TestRovoEvidenceDoesNotPromoteRequestIDsToSourceEvidence(t *testing.T) {
 	raw := json.RawMessage(`{"request":{"id":"request-123"},"results":[{"title":"Plan sin referencia estable"}]}`)
 	if evidence := parseRovoEvidence(raw); len(evidence) != 0 {
