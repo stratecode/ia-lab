@@ -391,6 +391,7 @@ func (c *Connectors) RovoResult(ctx context.Context, query string) (CapabilityRe
 }
 
 var jiraIssueKey = regexp.MustCompile(`^[A-Z][A-Z0-9]*-[0-9]+$`)
+var jiraIssueKeyMention = regexp.MustCompile(`\b[A-Z][A-Z0-9]*-[0-9]+\b`)
 
 func parseJiraIssueEvidence(raw json.RawMessage, candidate EvidenceRef) (string, EvidenceRef, bool) {
 	var root any

@@ -47,6 +47,9 @@ func localIntent(text string) secretaryIntent {
 // without an action request continue to use Granola.
 func rovoTaskIntent(text string) bool {
 	query := normalizedIntentText(text)
+	if jiraIssueKeyMention.MatchString(strings.ToUpper(text)) {
+		return true
+	}
 	return containsAny(query,
 		"rovo", "jira", "confluence", "plan", "planificacion", "planificar",
 		"tarea", "pendiente", "actividad", "accion", "hacer", "ejecut", "realizar", "llevar a cabo",
