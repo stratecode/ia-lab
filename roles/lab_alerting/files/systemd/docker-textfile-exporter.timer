@@ -1,0 +1,8 @@
+[Unit]
+Description=Exportar métricas Docker cada 30 s
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=2s
+[Install]
+WantedBy=timers.target

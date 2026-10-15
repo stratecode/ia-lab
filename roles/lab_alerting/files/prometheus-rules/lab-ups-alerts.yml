@@ -1,0 +1,87 @@
+groups:
+  - name: lab-ups
+    rules:
+      - alert: UPSOnBattery
+        expr: nut_ups_status{flag="OB"} == 1
+        for: 30s
+        labels: {severity: critical, category: power}
+        annotations:
+          summary: "Corte de luz: el SAI está funcionando con batería"
+          description: "Batería al {{ with query \"nut_battery_charge_percent\" }}{{ . | first | value | printf \"%.0f\" }}{{ end }}%, autonomía restante {{ with query \"nut_battery_runtime_seconds\" }}{{ . | first | value | humanizeDuration }}{{ end }}."
+      - alert: UPSLowBattery
+        expr: nut_ups_status{flag="LB"} == 1 or (nut_ups_status{flag="OB"} == 1 and nut_battery_charge_percent < 30)
+        labels: {severity: critical, category: power}
+        annotations:
+          summary: "Batería del SAI baja: apagado inminente"
+          description: "NUT apagará el servidor de forma ordenada al llegar al umbral crítico."
+      - alert: UPSReplaceBattery
+        expr: nut_ups_status{flag="RB"} == 1
+        for: 10m
+        labels: {severity: warning, category: power}
+        annotations:
+          summary: "El SAI pide sustituir la batería"
+      - alert: UPSOverload
+        expr: nut_ups_status{flag="OVER"} == 1 or nut_ups_load_percent > 80
+        for: 2m
+        labels: {severity: warning, category: power}
+        annotations:
+          summary: "SAI sobrecargado ({{ $value | printf \"%.0f\" }}%)"
+      - alert: UPSInputVoltageAbnormal
+        expr: nut_input_voltage_volts < 200 or nut_input_voltage_volts > 255
+        for: 2m
+        labels: {severity: warning, category: power}
+        annotations:
+          summary: "Tensión de red anómala: {{ $value | printf \"%.0f\" }} V"
+      - alert: UPSMonitoringDown
+        expr: nut_up == 0 or absent(nut_up)
+        for: 3m
+        labels: {severity: critical, category: power}
+        annotations:
+          summary: "Se perdió la comunicación con el SAI (USB/NUT)"
+          description: "Sin datos del SAI: si hay un corte, no habría apagado ordenado. Revisar cable USB y nut-driver@cyberpower."
+  - name: lab-health
+    rules:
+      - alert: SystemdUnitFailed
+        expr: node_systemd_unit_state{state="failed"} == 1
+        for: 5m
+        labels: {severity: warning, category: services}
+        annotations:
+          summary: "Servicio fallido: {{ $labels.name }}"
+      - alert: SmartDiskUnhealthy
+        expr: smartmon_device_smart_healthy == 0
+        for: 5m
+        labels: {severity: critical, category: storage}
+        annotations:
+          summary: "SMART reporta fallo en {{ $labels.disk }}"
+      - alert: OOMKillDetected
+        expr: increase(node_vmstat_oom_kill[5m]) > 0
+        labels: {severity: warning, category: memory}
+        annotations:
+          summary: "El kernel mató un proceso por falta de memoria (OOM)"
+      - alert: RootFilesystemFillingUp
+        expr: predict_linear(node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"}[6h], 24*3600) < 0
+        for: 30m
+        labels: {severity: warning, category: storage}
+        annotations:
+          summary: "El disco raíz se llenará en menos de 24 h al ritmo actual"
+      - alert: LabSecretaryDown
+        expr: up{job="lab-secretary"} != 1 or absent(up{job="lab-secretary"})
+        for: 3m
+        labels: {severity: warning, category: services}
+        annotations:
+          summary: "lab-secretary (Telegram) no responde"
+      - alert: LLMTelemetryDown
+        expr: up{job="llm-telemetry"} != 1 or absent(up{job="llm-telemetry"})
+        for: 3m
+        labels: {severity: warning, category: services}
+        annotations:
+          summary: "llm-telemetry no responde"
+      - alert: TextfileCollectorStale
+        expr: |
+          (time() - node_textfile_mtime_seconds{file=~".*(nut|docker)\\.prom"} > 600)
+          or
+          (time() - node_textfile_mtime_seconds{file=~".*(smartmon|nvme)\\.prom"} > 3000)
+        for: 5m
+        labels: {severity: warning, category: monitoring}
+        annotations:
+          summary: "Métricas textfile sin actualizar: {{ $labels.file }}"

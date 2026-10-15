@@ -1,0 +1,6 @@
+[Unit]
+Description=Exportar métricas del SAI (NUT) a node_exporter
+After=nut-server.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/nut-textfile-exporter

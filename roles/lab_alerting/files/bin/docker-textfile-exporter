@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+# Métricas por contenedor Docker vía API/CLI -> textfile collector de node_exporter.
+import json, re, subprocess, os, tempfile
+OUT = "/var/lib/prometheus/node-exporter/docker.prom"
+def run(*a):
+    return subprocess.run(a, capture_output=True, text=True, timeout=20)
+UNITS = {"B":1,"kB":1e3,"KB":1e3,"MB":1e6,"GB":1e9,"TB":1e12,"KiB":1024,"MiB":1024**2,"GiB":1024**3,"TiB":1024**4}
+def b(s):
+    m = re.match(r"([\d.]+)\s*([A-Za-z]+)", s.strip())
+    return float(m.group(1)) * UNITS.get(m.group(2), 1) if m else 0.0
+lines = ["# TYPE docker_exporter_up gauge"]
+ps = run("docker", "ps", "-a", "--format", "{{json .}}")
+if ps.returncode != 0:
+    lines.append("docker_exporter_up 0")
+else:
+    lines.append("docker_exporter_up 1")
+    esc = lambda v: v.replace("\\", "\\\\").replace('"', '\\"')
+    names = []
+    for l in ps.stdout.splitlines():
+        c = json.loads(l)
+        names.append(c["Names"])
+        lab = f'name="{esc(c["Names"])}",image="{esc(c["Image"])}"'
+        lines.append(f'docker_container_running{{{lab}}} {1 if c["State"]=="running" else 0}')
+        st = c.get("Status", "")
+        if "(healthy)" in st: lines.append(f'docker_container_healthy{{name="{esc(c["Names"])}"}} 1')
+        elif "(unhealthy)" in st: lines.append(f'docker_container_healthy{{name="{esc(c["Names"])}"}} 0')
+    if names:
+        ins = run("docker", "inspect", "--format", "{{.Name}} {{.RestartCount}}", *names)
+        for l in ins.stdout.splitlines():
+            n, r = l.strip().lstrip("/").rsplit(" ", 1)
+            lines.append(f'docker_container_restart_count{{name="{esc(n)}"}} {r}')
+    stats = run("docker", "stats", "--no-stream", "--format", "{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}")
+    for l in stats.stdout.splitlines():
+        n, cpu, mem, memp = l.split("\t")
+        used, _, lim = mem.partition("/")
+        lab = f'name="{esc(n)}"'
+        lines.append(f'docker_container_cpu_percent{{{lab}}} {cpu.strip("%")}')
+        lines.append(f'docker_container_memory_usage_bytes{{{lab}}} {b(used):.0f}')
+        lines.append(f'docker_container_memory_limit_bytes{{{lab}}} {b(lim):.0f}')
+        lines.append(f'docker_container_memory_percent{{{lab}}} {memp.strip("%")}')
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(OUT), suffix=".tmp")
+with os.fdopen(fd, "w") as f: f.write("\n".join(lines) + "\n")
+os.chmod(tmp, 0o644); os.replace(tmp, OUT)

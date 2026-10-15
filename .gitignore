@@ -8,6 +8,8 @@ ssh/
 .kiro
 dist/
 bin/
+!/roles/lab_alerting/files/bin/
+!/roles/lab_alerting/files/bin/**
 
 # macOS
 .DS_Store

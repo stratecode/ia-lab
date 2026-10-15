@@ -1,0 +1,27 @@
+#!/bin/bash
+# Caducidad de certificados TLS: lo que sirve nginx (por SNI) y los ficheros de certbot.
+OUT=/var/lib/prometheus/node-exporter/certs.prom
+TMP=$(mktemp "${OUT}.XXXXXX"); trap 'rm -f "$TMP"' EXIT
+DOMAINS="lab.stratecode.com monitor.stratecode.com chat.stratecode.com assistant.stratecode.com"
+{
+  echo "# HELP ssl_cert_not_after_timestamp_seconds Fecha de caducidad del certificado servido por nginx"
+  echo "# TYPE ssl_cert_not_after_timestamp_seconds gauge"
+  echo "# TYPE ssl_cert_probe_success gauge"
+  for d in $DOMAINS; do
+    end=$(echo | timeout 8 openssl s_client -connect 127.0.0.1:443 -servername "$d" 2>/dev/null | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+    if [ -n "$end" ] && ts=$(date -d "$end" +%s 2>/dev/null); then
+      echo "ssl_cert_probe_success{domain=\"$d\"} 1"
+      echo "ssl_cert_not_after_timestamp_seconds{domain=\"$d\"} $ts"
+    else
+      echo "ssl_cert_probe_success{domain=\"$d\"} 0"
+    fi
+  done
+  echo "# TYPE ssl_certbot_cert_not_after_timestamp_seconds gauge"
+  for c in /etc/letsencrypt/live/*/cert.pem; do
+    [ -f "$c" ] || continue
+    n=$(basename "$(dirname "$c")")
+    end=$(openssl x509 -noout -enddate -in "$c" 2>/dev/null | cut -d= -f2) || continue
+    echo "ssl_certbot_cert_not_after_timestamp_seconds{name=\"$n\"} $(date -d "$end" +%s)"
+  done
+} > "$TMP"
+chmod 644 "$TMP"; mv "$TMP" "$OUT"; trap - EXIT

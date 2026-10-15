@@ -1,0 +1,5 @@
+[Unit]
+Description=Sincronizar la clave de llama.cpp con Prometheus
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sync-llama-prom-key

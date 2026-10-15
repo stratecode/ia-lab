@@ -1,0 +1,7 @@
+[Unit]
+Description=Exportar caducidad de certificados cada hora
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1h
+[Install]
+WantedBy=timers.target

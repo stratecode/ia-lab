@@ -1,0 +1,75 @@
+groups:
+  - name: lab-containers
+    rules:
+      - alert: ContainerNotRunning
+        expr: docker_container_running == 0
+        for: 2m
+        labels: {severity: warning, category: containers}
+        annotations:
+          summary: "Contenedor parado: {{ $labels.name }}"
+          description: "Imagen {{ $labels.image }}."
+      - alert: ExpectedContainerMissing
+        expr: absent(docker_container_running{name="grafana"}) or absent(docker_container_running{name="open-webui"})
+        for: 3m
+        labels: {severity: critical, category: containers}
+        annotations:
+          summary: "Falta un contenedor esperado (grafana u open-webui)"
+          description: "El contenedor no existe en Docker, no solo está parado."
+      - alert: ContainerUnhealthy
+        expr: docker_container_healthy == 0
+        for: 3m
+        labels: {severity: warning, category: containers}
+        annotations:
+          summary: "Contenedor no saludable: {{ $labels.name }}"
+      - alert: ContainerRestarting
+        expr: increase(docker_container_restart_count[15m]) > 2
+        labels: {severity: warning, category: containers}
+        annotations:
+          summary: "Contenedor reiniciándose en bucle: {{ $labels.name }}"
+          description: "{{ $value | printf \"%.0f\" }} reinicios en 15 min."
+      - alert: ContainerMemoryHigh
+        expr: docker_container_memory_percent > 80
+        for: 10m
+        labels: {severity: warning, category: containers}
+        annotations:
+          summary: "Contenedor {{ $labels.name }} usa el {{ $value | printf \"%.0f\" }}% de la memoria"
+      - alert: DockerExporterDown
+        expr: docker_exporter_up == 0
+        for: 3m
+        labels: {severity: warning, category: monitoring}
+        annotations:
+          summary: "No se puede consultar Docker (docker daemon caído o sin acceso)"
+  - name: lab-certs
+    rules:
+      - alert: CertExpiringSoon
+        expr: (ssl_cert_not_after_timestamp_seconds - time()) / 86400 < 21
+        for: 10m
+        labels: {severity: warning, category: certs}
+        annotations:
+          summary: "El certificado de {{ $labels.domain }} caduca en {{ $value | printf \"%.0f\" }} días"
+          description: "Certbot renueva a los 30 días; si llega a 21 la renovación automática está fallando."
+      - alert: CertExpiryCritical
+        expr: (ssl_cert_not_after_timestamp_seconds - time()) / 86400 < 7
+        for: 10m
+        labels: {severity: critical, category: certs}
+        annotations:
+          summary: "URGENTE: el certificado de {{ $labels.domain }} caduca en {{ $value | printf \"%.1f\" }} días"
+      - alert: CertProbeFailed
+        expr: ssl_cert_probe_success == 0
+        for: 15m
+        labels: {severity: warning, category: certs}
+        annotations:
+          summary: "nginx no sirve certificado para {{ $labels.domain }}"
+      - alert: CertMetricsStale
+        expr: time() - node_textfile_mtime_seconds{file=~".*certs\\.prom"} > 7200
+        for: 10m
+        labels: {severity: warning, category: monitoring}
+        annotations:
+          summary: "Las métricas de certificados no se actualizan"
+  - name: lab-heartbeat
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels: {severity: none, category: heartbeat}
+        annotations:
+          summary: "Latido: la cadena de alertas está viva"

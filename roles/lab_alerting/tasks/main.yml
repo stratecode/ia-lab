@@ -1,0 +1,248 @@
+---
+# Rol lab_alerting: avisos por Telegram, SAI (NUT), exportadores textfile y alertas extra.
+# Autocontenido: no edita ficheros de otros roles. Ver docs/monitoring.md para los cambios
+# que sí requieren tocar el rol observability.
+
+- name: Check required variables
+  ansible.builtin.assert:
+    that:
+      - (not lab_alerting_enable_alertmanager_telegram) or (lab_alerting_telegram_bot_token | length > 0)
+      - (not lab_alerting_enable_alertmanager_telegram) or (lab_alerting_telegram_chat_id is match('^-?[0-9]+$'))
+      - (not lab_alerting_enable_ups) or (lab_alerting_nut_password | length > 0)
+    fail_msg: >-
+      Define LAB_TELEGRAM_BOT_TOKEN y LAB_TELEGRAM_ALLOWED_USERS en el entorno y
+      vault_nut_upsmon_password en group_vars/vault.yml.
+  no_log: true
+  tags: [always]
+
+# ---------------------------------------------------------------- Alertmanager -> Telegram
+- name: Alertmanager Telegram
+  when: lab_alerting_enable_alertmanager_telegram
+  tags: [alertmanager]
+  block:
+    - name: Install Alertmanager templates directory content
+      ansible.builtin.copy:
+        src: alertmanager/telegram.tmpl
+        dest: "{{ lab_alerting_alertmanager_dir }}/alertmanager_templates/telegram.tmpl"
+        owner: root
+        group: prometheus
+        mode: "0644"
+      notify: lab_alerting restart alertmanager
+
+    - name: Install Telegram bot token file
+      ansible.builtin.copy:
+        content: "{{ lab_alerting_telegram_bot_token }}"
+        dest: "{{ lab_alerting_telegram_token_file }}"
+        owner: root
+        group: prometheus
+        mode: "0640"
+      no_log: true
+      notify: lab_alerting restart alertmanager
+
+    - name: Configure Alertmanager routes and Telegram receivers
+      ansible.builtin.template:
+        src: alertmanager.yml.j2
+        dest: "{{ lab_alerting_alertmanager_dir }}/alertmanager.yml"
+        owner: root
+        group: prometheus
+        mode: "0640"
+        validate: amtool check-config %s
+      notify: lab_alerting restart alertmanager
+
+# ---------------------------------------------------------------- Reglas de Prometheus
+- name: Install Prometheus alert rules
+  ansible.builtin.copy:
+    src: "prometheus-rules/{{ item }}"
+    dest: "{{ lab_alerting_promreg_dir }}/{{ item }}"
+    mode: "0644"
+    validate: promtool check rules %s
+  loop:
+    - lab-ups-alerts.yml
+    - lab-extra-alerts.yml
+    - lab-recording-rules.yml
+  when: lab_alerting_enable_rules
+  notify: lab_alerting restart prometheus
+  tags: [rules]
+
+# ---------------------------------------------------------------- SAI (NUT)
+- name: UPS monitoring with NUT
+  when: lab_alerting_enable_ups
+  tags: [ups]
+  block:
+    - name: Install NUT
+      ansible.builtin.apt:
+        name: [nut-server, nut-client]
+        state: present
+
+    - name: Set NUT mode to standalone
+      ansible.builtin.lineinfile:
+        path: /etc/nut/nut.conf
+        regexp: '^MODE='
+        line: MODE=standalone
+      notify: lab_alerting restart nut
+
+    - name: Configure UPS driver
+      ansible.builtin.template:
+        src: ups.conf.j2
+        dest: /etc/nut/ups.conf
+        owner: root
+        group: nut
+        mode: "0640"
+      notify: lab_alerting restart nut
+
+    - name: Bind upsd to loopback
+      ansible.builtin.template:
+        src: upsd.conf.j2
+        dest: /etc/nut/upsd.conf
+        owner: root
+        group: nut
+        mode: "0640"
+      notify: lab_alerting restart nut
+
+    - name: Configure upsd monitoring user
+      ansible.builtin.template:
+        src: upsd.users.j2
+        dest: /etc/nut/upsd.users
+        owner: root
+        group: nut
+        mode: "0640"
+      no_log: true
+      notify: lab_alerting restart nut
+
+    - name: Configure upsmon to monitor the UPS (orderly shutdown on low battery)
+      ansible.builtin.lineinfile:
+        path: /etc/nut/upsmon.conf
+        regexp: '^MONITOR '
+        line: "MONITOR {{ lab_alerting_ups_name }}@localhost 1 upsmon {{ lab_alerting_nut_password }} primary"
+        owner: root
+        group: nut
+        mode: "0640"
+      no_log: true
+      notify: lab_alerting restart nut
+
+    - name: Enable NUT services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - nut-driver-enumerator
+        - "nut-driver@{{ lab_alerting_ups_name }}"
+        - nut-server
+        - nut-monitor
+
+    - name: Install UPS metrics exporter
+      ansible.builtin.copy:
+        src: bin/nut-textfile-exporter
+        dest: /usr/local/bin/nut-textfile-exporter
+        mode: "0755"
+
+    - name: Install UPS metrics exporter units
+      ansible.builtin.copy:
+        src: "systemd/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - nut-textfile-exporter.service
+        - nut-textfile-exporter.timer
+      register: lab_alerting_nut_units
+
+# ---------------------------------------------------------------- Exportadores textfile
+- name: Docker metrics exporter
+  when: lab_alerting_enable_docker_exporter
+  tags: [exporters, docker]
+  block:
+    - name: Install Docker metrics exporter
+      ansible.builtin.copy:
+        src: bin/docker-textfile-exporter
+        dest: /usr/local/bin/docker-textfile-exporter
+        mode: "0755"
+    - name: Install Docker metrics exporter units
+      ansible.builtin.copy:
+        src: "systemd/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - docker-textfile-exporter.service
+        - docker-textfile-exporter.timer
+      register: lab_alerting_docker_units
+
+- name: Certificate expiry exporter
+  when: lab_alerting_enable_cert_exporter
+  tags: [exporters, certs]
+  block:
+    - name: Install certificate expiry exporter
+      ansible.builtin.copy:
+        src: bin/cert-textfile-exporter
+        dest: /usr/local/bin/cert-textfile-exporter
+        mode: "0755"
+    - name: Install certificate expiry exporter units
+      ansible.builtin.copy:
+        src: "systemd/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - cert-textfile-exporter.service
+        - cert-textfile-exporter.timer
+      register: lab_alerting_cert_units
+
+# ---------------------------------------------------------------- Rotación de clave de llama.cpp
+- name: Sync llama.cpp API key to Prometheus credentials file
+  when: lab_alerting_enable_llama_key_sync
+  tags: [llama-key]
+  block:
+    - name: Install key sync script
+      ansible.builtin.copy:
+        src: bin/sync-llama-prom-key
+        dest: /usr/local/bin/sync-llama-prom-key
+        mode: "0755"
+    - name: Install key sync units
+      ansible.builtin.copy:
+        src: "systemd/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - sync-llama-prom-key.service
+        - sync-llama-prom-key.path
+      register: lab_alerting_keysync_units
+
+# ---------------------------------------------------------------- systemd
+- name: Reload systemd after unit changes
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: >-
+    (lab_alerting_nut_units is changed) or (lab_alerting_docker_units is changed)
+    or (lab_alerting_cert_units is changed) or (lab_alerting_keysync_units is changed)
+  tags: [always]
+
+- name: Enable and start timers and path units
+  ansible.builtin.systemd:
+    name: "{{ item.name }}"
+    enabled: true
+    state: started
+  loop: "{{ lab_alerting_units | select('mapping') | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  vars:
+    lab_alerting_units:
+      - {name: nut-textfile-exporter.timer, when: "{{ lab_alerting_enable_ups }}"}
+      - {name: docker-textfile-exporter.timer, when: "{{ lab_alerting_enable_docker_exporter }}"}
+      - {name: cert-textfile-exporter.timer, when: "{{ lab_alerting_enable_cert_exporter }}"}
+      - {name: sync-llama-prom-key.path, when: "{{ lab_alerting_enable_llama_key_sync }}"}
+  when: item.when | bool
+  tags: [exporters, ups, llama-key]
+
+- name: Run the llama.cpp key sync once
+  ansible.builtin.command: /usr/local/bin/sync-llama-prom-key
+  changed_when: false
+  when: lab_alerting_enable_llama_key_sync
+  tags: [llama-key]
+
+# ---------------------------------------------------------------- Grafana
+- name: Install UPS Grafana dashboard
+  ansible.builtin.copy:
+    src: grafana/ups.json
+    dest: "{{ lab_alerting_grafana_dashboards_dir }}/ups.json"
+    mode: "0644"
+  when: lab_alerting_enable_grafana_dashboard | bool
+  tags: [grafana]

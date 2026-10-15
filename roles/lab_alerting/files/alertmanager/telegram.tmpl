@@ -1,0 +1,20 @@
+{{ define "telegram.es" -}}
+{{ if eq .Status "firing" -}}
+{{ if eq .CommonLabels.severity "critical" }}🚨 CRÍTICA{{ else }}⚠️ AVISO{{ end }} · lab · {{ .Alerts.Firing | len }} activa(s)
+{{- else -}}
+✅ RESUELTO · lab
+{{- end }}
+{{ range .Alerts }}
+• {{ .Labels.alertname }}{{ if .Labels.severity }} [{{ .Labels.severity }}]{{ end }}
+{{ .Annotations.summary }}
+{{- if .Annotations.description }}
+{{ .Annotations.description }}
+{{- end }}
+Desde: {{ .StartsAt.Local.Format "02/01 15:04:05" }}{{ if ne .Status "firing" }} · Fin: {{ .EndsAt.Local.Format "15:04:05" }}{{ end }}
+{{ end }}
+{{- end }}
+{{ define "telegram.heartbeat" -}}
+💚 Latido diario · lab
+Prometheus, Alertmanager y Telegram operativos.
+{{ (index .Alerts 0).StartsAt.Local.Format "02/01/2006 15:04" }}
+{{- end }}

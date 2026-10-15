@@ -1,0 +1,6 @@
+[Unit]
+Description=Exportar métricas de contenedores Docker a node_exporter
+After=docker.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/docker-textfile-exporter

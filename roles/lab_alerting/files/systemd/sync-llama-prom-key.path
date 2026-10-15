@@ -1,0 +1,8 @@
+[Unit]
+Description=Vigilar cambios en llama-cpp-main.service
+[Path]
+PathChanged=/etc/systemd/system/llama-cpp-main.service
+PathChanged=/etc/systemd/system/llama-cpp-main.service.d
+Unit=sync-llama-prom-key.service
+[Install]
+WantedBy=multi-user.target

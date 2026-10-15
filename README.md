@@ -98,6 +98,10 @@ Roles are applied in dependency order:
 | 7 | `open_webui` | Chat UI connected to local llama.cpp endpoints |
 | 8 | `monitor` | Cockpit + Nginx reverse proxy + TLS (Let's Encrypt) |
 | 9 | `observability` | Prometheus, Grafana (Docker), Alertmanager, alert rules |
+| 10 | `lab_alerting` | UPS (NUT), Telegram alerts, health exporters, recording rules |
+
+`lab_alerting` runs after `observability` through `playbooks/lab-alerting.yml`;
+it is not part of the historical `bootstrap.yml` path.
 
 ## Project structure
 

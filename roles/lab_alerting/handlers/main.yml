@@ -1,0 +1,37 @@
+---
+- name: Restart alertmanager (lab_alerting)
+  ansible.builtin.systemd:
+    name: prometheus-alertmanager
+    state: restarted
+    enabled: true
+  listen: lab_alerting restart alertmanager
+
+- name: Validate Prometheus configuration (lab_alerting)
+  ansible.builtin.command: >-
+    promtool check config /var/snap/prometheus/current/prometheus.yml
+  changed_when: false
+  listen: lab_alerting restart prometheus
+
+- name: Validate Prometheus rules (lab_alerting)
+  ansible.builtin.shell: >-
+    promtool check rules {{ lab_alerting_promreg_dir }}/*.yml
+  changed_when: false
+  listen: lab_alerting restart prometheus
+
+- name: Restart validated Prometheus (lab_alerting)
+  ansible.builtin.systemd:
+    name: snap.prometheus.prometheus
+    state: restarted
+    enabled: true
+  listen: lab_alerting restart prometheus
+
+- name: Restart NUT (lab_alerting)
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: restarted
+    enabled: true
+  loop:
+    - "nut-driver@{{ lab_alerting_ups_name }}"
+    - nut-server
+    - nut-monitor
+  listen: lab_alerting restart nut

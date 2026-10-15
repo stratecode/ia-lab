@@ -1,0 +1,29 @@
+---
+# --- Telegram (reutiliza el bot de la secretaria; mismos orígenes que orchestrator_telegram_*) ---
+lab_alerting_telegram_bot_token: "{{ lookup('env', 'LAB_TELEGRAM_BOT_TOKEN') | default('', true) }}"
+# Primer id de LAB_TELEGRAM_ALLOWED_USERS (en chats privados el chat_id es el id de usuario).
+lab_alerting_telegram_chat_id: "{{ (lookup('env', 'LAB_TELEGRAM_ALLOWED_USERS') | default('', true)).split(',') | first | trim }}"
+lab_alerting_telegram_token_file: /etc/prometheus/telegram_bot_token
+
+# --- Rutas ---
+lab_alerting_alertmanager_dir: /etc/prometheus          # ruta por defecto de Debian: el servicio la lee sin --config.file
+lab_alerting_promreg_dir: /var/snap/prometheus/current/promreg
+lab_alerting_textfile_dir: /var/lib/prometheus/node-exporter
+lab_alerting_grafana_dashboards_dir: /srv/ai-lab/observability/grafana/dashboards
+
+# --- Componentes opcionales ---
+lab_alerting_enable_alertmanager_telegram: true
+lab_alerting_enable_rules: true
+lab_alerting_enable_docker_exporter: true
+lab_alerting_enable_cert_exporter: true
+lab_alerting_enable_ups: true
+lab_alerting_enable_llama_key_sync: true
+lab_alerting_enable_grafana_dashboard: "{{ grafana_enabled | default(true) }}"
+
+# --- SAI (NUT, USB, modo standalone) ---
+lab_alerting_ups_name: cyberpower
+lab_alerting_ups_vendorid: "0764"
+lab_alerting_ups_productid: "0501"
+lab_alerting_ups_desc: CyberPower VP700ELCD
+# Contraseña del usuario upsmon de NUT. Definir vault_nut_upsmon_password en group_vars/vault.yml.
+lab_alerting_nut_password: "{{ vault_nut_upsmon_password | default('') }}"

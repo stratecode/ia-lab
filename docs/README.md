@@ -72,6 +72,7 @@ Tool registry and MCP integrations.
 - [Orchestrator Redeploy Runbook](orchestrator-redeploy.md)
 - [llama.cpp Baseline](llama-baseline-cleanup.md)
 - [Server Baseline](server-baseline.md)
+- [Lab Monitoring, UPS and Alerts](monitoring.md)
 - [WireGuard](wireguard.md)
 
 ## Revision History

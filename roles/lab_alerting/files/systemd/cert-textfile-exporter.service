@@ -1,0 +1,6 @@
+[Unit]
+Description=Exportar caducidad de certificados TLS a node_exporter
+After=nginx.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/cert-textfile-exporter

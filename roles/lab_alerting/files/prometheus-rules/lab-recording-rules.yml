@@ -1,0 +1,284 @@
+# =============================================================================
+# Recording Rules - Laboratorio Stratecode
+# Convención: lab:<dominio>:<medida>:<agregación>
+# =============================================================================
+
+groups:
+  # =========================================================================
+  # CPU
+  # =========================================================================
+  - name: lab-host-cpu
+    interval: 15s
+    rules:
+      - record: lab:host:cpu_usage_percent:avg1m
+        expr: 100 - (avg without(cpu, mode) (rate(node_cpu_seconds_total{mode="idle"}[1m])) * 100)
+
+      - record: lab:host:cpu_user_percent:avg1m
+        expr: avg without(cpu, mode) (rate(node_cpu_seconds_total{mode="user"}[1m])) * 100
+
+      - record: lab:host:cpu_system_percent:avg1m
+        expr: avg without(cpu, mode) (rate(node_cpu_seconds_total{mode="system"}[1m])) * 100
+
+      - record: lab:host:cpu_iowait_percent:avg1m
+        expr: avg without(cpu, mode) (rate(node_cpu_seconds_total{mode="iowait"}[1m])) * 100
+
+      - record: lab:host:cpu_steal_percent:avg1m
+        expr: avg without(cpu, mode) (rate(node_cpu_seconds_total{mode="steal"}[1m])) * 100
+
+      - record: lab:host:cpu_usage_per_core_percent:avg1m
+        expr: sum without(mode) (rate(node_cpu_seconds_total{mode!="idle"}[1m])) * 100
+
+      - record: lab:host:cpu_saturation:avg1m
+        expr: node_load1 / count without(cpu, mode) (node_cpu_seconds_total{mode="idle"})
+
+      - record: lab:host:cpu_pressure_percent:rate1m
+        expr: rate(node_pressure_cpu_waiting_seconds_total[1m]) * 100
+
+  # =========================================================================
+  # Memoria
+  # =========================================================================
+  - name: lab-host-memory
+    interval: 15s
+    rules:
+      - record: lab:host:memory_usage_percent:last
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100
+
+      - record: lab:host:memory_used_bytes:last
+        expr: node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes
+
+      - record: lab:host:memory_cached_bytes:last
+        expr: node_memory_Cached_bytes + node_memory_Buffers_bytes
+
+      - record: lab:host:swap_usage_percent:last
+        expr: (1 - (node_memory_SwapFree_bytes / node_memory_SwapTotal_bytes)) * 100
+
+      - record: lab:host:memory_pressure_percent:rate1m
+        expr: rate(node_pressure_memory_waiting_seconds_total[1m]) * 100
+
+      - record: lab:host:oom_kills:increase1m
+        expr: increase(node_vmstat_oom_kill[1m])
+
+      - record: lab:host:major_page_faults:rate1m
+        expr: rate(node_vmstat_pgmajfault[1m])
+
+  # =========================================================================
+  # Disco e I/O
+  # =========================================================================
+  - name: lab-host-disk
+    interval: 15s
+    rules:
+      - record: lab:host:filesystem_usage_percent:last
+        expr: 100 * (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"}))
+
+      - record: lab:host:filesystem_inodes_usage_percent:last
+        expr: 100 * (1 - (node_filesystem_files_free{fstype!~"tmpfs|overlay"} / node_filesystem_files{fstype!~"tmpfs|overlay"}))
+
+      - record: lab:host:disk_read_bytes:rate1m
+        expr: rate(node_disk_read_bytes_total[1m])
+
+      - record: lab:host:disk_write_bytes:rate1m
+        expr: rate(node_disk_written_bytes_total[1m])
+
+      - record: lab:host:disk_read_iops:rate1m
+        expr: rate(node_disk_reads_completed_total[1m])
+
+      - record: lab:host:disk_write_iops:rate1m
+        expr: rate(node_disk_writes_completed_total[1m])
+
+      - record: lab:host:disk_io_utilization_percent:rate1m
+        expr: rate(node_disk_io_time_seconds_total[1m]) * 100
+
+      - record: lab:host:disk_io_pressure_percent:rate1m
+        expr: rate(node_pressure_io_waiting_seconds_total[1m]) * 100
+
+  # =========================================================================
+  # Red y TCP
+  # =========================================================================
+  - name: lab-host-network
+    interval: 15s
+    rules:
+      - record: lab:network:receive_bytes:rate1m
+        expr: rate(node_network_receive_bytes_total{device!~"lo|veth.*|br-.*|docker.*"}[1m])
+
+      - record: lab:network:transmit_bytes:rate1m
+        expr: rate(node_network_transmit_bytes_total{device!~"lo|veth.*|br-.*|docker.*"}[1m])
+
+      - record: lab:network:receive_packets:rate1m
+        expr: rate(node_network_receive_packets_total{device!~"lo|veth.*|br-.*|docker.*"}[1m])
+
+      - record: lab:network:transmit_packets:rate1m
+        expr: rate(node_network_transmit_packets_total{device!~"lo|veth.*|br-.*|docker.*"}[1m])
+
+      - record: lab:network:receive_errors:rate1m
+        expr: rate(node_network_receive_errs_total[1m])
+
+      - record: lab:network:transmit_errors:rate1m
+        expr: rate(node_network_transmit_errs_total[1m])
+
+      - record: lab:network:receive_drops:rate1m
+        expr: rate(node_network_receive_drop_total[1m])
+
+      - record: lab:network:transmit_drops:rate1m
+        expr: rate(node_network_transmit_drop_total[1m])
+
+      - record: lab:network:tcp_retransmits:rate1m
+        expr: rate(node_netstat_Tcp_RetransSegs[1m])
+
+      - record: lab:network:tcp_established:last
+        expr: node_netstat_Tcp_CurrEstab
+
+      - record: lab:network:tcp_timeouts:rate1m
+        expr: rate(node_netstat_TcpExt_TCPTimeouts[1m])
+
+      - record: lab:network:tcp_syn_retrans:rate1m
+        expr: rate(node_netstat_TcpExt_TCPSynRetrans[1m])
+
+      - record: lab:network:tcp_listen_drops:rate1m
+        expr: rate(node_netstat_TcpExt_ListenDrops[1m])
+
+      - record: lab:network:tcp_listen_overflows:rate1m
+        expr: rate(node_netstat_TcpExt_ListenOverflows[1m])
+
+      - record: lab:network:conntrack_usage_percent:last
+        expr: node_nf_conntrack_entries / node_nf_conntrack_entries_limit * 100
+
+      - record: lab:network:softnet_drops:rate1m
+        expr: rate(node_softnet_dropped_total[1m])
+
+  # =========================================================================
+  # Hardware y temperatura
+  # =========================================================================
+  - name: lab-host-hardware
+    interval: 60s
+    rules:
+      - record: lab:host:temperature_celsius:max
+        expr: max by (chip_name) (node_hwmon_temp_celsius)
+
+      - record: lab:host:power_watts:last
+        expr: node_hwmon_power_watt
+
+  # =========================================================================
+  # Disponibilidad
+  # =========================================================================
+  - name: lab-availability
+    interval: 15s
+    rules:
+      - record: lab:availability:target_up:last
+        expr: up
+
+      - record: lab:availability:uptime_seconds:last
+        expr: time() - node_boot_time_seconds
+
+      - record: lab:availability:services_running:last
+        expr: node_systemd_system_running
+
+  # =========================================================================
+  # Contenedores (cuando cAdvisor esté disponible)
+  # =========================================================================
+  - name: lab-containers
+    interval: 15s
+    rules:
+      - record: lab:container:cpu_usage_percent:rate1m
+        expr: rate(container_cpu_usage_seconds_total{name!=""}[1m]) * 100
+
+      - record: lab:container:cpu_throttled_percent:rate1m
+        expr: rate(container_cpu_cfs_throttled_seconds_total{name!=""}[1m]) * 100
+
+      - record: lab:container:memory_working_set_bytes:last
+        expr: container_memory_working_set_bytes{name!=""}
+
+      - record: lab:container:memory_rss_bytes:last
+        expr: container_memory_rss{name!=""}
+
+      - record: lab:container:oom_events:increase1m
+        expr: increase(container_oom_events_total{name!=""}[1m])
+
+      - record: lab:container:network_receive_bytes:rate1m
+        expr: rate(container_network_receive_bytes_total{name!=""}[1m])
+
+      - record: lab:container:network_transmit_bytes:rate1m
+        expr: rate(container_network_transmit_bytes_total{name!=""}[1m])
+
+  # =========================================================================
+  # Prometheus
+  # =========================================================================
+  - name: lab-prometheus
+    interval: 30s
+    rules:
+      - record: lab:prometheus:rule_eval_failures:rate1m
+        expr: rate(prometheus_rule_evaluation_failures_total[1m])
+
+      - record: lab:prometheus:rule_eval_duration_seconds:avg1m
+        expr: rate(prometheus_rule_evaluation_duration_seconds_sum[1m]) / rate(prometheus_rule_evaluation_duration_seconds_count[1m])
+
+      - record: lab:prometheus:tsdb_head_series:last
+        expr: prometheus_tsdb_head_series
+
+      - record: lab:prometheus:tsdb_storage_bytes:last
+        expr: prometheus_tsdb_storage_blocks_bytes
+
+      - record: lab:prometheus:scrape_duration_seconds:avg1m
+        expr: avg by (job) (scrape_duration_seconds)
+
+      - record: lab:prometheus:config_reload_success:last
+        expr: prometheus_config_last_reload_successful
+
+      - record: lab:prometheus:notifications_errors:rate1m
+        expr: rate(prometheus_notifications_errors_total[1m])
+
+  # =========================================================================
+  # Alertmanager
+  # =========================================================================
+  - name: lab-alertmanager
+    interval: 30s
+    rules:
+      - record: lab:alertmanager:alerts_active:last
+        expr: alertmanager_alerts{state="active"}
+
+      - record: lab:alertmanager:notifications_failed:rate1m
+        expr: rate(alertmanager_notifications_failed_total[1m])
+
+      - record: lab:alertmanager:config_reload_success:last
+        expr: alertmanager_config_last_reload_successful
+
+      - record: lab:alertmanager:silences_active:last
+        expr: alertmanager_silences{state="active"}
+
+  # =========================================================================
+  # Grafana
+  # =========================================================================
+  - name: lab-grafana
+    interval: 30s
+    rules:
+      - record: lab:grafana:process_memory_bytes:last
+        expr: process_resident_memory_bytes{job="grafana"}
+
+      - record: lab:grafana:process_cpu:rate1m
+        expr: rate(process_cpu_seconds_total{job="grafana"}[1m])
+
+  # =========================================================================
+  # llama.cpp
+  # =========================================================================
+  - name: lab-llama-cpp
+    interval: 15s
+    rules:
+      - record: lab:llama:requests_processing:last
+        expr: llamacpp:requests_processing
+
+      - record: lab:llama:requests_deferred:last
+        expr: llamacpp:requests_deferred
+
+      - record: lab:llama:prompt_tokens:rate1m
+        expr: rate(llamacpp:prompt_tokens_total[1m])
+
+      - record: lab:llama:predicted_tokens:rate1m
+        expr: rate(llamacpp:tokens_predicted_total[1m])
+
+      - record: lab:llama:prompt_tokens_per_second:last
+        expr: llamacpp:prompt_tokens_seconds
+
+      - record: lab:llama:predicted_tokens_per_second:last
+        expr: llamacpp:predicted_tokens_seconds
+
+      - record: lab:llama:decode_total:rate1m
+        expr: rate(llamacpp:n_decode_total[1m])

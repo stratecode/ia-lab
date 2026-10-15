@@ -1,0 +1,16 @@
+---
+# Aplica solo el rol lab_alerting (avisos Telegram, SAI, exportadores y alertas extra).
+# Uso:
+#   set -a && source .env && set +a   # LAB_TELEGRAM_BOT_TOKEN, LAB_TELEGRAM_ALLOWED_USERS
+#   ansible-playbook playbooks/lab-alerting.yml --check --diff
+#   ansible-playbook playbooks/lab-alerting.yml
+# Requiere vault_nut_upsmon_password en group_vars/vault.yml.
+- name: Lab alerting (Telegram, UPS, exporters)
+  hosts: all
+  become: true
+
+  vars_files:
+    - ../group_vars/vault.yml
+
+  roles:
+    - role: lab_alerting

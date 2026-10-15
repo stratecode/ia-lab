@@ -1,0 +1,14 @@
+#!/bin/bash
+# Copia la --api-key de llama-cpp-main.service al credentials_file de Prometheus.
+# Prometheus relee credentials_file en cada scrape: no hace falta recargarlo.
+set -eu
+DEST=/var/snap/prometheus/current/llama-api-key
+key=$(systemctl cat llama-cpp-main.service | sed -nE 's/.*--api-key[= ]+([^ \\]+).*/\1/p' | head -1 | tr -d "\"'")
+[ -n "$key" ] || { logger -t sync-llama-prom-key "no se encontró --api-key en llama-cpp-main.service"; exit 1; }
+if [ -f "$DEST" ] && [ "$(cat "$DEST")" = "$key" ]; then exit 0; fi
+umask 077
+tmp=$(mktemp "$DEST.XXXXXX")
+printf '%s' "$key" > "$tmp"
+chown root:root "$tmp"; chmod 640 "$tmp"
+mv "$tmp" "$DEST"
+logger -t sync-llama-prom-key "credencial de llama.cpp actualizada para Prometheus"

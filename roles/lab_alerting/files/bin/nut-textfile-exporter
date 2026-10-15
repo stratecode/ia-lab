@@ -1,0 +1,33 @@
+#!/bin/bash
+# Exporta métricas del SAI (NUT) al textfile collector de node_exporter.
+UPS="${1:-cyberpower@localhost}"
+OUT=/var/lib/prometheus/node-exporter/nut.prom
+TMP=$(mktemp "${OUT}.XXXXXX")
+trap 'rm -f "$TMP"' EXIT
+DATA=$(upsc "$UPS" 2>/dev/null) || DATA=""
+g() { echo "$DATA" | awk -F': ' -v k="$1" '$1==k{print $2; exit}'; }
+{
+  if [ -z "$DATA" ]; then
+    echo "# HELP nut_up 1 si NUT responde"; echo "# TYPE nut_up gauge"; echo "nut_up 0"
+  else
+    echo "# HELP nut_up 1 si NUT responde"; echo "# TYPE nut_up gauge"; echo "nut_up 1"
+    st=$(g ups.status)
+    echo "# HELP nut_ups_status 1 por cada flag de estado activo (OL online, OB on battery, LB low battery, CHRG, DISCHRG, RB replace battery, OVER, TRIM, BOOST, ALARM)"
+    echo "# TYPE nut_ups_status gauge"
+    for f in OL OB LB CHRG DISCHRG RB OVER TRIM BOOST ALARM FSD; do
+      v=0; for s in $st; do [ "$s" = "$f" ] && v=1; done
+      echo "nut_ups_status{flag=\"$f\"} $v"
+    done
+    for pair in battery.charge:nut_battery_charge_percent battery.runtime:nut_battery_runtime_seconds \
+                battery.voltage:nut_battery_voltage_volts battery.charge.low:nut_battery_charge_low_percent \
+                battery.runtime.low:nut_battery_runtime_low_seconds input.voltage:nut_input_voltage_volts \
+                output.voltage:nut_output_voltage_volts ups.load:nut_ups_load_percent \
+                ups.realpower.nominal:nut_ups_realpower_nominal_watts input.voltage.nominal:nut_input_voltage_nominal_volts; do
+      k=${pair%%:*}; m=${pair##*:}; v=$(g "$k")
+      [ -n "$v" ] && { echo "# TYPE $m gauge"; echo "$m $v"; }
+    done
+    model=$(g ups.model); mfr=$(g ups.mfr)
+    echo "# TYPE nut_ups_info gauge"; echo "nut_ups_info{model=\"$model\",manufacturer=\"$mfr\"} 1"
+  fi
+} > "$TMP"
+chmod 644 "$TMP"; mv "$TMP" "$OUT"; trap - EXIT

@@ -1,0 +1,10 @@
+# Gestionado por Ansible (rol lab_alerting)
+maxretry = 3
+
+[{{ lab_alerting_ups_name }}]
+    driver = usbhid-ups
+    port = auto
+    vendorid = {{ lab_alerting_ups_vendorid }}
+    productid = {{ lab_alerting_ups_productid }}
+    desc = "{{ lab_alerting_ups_desc }}"
+    pollinterval = 15
