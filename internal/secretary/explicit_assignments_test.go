@@ -67,23 +67,23 @@ func TestExplicitAssignmentAnswerAcceptsNotesAfterFormattingIsStripped(t *testin
 	}
 }
 
-func TestExplicitAssignmentAnswerExtractsTasksFromOwnerSection(t *testing.T) {
+func TestExplicitAssignmentAnswerInheritsOwnerFromProject(t *testing.T) {
 	const notes = `# Proyectos Fran
-- Enviar la configuración de Active Directory a Minicor antes del viernes.
-- Corregir el XLS de Amplify con error 404 durante la mañana.
+- SiteWatchman: revisar exportación de inventario.
 
-# Proyectos Gonzalo
-- Terminar la importación de localizaciones antes de revisar incidencias.`
+# Próximos Pasos
+- Corregir la regla XLS de SiteWatchman antes del viernes.
+- Revisar textos de la web (Iris).`
 	answer, ok := explicitAssignmentAnswer("¿Qué tareas tiene Fran y qué plazo aparece?", notes, nil)
 	if !ok {
-		t.Fatal("expected tasks under a person-specific project heading to be extracted")
+		t.Fatal("expected a next step to inherit its matching project owner")
 	}
-	for _, expected := range []string{"Fran: Enviar la configuración", "antes del viernes", "Fran: Corregir el XLS de Amplify", "durante la mañana"} {
+	for _, expected := range []string{"Fran: Corregir la regla XLS", "antes del viernes"} {
 		if !strings.Contains(answer, expected) {
 			t.Errorf("answer omitted %q: %s", expected, answer)
 		}
 	}
-	if strings.Contains(answer, "Gonzalo") || strings.Contains(answer, "importación de localizaciones") {
+	if strings.Contains(answer, "Iris:") || strings.Contains(answer, "Revisar textos") {
 		t.Fatalf("answer included another owner's task: %s", answer)
 	}
 }
@@ -110,5 +110,35 @@ func TestExplicitAssignmentAnswerExtractsOwnerBulletsWithoutHeading(t *testing.T
 	}
 	if !strings.Contains(answer, "Fran: Subir los procedimientos") || strings.Contains(answer, "Paula:") {
 		t.Fatalf("unexpected owner attribution: %s", answer)
+	}
+}
+
+func TestExplicitAssignmentAnswerMapsNextStepsToProjectOwners(t *testing.T) {
+	const notes = `# Proyectos Alex
+- ClienteX: revisión de presentación y seguridad.
+  - Pendiente: enviar correos con configuración técnica a la responsable.
+- SistemaY (Gonzalo): revisar importación de inventario.
+  - Falta corregir regla de descarga XLS que da 404 en producción.
+  - Subir unos 15 procedimientos de inventario durante la mañana.
+
+# Próximos Pasos
+- Enviar correos de configuración a ClienteX.
+- Corregir la regla de descarga XLS en SistemaY.
+- Subir inventario de procedimientos en SistemaY, objetivo dejarlo listo durante la mañana.
+- Blindar la migración de Payroll para producción el lunes 19 de octubre (Valentina).
+- Atacar incidencias sin ubicación tras terminar importación (Gonzalo).`
+	answer, ok := explicitAssignmentAnswer("¿Qué tareas tiene Alex y qué plazos aparecen?", notes, nil)
+	if !ok {
+		t.Fatal("expected project next steps to inherit their explicit project owner")
+	}
+	for _, expected := range []string{"Alex: Enviar correos", "Alex: Corregir la regla", "Alex: Subir inventario", "durante la mañana"} {
+		if !strings.Contains(answer, expected) {
+			t.Errorf("answer omitted %q: %s", expected, answer)
+		}
+	}
+	for _, excluded := range []string{"Gonzalo:", "Valentina:", "ClienteX: revisión", "Pendiente: enviar"} {
+		if strings.Contains(answer, excluded) {
+			t.Errorf("answer included a project update or another owner's task %q: %s", excluded, answer)
+		}
 	}
 }

@@ -922,11 +922,17 @@ func TestMeetingTaskQuestionUsesExplicitGranolaOwnersWhenRovoHasUnrelatedHits(t 
 func TestMorningTaskQuestionReturnsStructuredOwnerActionsFromGranola(t *testing.T) {
 	const question = "¿Qué tareas se acordaron en las reuniones de esta mañana, separadas por responsable?"
 	const notes = `# Proyectos Fran
-- Enviar la configuración de Active Directory a Minicor antes del viernes.
-- Corregir el XLS de Amplify con error 404 durante la mañana.
+- Minicor: preparar configuración de Active Directory.
+- SiteWatchman: corregir la regla de descarga XLS.
 
 # Proyectos Gonzalo
-- Terminar la importación de localizaciones antes de revisar incidencias.`
+- LocationImport: terminar importación de localizaciones.
+
+# Próximos Pasos
+- Enviar la configuración de Active Directory a Minicor antes del viernes.
+- Corregir el XLS de SiteWatchman con error 404 durante la mañana.
+- Subir unos 15 procedimientos de inventario en SiteWatchman durante la mañana.
+- Terminar importación de localizaciones en LocationImport antes de revisar incidencias (Gonzalo).`
 	modelCalls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		modelCalls++
@@ -947,12 +953,12 @@ func TestMorningTaskQuestionReturnsStructuredOwnerActionsFromGranola(t *testing.
 	if err != nil || reason != "" || modelCalls != 0 || len(outcomes) != 2 {
 		t.Fatalf("answer=%q outcomes=%+v reason=%q modelCalls=%d err=%v", answer, outcomes, reason, modelCalls, err)
 	}
-	for _, expected := range []string{"Fran: Enviar la configuración", "antes del viernes", "Fran: Corregir el XLS de Amplify", "durante la mañana", "notes.granola.ai/d/meeting-1"} {
+	for _, expected := range []string{"Fran: Enviar la configuración", "antes del viernes", "Fran: Corregir el XLS", "Fran: Subir unos 15 procedimientos", "durante la mañana", "notes.granola.ai/d/meeting-1"} {
 		if !strings.Contains(answer, expected) {
 			t.Errorf("answer omitted %q: %s", expected, answer)
 		}
 	}
-	if !strings.Contains(answer, "Gonzalo: Terminar la importación de localizaciones") {
+	if !strings.Contains(answer, "Gonzalo: Terminar importación de localizaciones") {
 		t.Fatalf("answer lost a different owner's assignment or its attribution: %s", answer)
 	}
 }
@@ -960,10 +966,14 @@ func TestMorningTaskQuestionReturnsStructuredOwnerActionsFromGranola(t *testing.
 func TestStructuredMeetingActionsTakePrecedenceOverDirectConnectorAnswer(t *testing.T) {
 	const question = "Según la reunión del 13 de octubre, ¿qué tareas quedaron a cargo de Fran?"
 	const notes = `# Proyectos Fran
-- Corregir el XLS de Amplify con error 404 durante la mañana.
+- SiteWatchman: corregir la regla de descarga XLS.
 
 # Proyectos Gonzalo
-- Terminar la importación de localizaciones.`
+- LocationImport: terminar importación de localizaciones.
+
+# Próximos Pasos
+- Corregir el XLS de SiteWatchman con error 404 durante la mañana.
+- Terminar importación de localizaciones en LocationImport (Gonzalo).`
 	modelCalls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		modelCalls++
@@ -978,7 +988,7 @@ func TestStructuredMeetingActionsTakePrecedenceOverDirectConnectorAnswer(t *test
 	if err != nil || reason != "" || modelCalls != 0 {
 		t.Fatalf("answer=%q reason=%q modelCalls=%d err=%v", answer, reason, modelCalls, err)
 	}
-	if !strings.Contains(answer, "Fran: Corregir el XLS de Amplify") || strings.Contains(answer, "# Proyectos Fran") || strings.Contains(answer, "Gonzalo:") {
+	if !strings.Contains(answer, "Fran: Corregir el XLS") || strings.Contains(answer, "# Proyectos Fran") || strings.Contains(answer, "Gonzalo:") {
 		t.Fatalf("structured assignment did not take precedence over the connector's direct text: %s", answer)
 	}
 }
