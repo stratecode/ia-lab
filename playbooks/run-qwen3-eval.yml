@@ -1,0 +1,151 @@
+---
+- name: Run a temporary Qwen3 evaluation instance beside the principal LFM
+  hosts: lab
+  become: true
+  gather_facts: true
+
+  vars:
+    qwen_eval_model_path: /srv/ai-lab/llama.cpp/models/Qwen3-4B-Q4_K_M.gguf
+    qwen_eval_model_url: https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf
+    qwen_eval_model_sha256: 7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5
+    qwen_eval_port: 8184
+    qwen_eval_api_key: local-qwen-eval
+
+  pre_tasks:
+    - name: Require enough host memory for concurrent inference
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.memtotal_mb | int >= 16000
+        fail_msg: Qwen3 evaluation needs at least 16 GiB of host memory.
+
+    - name: Require enough free disk for the pinned GGUF
+      ansible.builtin.assert:
+        that:
+          - (ansible_facts.mounts | selectattr('mount', 'equalto', '/') | map(attribute='size_available') | first | default(0) | int) >= 6000000000
+        fail_msg: Qwen3 evaluation needs at least 6 GB free on the root filesystem.
+
+    - name: Confirm the principal service is already active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, llama-cpp-main]
+      changed_when: false
+
+  tasks:
+    - name: Ensure pinned model directory exists
+      ansible.builtin.file:
+        path: /srv/ai-lab/llama.cpp/models
+        state: directory
+        owner: llama-cpp
+        group: llama-cpp
+        mode: "0755"
+
+    - name: Download official Qwen3-4B Q4_K_M weights with SHA-256 verification
+      ansible.builtin.get_url:
+        url: "{{ qwen_eval_model_url }}"
+        dest: "{{ qwen_eval_model_path }}"
+        checksum: "sha256:{{ qwen_eval_model_sha256 }}"
+        owner: llama-cpp
+        group: llama-cpp
+        mode: "0644"
+        timeout: 900
+        force: false
+
+    - name: Ensure llama.cpp log directory exists
+      ansible.builtin.file:
+        path: /var/log/llama-cpp
+        state: directory
+        owner: llama-cpp
+        group: llama-cpp
+        mode: "0750"
+
+    - name: Install loopback-only Qwen evaluation unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/llama-cpp-qwen-eval.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Temporary Qwen3-4B CPU evaluation server
+          After=network-online.target llama-cpp-main.service
+          Wants=network-online.target
+          StartLimitIntervalSec=60
+          StartLimitBurst=3
+
+          [Service]
+          Type=simple
+          User=llama-cpp
+          Group=llama-cpp
+          WorkingDirectory=/opt/llama.cpp
+          ExecStart=/opt/llama.cpp/build/bin/llama-server --host 127.0.0.1 --port {{ qwen_eval_port }} --alias qwen-eval --model {{ qwen_eval_model_path }} --ctx-size 8192 --threads 6 --threads-batch 6 --parallel 1 --n-gpu-layers 0 --device none --no-kv-offload --cache-ram 0 --chat-template-kwargs {\"enable_thinking\":false} --api-key {{ qwen_eval_api_key }} --metrics --temp 0.7 --top-p 0.9 --repeat-penalty 1.1 --jinja
+          Restart=on-failure
+          RestartSec=5
+          CPUQuota=600%
+          CPUWeight=50
+          MemoryMax=6144M
+          MemorySwapMax=512M
+          LimitNOFILE=65536
+          StandardOutput=append:/var/log/llama-cpp/qwen-eval.log
+          StandardError=append:/var/log/llama-cpp/qwen-eval.log
+
+          [Install]
+          WantedBy=multi-user.target
+      register: qwen_eval_unit
+
+    - name: Reload systemd after unit changes
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: qwen_eval_unit.changed
+
+    - name: Clear any earlier experimental startup failure counter
+      ansible.builtin.command:
+        argv: [systemctl, reset-failed, llama-cpp-qwen-eval]
+      changed_when: false
+
+    - name: Start the experimental Qwen service without enabling auto-start
+      ansible.builtin.systemd:
+        name: llama-cpp-qwen-eval
+        state: started
+        enabled: false
+
+    - name: Wait for the Qwen model API
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ qwen_eval_port }}/v1/models"
+        headers:
+          Authorization: "Bearer {{ qwen_eval_api_key }}"
+        return_content: true
+        status_code: 200
+      register: qwen_eval_health
+      retries: 36
+      delay: 5
+      until: qwen_eval_health.status == 200
+      no_log: true
+
+    - name: Verify Qwen Spanish generation
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ qwen_eval_port }}/v1/chat/completions"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ qwen_eval_api_key }}"
+        body_format: json
+        body:
+          model: qwen-eval
+          messages:
+            - role: user
+              content: "Responde en una frase breve y en español: ¿qué datos mínimos necesito para buscar una tarea de Jira?"
+          max_tokens: 96
+          temperature: 0
+        return_content: true
+        status_code: 200
+        timeout: 180
+      register: qwen_eval_generation
+      failed_when: >-
+        qwen_eval_generation.status != 200 or
+        (qwen_eval_generation.json.choices[0].message.content | default('') | length == 0)
+      no_log: true
+
+    - name: Report Qwen evaluation runtime state
+      ansible.builtin.debug:
+        msg:
+          - "Qwen evaluation API is healthy on loopback port {{ qwen_eval_port }}."
+          - "The principal llama-cpp-main service was left running and unchanged."
+          - "The experimental service is running now and will remain disabled on reboot."
