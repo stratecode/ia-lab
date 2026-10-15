@@ -676,6 +676,20 @@ func capabilityNamesText(capabilities []ReadCapability) string {
 	return strings.Join(names, " y ")
 }
 
+func capabilityCoverageNote(empty, failures []string) string {
+	var notes []string
+	if len(empty) > 0 {
+		notes = append(notes, strings.Join(empty, " y ")+" no devolvió resultados en esta consulta.")
+	}
+	if len(failures) > 0 {
+		notes = append(notes, "No he podido verificar en "+strings.Join(failures, " y ")+".")
+	}
+	if len(notes) == 0 {
+		return ""
+	}
+	return "\n\n" + strings.Join(notes, " ")
+}
+
 func capabilityFailureLabel(name string, err error) string {
 	if err == nil {
 		return name
@@ -698,6 +712,8 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question, readQuer
 	outcomes := make([]CapabilityOutcome, 0, len(capabilities))
 	var sourceBlocks []string
 	var failures []string
+	var emptyCapabilities []string
+	var successfulCapabilities []string
 	var successes int
 	var directAnswer *CapabilityResult
 	for _, capability := range capabilities {
@@ -715,12 +731,13 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question, readQuer
 		outcome.Evidence = append([]EvidenceRef(nil), result.Evidence...)
 		if result.ResultCount == 0 || strings.TrimSpace(result.Text) == "" {
 			outcome.Outcome = "empty"
-			sourceBlocks = append(sourceBlocks, capability.Name+": la consulta no devolvió resultados.")
+			emptyCapabilities = append(emptyCapabilities, capability.Name)
 			outcomes = append(outcomes, outcome)
 			continue
 		}
 		outcome.Outcome = "success"
 		successes++
+		successfulCapabilities = append(successfulCapabilities, capability.Name)
 		if result.DirectAnswer {
 			copy := result
 			directAnswer = &copy
@@ -753,10 +770,7 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question, readQuer
 	}
 	if successes == 1 && directAnswer != nil && strings.TrimSpace(directAnswer.Text) != "" {
 		answer := strings.TrimSpace(directAnswer.Text)
-		if len(failures) > 0 {
-			answer += "\n\nNo he podido contrastar en " + strings.Join(failures, " y ") + "."
-		}
-		return answer, outcomes, "", nil
+		return answer + capabilityCoverageNote(emptyCapabilities, failures), outcomes, "", nil
 	}
 	var approvedMemories []conversationMemory
 	for _, memory := range memories {
@@ -764,11 +778,11 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question, readQuer
 			approvedMemories = append(approvedMemories, memory)
 		}
 	}
-	answer, err := s.answerWithContext(ctx, question, nil, approvedMemories, false, stream, strings.Join(sourceBlocks, "\n\n"), capabilityNamesText(capabilities))
+	answer, err := s.answerWithContext(ctx, question, nil, approvedMemories, false, stream, strings.Join(sourceBlocks, "\n\n"), strings.Join(successfulCapabilities, " y "))
 	if err != nil {
 		return "", outcomes, BlockProcessingFailure, err
 	}
-	return answer, outcomes, "", nil
+	return answer + capabilityCoverageNote(emptyCapabilities, failures), outcomes, "", nil
 }
 
 func (s *Service) answerWithContext(ctx context.Context, question string, history []Turn, memories []conversationMemory, memoryOnly bool, stream func(string), sources ...string) (string, error) {
@@ -783,7 +797,7 @@ func (s *Service) answerWithContext(ctx context.Context, question string, histor
 		prompt += "\n\nEl usuario pregunta por conversaciones anteriores. Responde solo con el contexto recuperado. Si no contiene la respuesta, dilo; no inventes ni completes recuerdos. Indica la fecha del intercambio cuando esté disponible."
 	}
 	if containsAny(normalizedIntentText(question), "tarea", "asignad", "responsable", "compromiso", "pendiente") {
-		prompt += "\n\nCuando pregunten por responsables o tareas, incluye cada persona mencionada y todas sus acciones explícitas. Conserva las acciones compartidas y nombra a todas las personas asignadas; separa las tareas que corresponden al usuario de las del resto. Distingue asignaciones explícitas de propuestas o tareas sin responsable. No reduzcas una lista a ejemplos si la fuente contiene más elementos."
+		prompt += "\n\nPara responsables y tareas, incluye cada persona mencionada y todas sus acciones explícitas; conserva acciones compartidas y separa las tareas que corresponden al usuario de las de otros. Usa solo asignaciones explícitas de la fuente. En un bloque de próximos pasos, los nombres entre paréntesis identifican a quien realiza la acción; conserva esa asignación y no conviertas al destinatario de algo ('enviar a Fran') en responsable del envío. Si preguntan por una persona, devuelve solo las acciones que la fuente le asigna. Excluye ideas a largo plazo, contexto y propuestas que no sean próximos pasos explícitos."
 	}
 	if len(memories) > 0 {
 		prompt += "\n\n" + formatMemoryContext(memories)

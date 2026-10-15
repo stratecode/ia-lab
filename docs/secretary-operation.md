@@ -122,7 +122,8 @@ uses standard semantic search with the MCP server's minimum ten-result request;
 retrieved content is
 treated as untrusted source data. If a source is unavailable or returns no results,
 the service says so directly instead of asking the model to improvise from an empty
-result.
+result. Empty or failed sources are excluded from the model's evidence and reported
+as a separate coverage note after synthesis.
 
 For natural-language Granola questions, `query_granola_meetings` is used only to
 locate cited notes. The connector then retrieves those notes with `get_meetings`
