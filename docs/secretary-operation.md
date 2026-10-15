@@ -124,6 +124,12 @@ treated as untrusted source data. If a source is unavailable or returns no resul
 the service says so directly instead of asking the model to improvise from an empty
 result.
 
+For natural-language Granola questions, `query_granola_meetings` is used only to
+locate cited notes. The connector then retrieves those notes with `get_meetings`
+and gives their summaries, rather than Granola's generated answer, to the principal
+model. Transcripts remain excluded. This keeps responsibility assignments grounded
+in the source note when the provider's generated answer paraphrases an owner incorrectly.
+
 ## Supervised memory and evaluation
 
 Each eligible natural-language request stores a versioned interaction trace under

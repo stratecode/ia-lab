@@ -161,13 +161,17 @@ func TestGranolaQueryPassesQuestionAndPreservesCitation(t *testing.T) {
 		case "notifications/initialized":
 			w.WriteHeader(http.StatusAccepted)
 		case "tools/list":
-			io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"query_granola_meetings","inputSchema":{"type":"object","required":["query"]}}]}}`)
+			io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"query_granola_meetings","inputSchema":{"type":"object","required":["query"]}},{"name":"get_meetings","inputSchema":{"type":"object","required":["meeting_ids"]}}]}}`)
 		case "tools/call":
-			if req.Params.Name != "query_granola_meetings" {
+			var text string
+			if req.Params.Name == "query_granola_meetings" {
+				gotQuery, _ = req.Params.Arguments["query"].(string)
+				text = "Una respuesta orientativa. [[1]](https://notes.granola.ai/d/meeting-1)"
+			} else if req.Params.Name == "get_meetings" {
+				text = `<meetings><meeting id="meeting-1" title="Stonecare"><summary>Iris revisa textos y Fran implementa los cambios.</summary></meeting></meetings>`
+			} else {
 				t.Errorf("unexpected Granola tool %q", req.Params.Name)
 			}
-			gotQuery, _ = req.Params.Arguments["query"].(string)
-			text := "Iris revisa textos y Fran implementa los cambios. [[1]](https://notes.granola.ai/d/meeting-1)"
 			b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": text}}}})
 			w.Write(b)
 		default:
@@ -180,11 +184,78 @@ func TestGranolaQueryPassesQuestionAndPreservesCitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotQuery != query || !result.DirectAnswer || !strings.Contains(result.Text, "Iris revisa") {
+	if gotQuery != query || result.DirectAnswer || !strings.Contains(result.Text, "Iris revisa") || strings.Contains(result.Text, "respuesta orientativa") {
 		t.Fatalf("query=%q result=%+v", gotQuery, result)
 	}
 	if result.ResultCount != 1 || len(result.Evidence) != 1 || result.Evidence[0].ID != "meeting-1" || result.Evidence[0].URL != "https://notes.granola.ai/d/meeting-1" {
 		t.Fatalf("citation not preserved as evidence: %+v", result)
+	}
+}
+
+func TestGranolaQueryUsesCitedMeetingNotesInsteadOfGeneratedAnswer(t *testing.T) {
+	const query = "¿Quién revisó los textos y qué tenía que entregar Fran?"
+	var queryCalls, detailCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		switch req.Method {
+		case "initialize":
+			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`)
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"query_granola_meetings","inputSchema":{"type":"object","required":["query"]}},{"name":"get_meetings","inputSchema":{"type":"object","required":["meeting_ids"]}}]}}`)
+		case "tools/call":
+			var text string
+			switch req.Params.Name {
+			case "query_granola_meetings":
+				queryCalls++
+				if req.Params.Arguments["query"] != query {
+					t.Errorf("query = %v, want %q", req.Params.Arguments["query"], query)
+				}
+				text = "Fran debía enviar las imágenes definitivas. [[1]](https://notes.granola.ai/d/meeting-1)"
+			case "get_meetings":
+				detailCalls++
+				ids, ok := req.Params.Arguments["meeting_ids"].([]any)
+				if !ok || len(ids) != 1 || ids[0] != "meeting-1" {
+					t.Errorf("meeting_ids = %v, want [meeting-1]", req.Params.Arguments["meeting_ids"])
+				}
+				text = `<meetings><meeting id="meeting-1" title="Stonecare"><summary>Próximos pasos: Enviar imágenes adaptadas a Fran (Paula, Alba). Revisar textos en inglés y castellano (Iris). Aplicar cambios y dejar la web lista para el viernes (Fran).</summary><transcript>private transcript omitted</transcript></meeting></meetings>`
+			default:
+				t.Errorf("unexpected Granola tool %q", req.Params.Name)
+			}
+			b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": text}}}})
+			w.Write(b)
+		default:
+			t.Errorf("unexpected MCP method %q", req.Method)
+		}
+	}))
+	defer server.Close()
+	c := &Connectors{Config: ConnectorConfig{Granola: OAuthConfig{ServerURL: server.URL, AccessToken: "secret"}}, Client: server.Client(), allowTestHTTP: true}
+	result, err := c.GranolaQueryResult(context.Background(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queryCalls != 1 || detailCalls != 1 {
+		t.Fatalf("query calls=%d detail calls=%d, want one each", queryCalls, detailCalls)
+	}
+	if result.DirectAnswer {
+		t.Fatal("provider-generated query answer must not be treated as source-of-truth")
+	}
+	if !strings.Contains(result.Text, "Paula, Alba") || !strings.Contains(result.Text, "(Fran)") || strings.Contains(result.Text, "Fran debía enviar las imágenes") || strings.Contains(result.Text, "private transcript omitted") {
+		t.Fatalf("result did not use only the cited note summary: %q", result.Text)
+	}
+	if result.ResultCount != 1 || len(result.Evidence) != 1 || result.Evidence[0].ID != "meeting-1" {
+		t.Fatalf("citation evidence missing: %+v", result)
 	}
 }
 

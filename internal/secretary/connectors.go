@@ -706,15 +706,19 @@ func (c *Connectors) GranolaQueryResult(ctx context.Context, query string) (Capa
 	if json.Unmarshal(raw, &tools) != nil {
 		return CapabilityResult{}, errors.New("unexpected Granola tools schema")
 	}
-	queryAvailable := false
+	queryAvailable, detailsAvailable := false, false
 	for _, tool := range tools.Tools {
 		if tool.Name == "query_granola_meetings" {
 			queryAvailable = true
-			break
+		} else if tool.Name == "get_meetings" {
+			detailsAvailable = true
 		}
 	}
 	if !queryAvailable {
 		return CapabilityResult{}, errors.New("Granola query tool unavailable")
+	}
+	if !detailsAvailable {
+		return CapabilityResult{}, errors.New("Granola meeting detail tool unavailable")
 	}
 	raw, err = s.callTool(ctx, "query_granola_meetings", map[string]any{"query": query})
 	if err != nil {
@@ -729,6 +733,7 @@ func (c *Connectors) GranolaQueryResult(ctx context.Context, query string) (Capa
 		return CapabilityResult{}, nil
 	}
 	evidence := make([]EvidenceRef, 0, 3)
+	ids := make([]string, 0, 3)
 	seen := map[string]bool{}
 	for _, match := range granolaCitation.FindAllStringSubmatch(text, 10) {
 		if len(match) != 3 || !validEvidenceURL(match[2]) || seen[match[2]] {
@@ -736,9 +741,33 @@ func (c *Connectors) GranolaQueryResult(ctx context.Context, query string) (Capa
 		}
 		seen[match[2]] = true
 		id := strings.TrimPrefix(match[2], "https://notes.granola.ai/d/")
+		ids = append(ids, id)
 		evidence = append(evidence, EvidenceRef{Provider: "Granola", ID: id, URL: match[2], RetrievedAt: time.Now()})
 	}
-	return CapabilityResult{Text: text, ResultCount: len(evidence), Evidence: evidence, DirectAnswer: true}, nil
+	if len(ids) == 0 {
+		return CapabilityResult{}, errors.New("Granola query returned no cited meeting notes")
+	}
+	if len(ids) > 5 {
+		ids = ids[:5]
+		evidence = evidence[:5]
+	}
+	raw, err = s.callTool(ctx, "get_meetings", map[string]any{"meeting_ids": ids})
+	if err != nil {
+		return CapabilityResult{}, fmt.Errorf("Granola cited meeting details unavailable: %w", err)
+	}
+	summaries, valid := parseGranolaSummaries(raw)
+	if !valid {
+		return CapabilityResult{}, errors.New("unexpected Granola meeting detail schema")
+	}
+	lines := make([]string, 0, len(ids))
+	for _, item := range evidence {
+		summary := strings.TrimSpace(summaries[item.ID])
+		if summary == "" {
+			return CapabilityResult{}, fmt.Errorf("Granola note %s has no readable summary", item.ID)
+		}
+		lines = append(lines, "Nota de reunión de Granola ("+item.ID+"):\n"+summary)
+	}
+	return CapabilityResult{Text: strings.Join(lines, "\n\n"), ResultCount: len(evidence), Evidence: evidence}, nil
 }
 
 func (c *Connectors) GranolaResult(ctx context.Context) (CapabilityResult, error) {
