@@ -50,3 +50,19 @@ func TestExplicitAssignmentAnswerDoesNotInventFromNarrative(t *testing.T) {
 		t.Fatalf("narrative without explicit assignment structure was treated as a task list: %q", answer)
 	}
 }
+
+func TestExplicitAssignmentAnswerAcceptsNotesAfterFormattingIsStripped(t *testing.T) {
+	const question = "En la reunión de Stonecare del 14 de octubre, ¿quién debía enviar las imágenes y qué tareas tenía Fran para dejar la web lista?"
+	const notes = `Próximos Pasos
+- Enviar imágenes adaptadas a Fran para la home y profesionales (Paula, Alba)
+  Incluir la foto con los dos productos para el primer slide.
+- Aplicar cambios acordados y tener la web lista para el viernes (Fran)`
+
+	answer, ok := explicitAssignmentAnswer(question, notes, nil)
+	if !ok {
+		t.Fatal("expected assignments to be extracted after Markdown formatting was stripped")
+	}
+	if !strings.Contains(answer, "Paula, Alba: Enviar imágenes") || strings.Contains(answer, "Fran: Enviar imágenes") || !strings.Contains(answer, "Fran: Aplicar cambios") {
+		t.Fatalf("unexpected assignment attribution: %s", answer)
+	}
+}

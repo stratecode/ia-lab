@@ -6,8 +6,8 @@ import (
 )
 
 var (
-	explicitActionSection = regexp.MustCompile(`(?i)^#{1,6}\s*(?:pr[oó]ximos\s+pasos|next\s+steps|action\s+items)\s*$`)
-	explicitActionHeading = regexp.MustCompile(`^\s*[-*]\s+\*\*(.+?)\*\*\s*\(([^()]+)\)\s*$`)
+	explicitActionSection = regexp.MustCompile(`(?i)^\s*(?:#{1,6}\s*)?(?:pr[oó]ximos\s+pasos|next\s+steps|action\s+items)\s*:?\s*$`)
+	explicitActionHeading = regexp.MustCompile(`^\s*[-*]\s+(.+?)\s*\(([^()]+)\)\s*$`)
 	markdownHeading       = regexp.MustCompile(`^\s*#{1,6}\s+`)
 	markdownBullet        = regexp.MustCompile(`^\s*[-*]\s+`)
 )
@@ -121,12 +121,13 @@ func parseExplicitActions(source string) []explicitAction {
 			continue
 		}
 		if match := explicitActionHeading.FindStringSubmatch(trimmed); len(match) == 3 {
+			title := strings.Trim(strings.TrimSpace(match[1]), "*")
 			owners := splitExplicitOwners(match[2])
 			if len(owners) == 0 {
 				current = -1
 				continue
 			}
-			actions = append(actions, explicitAction{title: strings.TrimSpace(match[1]), owners: owners})
+			actions = append(actions, explicitAction{title: title, owners: owners})
 			current = len(actions) - 1
 			continue
 		}
