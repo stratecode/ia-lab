@@ -795,6 +795,32 @@ func TestGranolaCapabilityPassesQuestionToQueryAwareConnector(t *testing.T) {
 	}
 }
 
+func TestDirectSourceAnswerSurvivesSecondaryConnectorFailure(t *testing.T) {
+	const sourceAnswer = "Fran: aplicar los cambios de la web. Paula y Alba: enviar las imágenes. [[1]](https://notes.granola.ai/d/meeting-1)"
+	modelCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
+		io.WriteString(w, `{"choices":[{"message":{"content":"invented answer"}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), nil)
+	capabilities := []ReadCapability{
+		{Name: "Granola", Description: "notas", Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{Text: sourceAnswer, ResultCount: 1, DirectAnswer: true}, nil
+		}},
+		{Name: "Rovo", Description: "Jira", Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{}, errors.New("Rovo missing required scopes: read:jira:agent-interface")
+		}},
+	}
+	answer, outcomes, reason, err := s.answerFromCapabilities(context.Background(), "¿Qué tareas quedaron asignadas?", "¿Qué tareas quedaron asignadas?", capabilities, nil, nil, nil, nil)
+	if err != nil || reason != "" || len(outcomes) != 2 || modelCalls != 0 {
+		t.Fatalf("answer=%q outcomes=%+v reason=%q calls=%d err=%v", answer, outcomes, reason, modelCalls, err)
+	}
+	if !strings.Contains(answer, sourceAnswer) || !strings.Contains(answer, "Rovo (faltan permisos: read:jira:agent-interface)") || strings.Contains(answer, "invented answer") {
+		t.Fatalf("direct source answer or connector limitation was lost: %q", answer)
+	}
+}
+
 func TestSourcedAnswerDoesNotMixConversationMemory(t *testing.T) {
 	const unrelated = "Cambia Tu Euro KYC operación bancaria"
 	const source = "Granola: Stonecare, Iris revisa textos y Fran implementa el viernes."

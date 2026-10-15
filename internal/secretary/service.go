@@ -742,8 +742,12 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question, readQuer
 	if progress != nil {
 		progress("preparando la respuesta")
 	}
-	if len(capabilities) == 1 && successes == 1 && directAnswer != nil && strings.TrimSpace(directAnswer.Text) != "" {
-		return strings.TrimSpace(directAnswer.Text), outcomes, "", nil
+	if successes == 1 && directAnswer != nil && strings.TrimSpace(directAnswer.Text) != "" {
+		answer := strings.TrimSpace(directAnswer.Text)
+		if len(failures) > 0 {
+			answer += "\n\nNo he podido contrastar en " + strings.Join(failures, " y ") + "."
+		}
+		return answer, outcomes, "", nil
 	}
 	var approvedMemories []conversationMemory
 	for _, memory := range memories {
