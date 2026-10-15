@@ -302,17 +302,24 @@ without enrollment. A failed consent is not a connected account.
 Jira OAuth requests `read:me`, `read:jira:agent-interface`,
 `search:jira:agent-interface` and `offline_access`, without write scopes. The
 natural-language Rovo capability uses the Atlassian MCP `search` tool and needs an
-API key with `search:rovo:agent-interface`; `/jira` continues to use JQL and needs
-`search:jira:agent-interface`. Do not add write scopes. If the account exposes
-multiple Jira sites, enroll with `--cloud-id <selected-site-id>`; the adapter
-refuses to guess. Granola exposes its general `mcp` OAuth scope;
+API key with `search:rovo:agent-interface`; it also reads matching issue details
+with `getJiraIssue`, which requires `read:jira:agent-interface`. `/jira` continues
+to use JQL and needs `search:jira:agent-interface`. This connector accepts a
+service-account API key using Bearer auth; a personal API token uses Basic auth
+and is not supported by this credential format. For API-key enrollment, request
+the three read-only scopes above and have an organisation admin enable API-token
+access in Rovo. Do not add write scopes. If the account exposes multiple Jira
+sites, enroll with `--cloud-id <selected-site-id>`; the adapter refuses to guess.
+Granola exposes its general `mcp` OAuth scope;
 the adapter's hard allowlist permits `list_meetings` only. Its current response
 is markup rather than JSON, so the adapter extracts only meeting ID, title and
 date; it does not pass transcript or note bodies into chat. Verify remote tool
 and result schemas with the authorised account before POC acceptance. Atlassian's
 [Rovo supported-tools reference](https://developer.atlassian.com/cloud/rovo-mcp/guides/supported-tools/)
-lists `search:rovo:agent-interface` for semantic search and
-`search:jira:agent-interface` for JQL.
+lists `read:jira:agent-interface` for issue reads, `search:jira:agent-interface`
+for JQL, and `search:rovo:agent-interface` for semantic search. See Atlassian's
+[API-token authentication guide](https://developer.atlassian.com/cloud/rovo-mcp/guides/configuring-authentication-via-api-token/)
+for the Basic-versus-Bearer distinction.
 
 ```bash
 ./scripts/test-orchestrator-go.sh

@@ -72,6 +72,33 @@ func TestReadOnlyMCPKeepsSourcesAndRejectsWrites(t *testing.T) {
 	}
 }
 
+func TestMCPToolPermissionErrorReportsOnlyRequiredRovoScopes(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		switch req.Method {
+		case "initialize":
+			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}`)
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/call":
+			io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"isError":true,"content":[{"type":"text","text":"Missing required scope read:jira:agent-interface. Internal detail must not escape."}]}}`)
+		default:
+			t.Errorf("unexpected MCP method %q", req.Method)
+		}
+	}))
+	defer server.Close()
+	s := &mcpSession{owner: &Connectors{Client: server.Client()}, config: OAuthConfig{ServerURL: server.URL, AccessToken: "secret"}}
+	if _, err := s.callTool(context.Background(), "getJiraIssue", map[string]any{}); err == nil || !strings.Contains(err.Error(), "read:jira:agent-interface") || strings.Contains(err.Error(), "Internal detail") {
+		t.Fatalf("MCP scope failure was not reported safely: %v", err)
+	}
+}
+
 func TestConnectorDestinationsAndPartialCoverage(t *testing.T) {
 	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: "https://attacker.invalid", AccessToken: "secret"}}}
 	if _, err := c.Jira(context.Background()); err == nil {

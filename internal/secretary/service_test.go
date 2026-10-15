@@ -148,6 +148,25 @@ func TestCapabilityFailureEmitsBlockedNotCompleted(t *testing.T) {
 	}
 }
 
+func TestCapabilityFailureExplainsMissingRovoScopes(t *testing.T) {
+	s := &Service{}
+	capability := ReadCapability{
+		Name: "Rovo",
+		Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{}, errors.New("Rovo missing required scopes: read:jira:agent-interface, search:jira:agent-interface")
+		},
+	}
+	answer, outcomes, reason, err := s.answerFromCapabilities(context.Background(), "Dame las tareas de SW-76", []ReadCapability{capability}, nil, nil, nil, nil)
+	if err != nil || reason != BlockConnectorFailure || len(outcomes) != 1 {
+		t.Fatalf("unexpected connector failure result: %q %#v %q %v", answer, outcomes, reason, err)
+	}
+	for _, scope := range []string{"read:jira:agent-interface", "search:jira:agent-interface"} {
+		if !strings.Contains(answer, scope) {
+			t.Errorf("user-facing failure did not identify missing scope %q: %q", scope, answer)
+		}
+	}
+}
+
 func TestNeutralMessageEmitsNoLookupOrAction(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, `{"choices":[{"message":{"content":"Buenos días."}}]}`)

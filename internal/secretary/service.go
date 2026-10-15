@@ -635,6 +635,24 @@ func capabilityNamesText(capabilities []ReadCapability) string {
 	return strings.Join(names, " y ")
 }
 
+func capabilityFailureLabel(name string, err error) string {
+	if err == nil {
+		return name
+	}
+	seen := map[string]bool{}
+	var scopes []string
+	for _, scope := range rovoScopeMention.FindAllString(err.Error(), -1) {
+		if !seen[scope] {
+			scopes = append(scopes, scope)
+			seen[scope] = true
+		}
+	}
+	if len(scopes) == 0 {
+		return name
+	}
+	return name + " (faltan permisos: " + strings.Join(scopes, ", ") + ")"
+}
+
 func (s *Service) answerFromCapabilities(ctx context.Context, question string, capabilities []ReadCapability, memories []conversationMemory, stream func(string), progress func(string), observer InteractionObserver) (string, []CapabilityOutcome, InteractionBlockReason, error) {
 	outcomes := make([]CapabilityOutcome, 0, len(capabilities))
 	var sourceBlocks []string
@@ -647,7 +665,8 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question string, c
 		outcome := CapabilityOutcome{Capability: capability.Name, Duration: time.Since(started)}
 		if err != nil {
 			outcome.Outcome = "error"
-			failures = append(failures, capability.Name)
+			failure := capabilityFailureLabel(capability.Name, err)
+			failures = append(failures, failure)
 			outcomes = append(outcomes, outcome)
 			continue
 		}

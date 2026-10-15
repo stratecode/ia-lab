@@ -191,6 +191,7 @@ func (c *Connectors) session(ctx context.Context, config OAuthConfig) (*mcpSessi
 }
 
 var readTools = map[string]bool{"getAccessibleAtlassianResources": true, "searchJiraIssuesUsingJql": true, "getJiraIssue": true, "search": true, "list_meetings": true, "get_meetings": true, "query_granola_meetings": true}
+var rovoScopeMention = regexp.MustCompile(`\b(?:read|search|write|delete|manage):[a-z-]+:agent-interface\b`)
 
 func (c *Connectors) tool(ctx context.Context, config OAuthConfig, name string, args map[string]any) (json.RawMessage, error) {
 	if !readTools[name] {
@@ -218,7 +219,23 @@ func (s *mcpSession) callTool(ctx context.Context, name string, args map[string]
 			Text string `json:"text"`
 		} `json:"content"`
 	}
-	if json.Unmarshal(raw, &result) != nil || result.IsError {
+	if json.Unmarshal(raw, &result) != nil {
+		return nil, errors.New("connector tool failed")
+	}
+	if result.IsError {
+		var missing []string
+		seen := map[string]bool{}
+		for _, item := range result.Content {
+			for _, scope := range rovoScopeMention.FindAllString(item.Text, -1) {
+				if !seen[scope] {
+					missing = append(missing, scope)
+					seen[scope] = true
+				}
+			}
+		}
+		if len(missing) > 0 {
+			return nil, fmt.Errorf("Rovo missing required scopes: %s", strings.Join(missing, ", "))
+		}
 		return nil, errors.New("connector tool failed")
 	}
 	if len(result.Structured) > 0 && string(result.Structured) != "null" {
