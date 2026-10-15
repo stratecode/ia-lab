@@ -100,3 +100,15 @@ func TestExplicitAssignmentAnswerExtractsOwnerPrefix(t *testing.T) {
 		t.Fatalf("unexpected owner attribution: %s", answer)
 	}
 }
+
+func TestExplicitAssignmentAnswerExtractsOwnerBulletsWithoutHeading(t *testing.T) {
+	const notes = `- Fran: Subir los procedimientos de inventario durante la mañana.
+- Paula: Enviar las imágenes adaptadas para la web.`
+	answer, ok := explicitAssignmentAnswer("¿Qué debe hacer Fran?", notes, nil)
+	if !ok {
+		t.Fatal("expected owner-labelled task bullets to be extracted without a section heading")
+	}
+	if !strings.Contains(answer, "Fran: Subir los procedimientos") || strings.Contains(answer, "Paula:") {
+		t.Fatalf("unexpected owner attribution: %s", answer)
+	}
+}

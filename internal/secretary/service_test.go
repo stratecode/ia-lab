@@ -957,6 +957,32 @@ func TestMorningTaskQuestionReturnsStructuredOwnerActionsFromGranola(t *testing.
 	}
 }
 
+func TestStructuredMeetingActionsTakePrecedenceOverDirectConnectorAnswer(t *testing.T) {
+	const question = "Según la reunión del 13 de octubre, ¿qué tareas quedaron a cargo de Fran?"
+	const notes = `# Proyectos Fran
+- Corregir el XLS de Amplify con error 404 durante la mañana.
+
+# Proyectos Gonzalo
+- Terminar la importación de localizaciones.`
+	modelCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
+		io.WriteString(w, `{"choices":[{"message":{"content":"respuesta no fundamentada"}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), nil)
+	capability := ReadCapability{Name: "Granola", Description: "notas", Read: func(context.Context, string) (CapabilityResult, error) {
+		return CapabilityResult{Text: notes, ResultCount: 1, DirectAnswer: true, Evidence: []EvidenceRef{{Provider: "Granola", ID: "meeting-1", URL: "https://notes.granola.ai/d/meeting-1"}}}, nil
+	}}
+	answer, _, reason, err := s.answerFromCapabilities(context.Background(), question, question, []ReadCapability{capability}, nil, nil, nil, nil)
+	if err != nil || reason != "" || modelCalls != 0 {
+		t.Fatalf("answer=%q reason=%q modelCalls=%d err=%v", answer, reason, modelCalls, err)
+	}
+	if !strings.Contains(answer, "Fran: Corregir el XLS de Amplify") || strings.Contains(answer, "# Proyectos Fran") || strings.Contains(answer, "Gonzalo:") {
+		t.Fatalf("structured assignment did not take precedence over the connector's direct text: %s", answer)
+	}
+}
+
 func TestSourcedAnswerDoesNotMixConversationMemory(t *testing.T) {
 	const unrelated = "Cambia Tu Euro KYC operación bancaria"
 	const source = "Granola: Stonecare, Iris revisa textos y Fran implementa el viernes."

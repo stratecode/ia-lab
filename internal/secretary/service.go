@@ -764,16 +764,6 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question, readQuer
 		}
 		return "No he encontrado notas o resultados en " + capabilityNamesText(capabilities) + " que permitan verificarlo.", outcomes, "", nil
 	}
-	if observer != nil {
-		observer(InteractionEvent{Kind: EventStageChanged, Stage: "sintetizando la respuesta"})
-	}
-	if progress != nil {
-		progress("preparando la respuesta")
-	}
-	if successes == 1 && directAnswer != nil && strings.TrimSpace(directAnswer.Text) != "" {
-		answer := strings.TrimSpace(directAnswer.Text)
-		return answer + capabilityCoverageNote(emptyCapabilities, failures), outcomes, "", nil
-	}
 	if explicitMeetingAnchor(question) && !hasExplicitRovoReference(question) {
 		for i, result := range successfulResults {
 			if i >= len(successfulCapabilities) || !strings.EqualFold(successfulCapabilities[i], "Granola") {
@@ -783,6 +773,16 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question, readQuer
 				return answer + capabilityCoverageNote(emptyCapabilities, failures), outcomes, "", nil
 			}
 		}
+	}
+	if observer != nil {
+		observer(InteractionEvent{Kind: EventStageChanged, Stage: "sintetizando la respuesta"})
+	}
+	if progress != nil {
+		progress("preparando la respuesta")
+	}
+	if successes == 1 && directAnswer != nil && strings.TrimSpace(directAnswer.Text) != "" {
+		answer := strings.TrimSpace(directAnswer.Text)
+		return answer + capabilityCoverageNote(emptyCapabilities, failures), outcomes, "", nil
 	}
 	var approvedMemories []conversationMemory
 	for _, memory := range memories {

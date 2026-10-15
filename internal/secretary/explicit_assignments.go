@@ -141,6 +141,13 @@ func parseExplicitActions(source string) []explicitAction {
 			current = -1
 			continue
 		}
+		if !inActionSection && markdownBullet.MatchString(trimmed) {
+			if match := explicitOwnerPrefix.FindStringSubmatch(trimmed); len(match) == 3 {
+				title := strings.Trim(strings.TrimSpace(match[2]), "*")
+				actions = append(actions, newExplicitAction(title, splitExplicitOwners(match[1])))
+			}
+			continue
+		}
 		if !inActionSection || trimmed == "" {
 			continue
 		}
