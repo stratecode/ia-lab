@@ -66,6 +66,18 @@ func TestMeetingTaskQuestionUsesGranolaAndRovo(t *testing.T) {
 	}
 }
 
+func TestExplicitJiraIssueDoesNotInheritPriorMeetingContext(t *testing.T) {
+	query := "Dame el estado actual y la persona asignada de SW-76."
+	history := []Turn{{Role: "user", Content: "Resume la reunión de Stonecare del 14 de octubre."}}
+	capabilities, ok, readQuery := routingServiceForTest().capabilitiesFor(query, history)
+	if !ok || !reflect.DeepEqual(capabilityNames(capabilities), []string{"Rovo"}) {
+		t.Fatalf("explicit Jira issue route = %v, %t; want only Rovo", capabilityNames(capabilities), ok)
+	}
+	if readQuery != query {
+		t.Fatalf("explicit Jira query inherited meeting context: %q", readQuery)
+	}
+}
+
 func TestMeetingSummaryUsesGranolaOnly(t *testing.T) {
 	capabilities, ok, _ := routingServiceForTest().capabilitiesFor("Resume las reuniones de esta mañana", nil)
 	if !ok || len(capabilities) != 1 || capabilities[0].Name != "Granola" {

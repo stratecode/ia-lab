@@ -573,7 +573,7 @@ func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapabilit
 	meetingIntent := localIntent(query) == intentCapability && containsAny(normalizedIntentText(query), "reunion", "reuniones", "granola")
 	taskIntent := rovoTaskIntent(query)
 	var previousMeetingQuery string
-	if taskIntent && (refersToPriorMeeting(query) || !meetingIntent) {
+	if taskIntent && !hasExplicitRovoReference(query) && (refersToPriorMeeting(query) || !meetingIntent) {
 		userTurns := 0
 		for i := len(history) - 1; i >= 0; i-- {
 			if history[i].Role != "user" {
@@ -584,7 +584,7 @@ func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapabilit
 				break
 			}
 			previous := normalizedIntentText(history[i].Content)
-			if containsAny(previous, "reunion", "reuniones", "granola") {
+			if !refersToPriorMeeting(history[i].Content) && containsAny(previous, "reunion", "reuniones", "granola") {
 				meetingIntent = true
 				previousMeetingQuery = history[i].Content
 				break
@@ -625,6 +625,10 @@ func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapabilit
 
 func refersToPriorMeeting(query string) bool {
 	return containsAny(normalizedIntentText(query), "esa reunion", "esta reunion", "dicha reunion", "aquella reunion")
+}
+
+func hasExplicitRovoReference(query string) bool {
+	return jiraIssueKeyMention.MatchString(strings.ToUpper(query)) || containsAny(normalizedIntentText(query), "jira", "confluence", "rovo")
 }
 
 func capabilityResultFromText(text string) CapabilityResult {
