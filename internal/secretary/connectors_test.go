@@ -140,6 +140,32 @@ func TestGranolaMissingConnectionIsAnErrorNotSourceContent(t *testing.T) {
 	}
 }
 
+func TestGranolaSummaryTruncationPreservesProjectOwnersAndNextSteps(t *testing.T) {
+	const project = "# Proyectos Fran\n- SiteWatchman: revisar el XLS de inventario.\n\n"
+	const actions = "# Próximos Pasos\n- Corregir la regla XLS de SiteWatchman antes del viernes.\n"
+	if !explicitOwnerSection.MatchString("# Proyectos Fran") || !explicitActionSection.MatchString("# Próximos Pasos") {
+		t.Fatal("test headings do not match the explicit assignment section rules")
+	}
+	longNarrative := strings.Repeat("Detalle de contexto de la reunión. ", 100)
+	got := truncateGranolaSummary(project + longNarrative + "\n" + actions)
+	if !strings.Contains(got, "# Próximos Pasos") || !strings.Contains(got, "# Proyectos Fran") {
+		t.Fatalf("summary omitted structured sections: %q", got)
+	}
+
+	if len([]rune(got)) > 4000 {
+		t.Fatalf("summary exceeded bounded context: %d runes", len([]rune(got)))
+	}
+	answer, ok := explicitAssignmentAnswer("¿Qué tarea tiene Fran para SiteWatchman y cuándo?", got, nil)
+	if !ok {
+		t.Fatalf("expected preserved project owner and next step to yield an assignment; summary ended with %q", got[max(0, len(got)-180):])
+	}
+	for _, expected := range []string{"Fran: Corregir la regla XLS de SiteWatchman", "antes del viernes"} {
+		if !strings.Contains(answer, expected) {
+			t.Errorf("answer omitted %q: %s", expected, answer)
+		}
+	}
+}
+
 func TestGranolaQueryPassesQuestionAndPreservesCitation(t *testing.T) {
 	const query = "¿Qué decisiones y responsables aparecen en Stonecare el 14 de octubre?"
 	var gotQuery string

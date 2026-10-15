@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -912,10 +913,65 @@ func parseGranolaSummaries(raw json.RawMessage) (map[string]string, bool) {
 
 func truncateGranolaSummary(text string) string {
 	runes := []rune(strings.TrimSpace(text))
-	if len(runes) > 1600 {
+	if len(runes) <= 1600 {
+		return string(runes)
+	}
+
+	lines := strings.Split(string(runes), "\n")
+	type section struct {
+		start int
+		text  string
+		limit int
+	}
+	var projectSections, actionSections []section
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		isAction := explicitActionSection.MatchString(trimmed)
+		isProject := explicitOwnerSection.MatchString(trimmed)
+		if !isAction && !isProject {
+			continue
+		}
+		end := i + 1
+		for end < len(lines) && !markdownHeading.MatchString(strings.TrimSpace(lines[end])) {
+			end++
+		}
+		candidate := strings.Join(lines[i:end], "\n")
+		if isAction {
+			actionSections = append(actionSections, section{start: i, text: candidate, limit: 2400})
+		} else {
+			projectSections = append(projectSections, section{start: i, text: candidate, limit: 800})
+		}
+	}
+	if len(actionSections) == 0 && len(projectSections) == 0 {
 		return string(runes[:1600]) + "…"
 	}
-	return string(runes)
+
+	const maxRunes = 4000
+	prefix := string(runes)
+	if len(runes) > 1000 {
+		prefix = string(runes[:1000]) + "…"
+	}
+	parts := []string{prefix}
+	used := len([]rune(prefix))
+	sections := append(projectSections, actionSections...)
+	sort.Slice(sections, func(i, j int) bool { return sections[i].start < sections[j].start })
+	for _, block := range sections {
+		remaining := maxRunes - used - 2
+		limit := block.limit
+		if limit > remaining {
+			limit = remaining
+		}
+		if limit <= 0 {
+			break
+		}
+		blockRunes := []rune(strings.TrimSpace(block.text))
+		if len(blockRunes) > limit {
+			block.text = string(blockRunes[:limit]) + "…"
+		}
+		parts = append(parts, block.text)
+		used += len([]rune(block.text)) + 2
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func containsString(values []string, want string) bool {
