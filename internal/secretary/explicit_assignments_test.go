@@ -142,3 +142,22 @@ func TestExplicitAssignmentAnswerMapsNextStepsToProjectOwners(t *testing.T) {
 		}
 	}
 }
+
+func TestExplicitAssignmentAnswerOwnerFilterExcludesOtherOwnersMatchingDateTerms(t *testing.T) {
+	const notes = `# Proyectos Fran
+- SiteWatchman: corregir la regla de descarga XLS.
+
+# Próximos Pasos
+- Corregir la regla XLS de SiteWatchman antes del viernes.
+- Blindar migración Payroll para producción el lunes 19 de octubre (Valentina).`
+	answer, ok := explicitAssignmentAnswer("¿Qué tareas quedaron a cargo de Fran en la reunión del 13 de octubre y qué plazos se mencionaron?", notes, nil)
+	if !ok {
+		t.Fatal("expected Fran's assigned action to be extracted")
+	}
+	if !strings.Contains(answer, "Fran: Corregir la regla XLS") || !strings.Contains(answer, "antes del viernes") {
+		t.Fatalf("answer omitted Fran's action or deadline: %s", answer)
+	}
+	if strings.Contains(answer, "Valentina") || strings.Contains(answer, "Payroll") {
+		t.Fatalf("answer leaked another owner's task because it shared the requested date: %s", answer)
+	}
+}

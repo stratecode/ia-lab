@@ -19,6 +19,8 @@ var (
 var explicitQueryStopWords = map[string]struct{}{
 	"que": {}, "quien": {}, "quienes": {}, "cual": {}, "cuales": {}, "como": {},
 	"tarea": {}, "tareas": {}, "pendiente": {}, "pendientes": {}, "responsable": {}, "responsables": {},
+	"enero": {}, "febrero": {}, "marzo": {}, "abril": {}, "mayo": {}, "junio": {},
+	"julio": {}, "agosto": {}, "septiembre": {}, "octubre": {}, "noviembre": {}, "diciembre": {},
 	"asignada": {}, "asignado": {}, "asignadas": {}, "asignados": {}, "compromiso": {}, "compromisos": {},
 	"acordado": {}, "acordados": {}, "acordada": {}, "acordadas": {}, "acordaron": {}, "separado": {}, "separada": {}, "separados": {}, "separadas": {},
 	"enviar": {}, "envie": {}, "envia": {}, "entregar": {}, "revisar": {}, "revision": {}, "hacer": {},
@@ -62,6 +64,9 @@ func explicitAssignmentAnswer(question, source string, evidence []EvidenceRef) (
 	}
 	for _, word := range strings.Fields(query) {
 		if _, stopWord := explicitQueryStopWords[word]; stopWord {
+			continue
+		}
+		if strings.Trim(word, "0123456789") == "" {
 			continue
 		}
 		if _, isOwner := ownerWords[word]; isOwner {
