@@ -3,6 +3,7 @@ package secretary
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -75,6 +76,22 @@ func TestExplicitJiraIssueDoesNotInheritPriorMeetingContext(t *testing.T) {
 	}
 	if readQuery != query {
 		t.Fatalf("explicit Jira query inherited meeting context: %q", readQuery)
+	}
+}
+
+func TestMeetingFollowUpResolvesAnaphoraWithinRecentHistory(t *testing.T) {
+	anchor := "Hazme un resumen ejecutivo de la reunión de Stonecare del 14 de octubre."
+	query := "¿Qué tareas quedaron asignadas a cada persona en esa misma reunión?"
+	history := []Turn{{Role: "user", Content: anchor}}
+	for i := 0; i < 5; i++ {
+		history = append(history, Turn{Role: "user", Content: "consulta intermedia sin referencia a una reunión"})
+	}
+	_, ok, readQuery := routingServiceForTest().capabilitiesFor(query, history)
+	if !ok {
+		t.Fatal("meeting follow-up did not route")
+	}
+	if !strings.Contains(readQuery, anchor) || !strings.Contains(readQuery, query) {
+		t.Fatalf("follow-up query lost its meeting anchor: %q", readQuery)
 	}
 }
 

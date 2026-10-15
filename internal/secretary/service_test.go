@@ -890,7 +890,7 @@ func TestGranolaCapabilityCarriesToNaturalTaskFollowUp(t *testing.T) {
 
 func TestMeetingFollowUpKeepsMeetingContextInConnectorQuery(t *testing.T) {
 	const firstQuestion = "Resume la reunión de Stonecare del 14 de octubre."
-	const followUp = "¿Qué tareas concretas quedaron asignadas a cada persona en esa reunión y cuáles me corresponden a mí?"
+	const followUp = "¿Qué tareas concretas quedaron asignadas a cada persona en esa misma reunión y cuáles me corresponden a mí?"
 	const source = "Granola: Iris revisa los textos y Fran implementa los cambios."
 	const summary = "Iris revisa los textos; Fran implementa los cambios."
 	var gotQuery string

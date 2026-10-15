@@ -580,11 +580,10 @@ func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapabilit
 				continue
 			}
 			userTurns++
-			if userTurns > 4 {
+			if userTurns > 10 {
 				break
 			}
-			previous := normalizedIntentText(history[i].Content)
-			if !refersToPriorMeeting(history[i].Content) && containsAny(previous, "reunion", "reuniones", "granola") {
+			if explicitMeetingAnchor(history[i].Content) {
 				meetingIntent = true
 				previousMeetingQuery = history[i].Content
 				break
@@ -624,7 +623,23 @@ func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapabilit
 }
 
 func refersToPriorMeeting(query string) bool {
-	return containsAny(normalizedIntentText(query), "esa reunion", "esta reunion", "dicha reunion", "aquella reunion")
+	return containsAny(normalizedIntentText(query), "esa reunion", "esa misma reunion", "esta reunion", "dicha reunion", "aquella reunion", "la reunion anterior", "esa reunion anterior")
+}
+
+func explicitMeetingAnchor(query string) bool {
+	text := normalizedIntentText(query)
+	if refersToPriorMeeting(query) {
+		return false
+	}
+	if containsAny(text, "granola") {
+		return true
+	}
+	return containsAny(text, "reunion", "reuniones") && containsAny(text,
+		"resumen", "decision", "tarea", "pendiente", "asignad", "responsable", "compromiso",
+		"ayer", "hoy", "esta manana", "esta tarde", "stonecare", "cliente",
+		"enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+		"septiembre", "octubre", "noviembre", "diciembre",
+	)
 }
 
 func hasExplicitRovoReference(query string) bool {
