@@ -8,7 +8,7 @@ import (
 var (
 	explicitActionSection = regexp.MustCompile(`(?i)^\s*(?:#{1,6}\s*)?(?:pr[oó]ximos\s+pasos|next\s+steps|action\s+items)\s*:?\s*$`)
 	explicitOwnerSection  = regexp.MustCompile(`(?i)^\s*#{1,6}\s*(?:proyectos?|projects?|tareas?|acciones?)\s+(?:de\s+)?([^:#]+?)\s*:?\s*$`)
-	explicitActionHeading = regexp.MustCompile(`^\s*[-*]\s+(.+?)\s*\(([^()]+)\)\s*$`)
+	explicitActionHeading = regexp.MustCompile(`^\s*[-*]\s+(.+?)\s*\(([^()]+)\)\s*[.!;:]?\s*$`)
 	explicitOwnerPrefix   = regexp.MustCompile(`^\s*[-*]\s+([^:]{2,64}):\s+(.+?)\s*$`)
 	projectOwnerPrefix    = regexp.MustCompile(`^\s*[-*]\s+([^:(]+?)(?:\s+\([^)]*\))?:\s+`)
 	markdownHeading       = regexp.MustCompile(`^\s*#{1,6}\s+`)
@@ -23,7 +23,7 @@ var explicitQueryStopWords = map[string]struct{}{
 	"julio": {}, "agosto": {}, "septiembre": {}, "octubre": {}, "noviembre": {}, "diciembre": {},
 	"plazo": {}, "plazos": {}, "fecha": {}, "fechas": {}, "aparece": {}, "aparecen": {}, "mencionaron": {},
 	"asignada": {}, "asignado": {}, "asignadas": {}, "asignados": {}, "compromiso": {}, "compromisos": {},
-	"acordado": {}, "acordados": {}, "acordada": {}, "acordadas": {}, "acordaron": {}, "separado": {}, "separada": {}, "separados": {}, "separadas": {},
+	"acordado": {}, "acordados": {}, "acordada": {}, "acordadas": {}, "acordaron": {}, "agrupada": {}, "agrupadas": {}, "agrupado": {}, "agrupados": {}, "separado": {}, "separada": {}, "separados": {}, "separadas": {},
 	"enviar": {}, "envie": {}, "envia": {}, "entregar": {}, "revisar": {}, "revision": {}, "hacer": {},
 	"debia": {}, "debe": {}, "deben": {}, "deberia": {}, "deberian": {}, "debo": {}, "tenia": {}, "tiene": {},
 	"segun": {}, "reunion": {}, "reuniones": {}, "hoy": {}, "ayer": {}, "esta": {}, "manana": {}, "para": {},

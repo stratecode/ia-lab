@@ -182,3 +182,21 @@ func TestExplicitAssignmentAnswerUsesProjectTermsToNarrowOwnerActions(t *testing
 		t.Fatalf("answer included unrelated SiteWatchman actions: %s", answer)
 	}
 }
+
+func TestExplicitAssignmentAnswerReturnsAllOwnersWhenAskedToGroupActions(t *testing.T) {
+	const notes = `# Proyectos Fran
+- Minicor: preparar configuración de Active Directory.
+
+# Próximos Pasos
+- Enviar correos de configuración de Active Directory a Minicor.
+- Blindar migración Payroll para producción el lunes 19 de octubre (Valentina).`
+	answer, ok := explicitAssignmentAnswer("¿Qué tareas se acordaron en la reunión del 13 de octubre, agrupadas por responsable?", notes, nil)
+	if !ok {
+		t.Fatal("expected a broad grouped task question to use structured assignments")
+	}
+	for _, expected := range []string{"Fran: Enviar correos", "Valentina: Blindar migración Payroll"} {
+		if !strings.Contains(answer, expected) {
+			t.Errorf("grouped answer omitted %q: %s", expected, answer)
+		}
+	}
+}
