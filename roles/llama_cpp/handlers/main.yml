@@ -9,6 +9,7 @@
     state: restarted
     enabled: true
   loop: "{{ llama_cpp_instances }}"
+  no_log: true
   when: llama_cpp_enabled and not ansible_check_mode
 
 - name: Restart single llama.cpp instance

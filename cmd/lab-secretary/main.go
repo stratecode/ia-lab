@@ -45,6 +45,13 @@ func main() {
 		log.Fatal("instructions file required")
 	}
 	service := secretary.New(env("LAB_SECRETARY_UPSTREAM", "http://127.0.0.1:8081"), os.Getenv("LAB_SECRETARY_MODEL_KEY"), string(instructions), env("STATE_DIRECTORY", "/var/lib/lab-secretary"), allowed)
+	qwenUpstream := strings.TrimSpace(os.Getenv("LAB_SECRETARY_QWEN_UPSTREAM"))
+	qwenKey := os.Getenv("LAB_SECRETARY_QWEN_MODEL_KEY")
+	if qwenUpstream != "" || qwenKey != "" {
+		if qwenUpstream == "" || qwenKey == "" || service.RegisterModel("qwen-eval", qwenUpstream, qwenKey) != nil {
+			log.Fatal("invalid Qwen model target")
+		}
+	}
 	service.Retention, err = parseLearningRetention(os.Getenv("LAB_SECRETARY_TRACE_RETENTION_DAYS"), os.Getenv("LAB_SECRETARY_CANDIDATE_RETENTION_DAYS"))
 	if err != nil {
 		log.Fatal("valid secretary learning retention required")

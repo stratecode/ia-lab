@@ -7,9 +7,9 @@ loopback `127.0.0.1:8082`.
 Open WebUI at `https://chat.stratecode.com` uses `/v1` on that service.
 
 ```text
-Open WebUI ───────────┐
-Telegram private chat ├─ shared router + memory ─ llm-telemetry :8081 ─ llama.cpp :8080
-Future channels ─────┘                    └───── registered read-only capabilities
+Open WebUI (main/Qwen) ─┐
+Telegram private chat ──┼─ shared router + memory ─ selected model backend
+Future channels ───────┘                    └──── registered read-only capabilities
 ```
 
 Telegram polling is enabled and active in the lab. The operator approved stopping
@@ -99,6 +99,8 @@ accepted only for its authenticated administrator, mapped to the lab's single
 allowlisted operator. Requests without trusted admin identity or with multiple
 configured operators fail closed. Open WebUI and Telegram share durable memory,
 while short-term history stays isolated by channel and conversation. Open WebUI
+can select `main` (LFM) or `qwen-eval` (Qwen); both use the same routing,
+connector and memory pipeline. Telegram remains pinned to LFM. Open WebUI
 currently accepts text-only user messages through this route; multimodal messages
 receive an explicit client error instead of silently bypassing the router.
 The Open WebUI deployment enables `ENABLE_FORWARD_USER_INFO_HEADERS`; apply that

@@ -60,6 +60,12 @@
   no_log: true
   when: open_webui_enabled
 
+- name: Pull the pinned Open WebUI image
+  ansible.builtin.command: docker compose pull open-webui
+  args:
+    chdir: /srv/ai-lab/open-webui
+  when: open_webui_enabled
+
 - name: Start Open WebUI stack
   ansible.builtin.command: docker compose up -d
   args:

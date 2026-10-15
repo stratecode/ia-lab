@@ -286,6 +286,7 @@
          | map('basename')
          | map('regex_replace', '\.service$', '')
          | difference(llama_cpp_instances | map(attribute='service_name') | list)
+         | difference(llama_cpp_services_managed_elsewhere | default([]))
          | list }}
   when: llama_cpp_enabled
 
@@ -427,6 +428,7 @@
   notify:
     - Reload systemd for llama.cpp
     - Restart llama.cpp services
+  no_log: true
   when: llama_cpp_enabled
 
 - name: Stop legacy llama.cpp service when present
@@ -559,6 +561,7 @@
         "thresholds": llama_cpp_monitoring.thresholds,
         "check_interval_seconds": llama_cpp_monitoring.check_interval_seconds
       } | to_json }}
+  no_log: true
   when: llama_cpp_enabled
 
 - name: Deploy llama.cpp resource monitoring script

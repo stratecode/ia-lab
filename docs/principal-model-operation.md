@@ -1,7 +1,7 @@
 # Principal model operation
 
-Current approved increment, October 11, 2026: a personal work assistant starts
-with one local model and browser conversation. The later objective is work
+Current approved increment, October 15, 2026: a personal work assistant starts
+with two selectable local models and a browser conversation. The later objective is work
 context, Jira/Granola/email access and simple everyday agents, with voice through
 Telegram, WhatsApp and Slack outside the lab VPN/LAN. The [secretary increment](secretary-operation.md)
 is deployed for Open WebUI and Telegram, including voice notes and read-only
@@ -23,9 +23,11 @@ cutover remains gated on restoring external ingress.
   model, context 16,384 tokens including input/output.
 - Per-service MemoryMax 4 GiB. Aggregate ceiling 90% of host resources;
   zero reservation floor for this CPU-only profile. No VRAM/BIOS modification.
-- Open WebUI image pinned to [v0.12.0](https://github.com/open-webui/open-webui/releases/tag/v0.12.0),
-  loopback port 3080, HTTPS at `https://chat.stratecode.com`, one main connection through `lab-secretary` on loopback port 8082, then
-  `llm-telemetry` on 8081 and the principal on 8080.
+- Open WebUI image pinned to [v0.12.2](https://github.com/open-webui/open-webui/releases/tag/v0.12.2),
+  loopback port 3080, HTTPS at `https://chat.stratecode.com`; `main` goes
+  through `lab-secretary` on 8082, then `llm-telemetry` on 8081 and the principal
+  on 8080. The selectable `qwen-eval` model uses the same secretary pipeline
+  and memory, with its own loopback Qwen backend on 8184.
   Existing Nginx LAN/VPN access restrictions remain; external messaging channels
   are the later route to use outside those networks. Client/proxy timeouts are
   at least 900 seconds to accommodate long CPU-prefill requests.

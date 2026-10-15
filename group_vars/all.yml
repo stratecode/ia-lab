@@ -90,7 +90,7 @@ llama_cpp_git_version: "{{ lookup('env', 'LAB_LLAMA_GIT_VERSION') | default('6ea
 llama_cpp_build_jobs: "{{ lookup('env', 'LAB_LLAMA_BUILD_JOBS') | default('1', true) | int }}"
 llama_cpp_build_async_seconds: "{{ lookup('env', 'LAB_LLAMA_BUILD_ASYNC_SECONDS') | default('14400', true) | int }}"
 llama_cpp_build_poll_seconds: "{{ lookup('env', 'LAB_LLAMA_BUILD_POLL_SECONDS') | default('30', true) | int }}"
-# One principal model; the previous role-specific weights are retired.
+# LFM is the principal model; the separate Qwen evaluation playbook owns Qwen.
 llama_cpp_model_dir: /srv/ai-lab/llama.cpp/models
 llama_cpp_instances:
   - service_name: llama-cpp-main
@@ -139,6 +139,10 @@ llama_cpp_instances:
     recommended_context: 16384
     safe_max_context: 32768
     embedding_mode: false
+qwen_eval_port: 8184
+qwen_eval_api_key: "{{ lookup('env', 'LAB_LLAMA_QWEN_EVAL_API_KEY') }}"
+llama_cpp_services_managed_elsewhere:
+  - llama-cpp-qwen-eval
 
 # Explicit lab-owned weights to remove after the principal endpoint is healthy.
 # Never prune unrelated project volumes or llama.cpp vocabulary fixtures.
@@ -268,7 +272,7 @@ aider_repositories: []
 open_webui_name: StrateCode Lab
 open_webui_port: "{{ lookup('env', 'LAB_OPEN_WEBUI_PORT') | default('3001', true) | int }}"
 open_webui_secret_key: "{{ lookup('env', 'LAB_OPEN_WEBUI_SECRET_KEY') | default('replace-with-random-hex', true) }}"
-open_webui_version: v0.12.0
+open_webui_version: v0.12.2
 open_webui_enable_signup: "{{ lookup('env', 'LAB_OPEN_WEBUI_ENABLE_SIGNUP') | default('true', true) | bool }}"
 open_webui_request_timeout: "{{ [lookup('env', 'LAB_OPEN_WEBUI_REQUEST_TIMEOUT') | default('900', true) | int, 900] | max }}"
 open_webui_model_list_timeout: "{{ lookup('env', 'LAB_OPEN_WEBUI_MODEL_LIST_TIMEOUT') | default('30', true) | int }}"

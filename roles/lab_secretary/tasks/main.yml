@@ -4,6 +4,7 @@
       - orchestrator_telegram_bot_token | length > 0
       - orchestrator_telegram_allowed_users | length > 0
       - (llama_cpp_instances | first).api_key | length > 0
+      - qwen_eval_api_key | length >= 32
       - lab_secretary_telegram_mode in ['disabled', 'polling', 'webhook']
       - lab_secretary_progress_delay_seconds | int >= 1
       - lab_secretary_progress_delay_seconds | int <= 120
@@ -65,6 +66,8 @@
       LAB_SECRETARY_LISTEN=127.0.0.1:{{ lab_secretary_port }}
       LAB_SECRETARY_UPSTREAM=http://127.0.0.1:{{ llm_telemetry_port }}
       LAB_SECRETARY_MODEL_KEY={{ (llama_cpp_instances | first).api_key }}
+      LAB_SECRETARY_QWEN_UPSTREAM=http://127.0.0.1:{{ qwen_eval_port }}
+      LAB_SECRETARY_QWEN_MODEL_KEY={{ qwen_eval_api_key }}
       LAB_SECRETARY_INSTRUCTIONS=/etc/lab-secretary/instructions.md
       LAB_SECRETARY_TELEGRAM_MODE={{ lab_secretary_telegram_mode }}
       LAB_TELEGRAM_BOT_TOKEN={{ orchestrator_telegram_bot_token }}
@@ -97,8 +100,8 @@
     content: |
       [Unit]
       Description=Shared personal secretary and Telegram adapter
-      After=network-online.target llm-telemetry.service lab-whisper.service lab-piper.service
-      Wants=network-online.target
+      After=network-online.target llm-telemetry.service llama-cpp-qwen-eval.service lab-whisper.service lab-piper.service
+      Wants=network-online.target llama-cpp-qwen-eval.service
 
       [Service]
       DynamicUser=yes

@@ -223,6 +223,82 @@ func TestSharedChatStreamingAndAuthentication(t *testing.T) {
 	}
 }
 
+func TestOpenWebUIRejectsUnavailableModelInsteadOfSilentlyUsingPrincipal(t *testing.T) {
+	var upstreamCalls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalls++
+		io.WriteString(w, `{"choices":[{"message":{"content":"respuesta"}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"qwen-eval","messages":[{"role":"user","content":"Hola"}]}`))
+	request.Header.Set("Authorization", "Bearer key")
+	request.Header.Set("X-OpenWebUI-User-Id", "owner")
+	request.Header.Set("X-OpenWebUI-User-Role", "admin")
+	request.Header.Set("X-OpenWebUI-Chat-Id", "model-selection-test")
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("unavailable model should be rejected, got status %d and body %q", response.Code, response.Body.String())
+	}
+	if upstreamCalls != 0 {
+		t.Fatalf("unavailable model silently used the principal upstream %d times", upstreamCalls)
+	}
+}
+
+func TestOpenWebUISelectsConfiguredModelThroughSharedSecretary(t *testing.T) {
+	var principalCalls int
+	principal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principalCalls++
+		io.WriteString(w, `{"choices":[{"message":{"content":"respuesta LFM"}}]}`)
+	}))
+	defer principal.Close()
+	var qwenCalls int
+	qwen := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		qwenCalls++
+		if r.Header.Get("Authorization") != "Bearer qwen-secret" {
+			t.Error("Qwen backend credential was not selected")
+		}
+		var request struct {
+			Model    string `json:"model"`
+			Messages []Turn `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if request.Model != "qwen-eval" || request.Messages[0].Content != "shared instructions" {
+			t.Errorf("Qwen did not receive the selected model and shared secretary prompt: %+v", request)
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"respuesta Qwen"}}]}`)
+	}))
+	defer qwen.Close()
+	s := New(principal.URL, "principal-secret", "shared instructions", t.TempDir(), map[int64]bool{7: true})
+	if err := s.RegisterModel("qwen-eval", qwen.URL, "qwen-secret"); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"qwen-eval","messages":[{"role":"user","content":"Buenos días"}]}`))
+	request.Header.Set("Authorization", "Bearer principal-secret")
+	request.Header.Set("X-OpenWebUI-User-Id", "owner")
+	request.Header.Set("X-OpenWebUI-User-Role", "admin")
+	request.Header.Set("X-OpenWebUI-Chat-Id", "qwen-selection-test")
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"model":"qwen-eval"`) || !strings.Contains(response.Body.String(), "respuesta Qwen") {
+		t.Fatalf("Qwen selection response was not returned: %d %q", response.Code, response.Body.String())
+	}
+	if qwenCalls != 1 || principalCalls != 0 {
+		t.Fatalf("selected backend calls: Qwen=%d principal=%d", qwenCalls, principalCalls)
+	}
+
+	modelsRequest := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	modelsRequest.Header.Set("Authorization", "Bearer principal-secret")
+	modelsResponse := httptest.NewRecorder()
+	s.Handler().ServeHTTP(modelsResponse, modelsRequest)
+	if modelsResponse.Code != http.StatusOK || !strings.Contains(modelsResponse.Body.String(), `"id":"main"`) || !strings.Contains(modelsResponse.Body.String(), `"id":"qwen-eval"`) {
+		t.Fatalf("model picker did not advertise both models: %d %q", modelsResponse.Code, modelsResponse.Body.String())
+	}
+}
+
 func TestSharedChatStreamingRendersInteractionBeforeAnswer(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

@@ -1,5 +1,5 @@
 ---
-- name: Run a temporary Qwen3 evaluation instance beside the principal LFM
+- name: Run the Qwen3 evaluation instance beside the principal LFM
   hosts: lab
   become: true
   gather_facts: true
@@ -8,8 +8,6 @@
     qwen_eval_model_path: /srv/ai-lab/llama.cpp/models/Qwen3-4B-Q4_K_M.gguf
     qwen_eval_model_url: https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf
     qwen_eval_model_sha256: 7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5
-    qwen_eval_port: 8184
-    qwen_eval_api_key: local-qwen-eval
 
   pre_tasks:
     - name: Require enough host memory for concurrent inference
@@ -28,6 +26,13 @@
       ansible.builtin.command:
         argv: [systemctl, is-active, llama-cpp-main]
       changed_when: false
+
+    - name: Require a private Qwen evaluation API key
+      ansible.builtin.assert:
+        that:
+          - qwen_eval_api_key | length >= 32
+        fail_msg: Set LAB_LLAMA_QWEN_EVAL_API_KEY in the deployment environment.
+      no_log: true
 
   tasks:
     - name: Ensure pinned model directory exists
@@ -65,7 +70,7 @@
         mode: "0644"
         content: |
           [Unit]
-          Description=Temporary Qwen3-4B CPU evaluation server
+          Description=Qwen3-4B CPU evaluation server
           After=network-online.target llama-cpp-main.service
           Wants=network-online.target
           StartLimitIntervalSec=60
@@ -96,16 +101,22 @@
         daemon_reload: true
       when: qwen_eval_unit.changed
 
+    - name: Restart Qwen after unit or API key changes
+      ansible.builtin.systemd:
+        name: llama-cpp-qwen-eval
+        state: restarted
+      when: qwen_eval_unit.changed
+
     - name: Clear any earlier experimental startup failure counter
       ansible.builtin.command:
         argv: [systemctl, reset-failed, llama-cpp-qwen-eval]
       changed_when: false
 
-    - name: Start the experimental Qwen service without enabling auto-start
+    - name: Enable and start the Qwen service
       ansible.builtin.systemd:
         name: llama-cpp-qwen-eval
         state: started
-        enabled: false
+        enabled: true
 
     - name: Wait for the Qwen model API
       ansible.builtin.uri:
@@ -148,4 +159,4 @@
         msg:
           - "Qwen evaluation API is healthy on loopback port {{ qwen_eval_port }}."
           - "The principal llama-cpp-main service was left running and unchanged."
-          - "The experimental service is running now and will remain disabled on reboot."
+          - "The Qwen service is enabled and will start after reboot."
