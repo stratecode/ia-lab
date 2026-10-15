@@ -66,3 +66,37 @@ func TestExplicitAssignmentAnswerAcceptsNotesAfterFormattingIsStripped(t *testin
 		t.Fatalf("unexpected assignment attribution: %s", answer)
 	}
 }
+
+func TestExplicitAssignmentAnswerExtractsTasksFromOwnerSection(t *testing.T) {
+	const notes = `# Proyectos Fran
+- Enviar la configuración de Active Directory a Minicor antes del viernes.
+- Corregir el XLS de Amplify con error 404 durante la mañana.
+
+# Proyectos Gonzalo
+- Terminar la importación de localizaciones antes de revisar incidencias.`
+	answer, ok := explicitAssignmentAnswer("¿Qué tareas tiene Fran y qué plazo aparece?", notes, nil)
+	if !ok {
+		t.Fatal("expected tasks under a person-specific project heading to be extracted")
+	}
+	for _, expected := range []string{"Fran: Enviar la configuración", "antes del viernes", "Fran: Corregir el XLS de Amplify", "durante la mañana"} {
+		if !strings.Contains(answer, expected) {
+			t.Errorf("answer omitted %q: %s", expected, answer)
+		}
+	}
+	if strings.Contains(answer, "Gonzalo") || strings.Contains(answer, "importación de localizaciones") {
+		t.Fatalf("answer included another owner's task: %s", answer)
+	}
+}
+
+func TestExplicitAssignmentAnswerExtractsOwnerPrefix(t *testing.T) {
+	const notes = `# Próximos Pasos
+- Fran: Subir los procedimientos de inventario durante la mañana.
+- Paula: Enviar las imágenes adaptadas para la web.`
+	answer, ok := explicitAssignmentAnswer("¿Qué debe hacer Fran?", notes, nil)
+	if !ok {
+		t.Fatal("expected an explicit owner prefix to be extracted")
+	}
+	if !strings.Contains(answer, "Fran: Subir los procedimientos de inventario") || strings.Contains(answer, "Paula:") {
+		t.Fatalf("unexpected owner attribution: %s", answer)
+	}
+}

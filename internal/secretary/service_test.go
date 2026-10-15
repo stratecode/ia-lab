@@ -919,6 +919,44 @@ func TestMeetingTaskQuestionUsesExplicitGranolaOwnersWhenRovoHasUnrelatedHits(t 
 	}
 }
 
+func TestMorningTaskQuestionReturnsStructuredOwnerActionsFromGranola(t *testing.T) {
+	const question = "¿Qué tareas se acordaron en las reuniones de esta mañana, separadas por responsable?"
+	const notes = `# Proyectos Fran
+- Enviar la configuración de Active Directory a Minicor antes del viernes.
+- Corregir el XLS de Amplify con error 404 durante la mañana.
+
+# Proyectos Gonzalo
+- Terminar la importación de localizaciones antes de revisar incidencias.`
+	modelCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
+		io.WriteString(w, `{"choices":[{"message":{"content":"respuesta no fundamentada"}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), nil)
+	capabilities := []ReadCapability{
+		{Name: "Granola", Description: "notas", Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{Text: notes, ResultCount: 1, Evidence: []EvidenceRef{{Provider: "Granola", ID: "meeting-1", URL: "https://notes.granola.ai/d/meeting-1"}}}, nil
+		}},
+		{Name: "Rovo", Description: "Jira", Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{}, nil
+		}},
+	}
+
+	answer, outcomes, reason, err := s.answerFromCapabilities(context.Background(), question, question, capabilities, nil, nil, nil, nil)
+	if err != nil || reason != "" || modelCalls != 0 || len(outcomes) != 2 {
+		t.Fatalf("answer=%q outcomes=%+v reason=%q modelCalls=%d err=%v", answer, outcomes, reason, modelCalls, err)
+	}
+	for _, expected := range []string{"Fran: Enviar la configuración", "antes del viernes", "Fran: Corregir el XLS de Amplify", "durante la mañana", "notes.granola.ai/d/meeting-1"} {
+		if !strings.Contains(answer, expected) {
+			t.Errorf("answer omitted %q: %s", expected, answer)
+		}
+	}
+	if !strings.Contains(answer, "Gonzalo: Terminar la importación de localizaciones") {
+		t.Fatalf("answer lost a different owner's assignment or its attribution: %s", answer)
+	}
+}
+
 func TestSourcedAnswerDoesNotMixConversationMemory(t *testing.T) {
 	const unrelated = "Cambia Tu Euro KYC operación bancaria"
 	const source = "Granola: Stonecare, Iris revisa textos y Fran implementa el viernes."
