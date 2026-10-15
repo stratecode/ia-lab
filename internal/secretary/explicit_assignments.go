@@ -21,6 +21,7 @@ var explicitQueryStopWords = map[string]struct{}{
 	"tarea": {}, "tareas": {}, "pendiente": {}, "pendientes": {}, "responsable": {}, "responsables": {},
 	"enero": {}, "febrero": {}, "marzo": {}, "abril": {}, "mayo": {}, "junio": {},
 	"julio": {}, "agosto": {}, "septiembre": {}, "octubre": {}, "noviembre": {}, "diciembre": {},
+	"plazo": {}, "plazos": {}, "fecha": {}, "fechas": {}, "aparece": {}, "aparecen": {}, "mencionaron": {},
 	"asignada": {}, "asignado": {}, "asignadas": {}, "asignados": {}, "compromiso": {}, "compromisos": {},
 	"acordado": {}, "acordados": {}, "acordada": {}, "acordadas": {}, "acordaron": {}, "separado": {}, "separada": {}, "separados": {}, "separadas": {},
 	"enviar": {}, "envie": {}, "envia": {}, "entregar": {}, "revisar": {}, "revision": {}, "hacer": {},
@@ -28,7 +29,6 @@ var explicitQueryStopWords = map[string]struct{}{
 	"segun": {}, "reunion": {}, "reuniones": {}, "hoy": {}, "ayer": {}, "esta": {}, "manana": {}, "para": {},
 	"por": {}, "con": {}, "las": {}, "los": {}, "una": {}, "del": {}, "desde": {}, "de": {}, "el": {},
 	"la": {}, "y": {}, "o": {}, "a": {}, "me": {}, "mi": {}, "mis": {}, "yo": {}, "lo": {}, "dejar": {},
-	"web": {}, "lista": {},
 }
 
 type explicitAction struct {
@@ -77,6 +77,7 @@ func explicitAssignmentAnswer(question, source string, evidence []EvidenceRef) (
 		}
 	}
 	var selected []explicitAction
+	var ownerFallback []explicitAction
 	for _, action := range actions {
 		ownerRequested := false
 		for _, owner := range action.owners {
@@ -93,9 +94,23 @@ func explicitAssignmentAnswer(question, source string, evidence []EvidenceRef) (
 				break
 			}
 		}
-		if ownerRequested || termMatched || len(queryWords) == 0 && !hasOwnerFilter {
+		if hasOwnerFilter && len(queryWords) == 0 {
+			if ownerRequested {
+				selected = append(selected, action)
+			}
+		} else if hasOwnerFilter {
+			if ownerRequested {
+				ownerFallback = append(ownerFallback, action)
+			}
+			if termMatched {
+				selected = append(selected, action)
+			}
+		} else if termMatched || len(queryWords) == 0 {
 			selected = append(selected, action)
 		}
+	}
+	if len(selected) == 0 && hasOwnerFilter {
+		selected = ownerFallback
 	}
 	if len(selected) == 0 {
 		return "", false

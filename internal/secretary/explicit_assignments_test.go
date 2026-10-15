@@ -161,3 +161,24 @@ func TestExplicitAssignmentAnswerOwnerFilterExcludesOtherOwnersMatchingDateTerms
 		t.Fatalf("answer leaked another owner's task because it shared the requested date: %s", answer)
 	}
 }
+
+func TestExplicitAssignmentAnswerUsesProjectTermsToNarrowOwnerActions(t *testing.T) {
+	const notes = `# Proyectos Fran
+- Minicor: preparar configuración de Active Directory.
+- SiteWatchman: corregir la regla de descarga XLS.
+
+# Próximos Pasos
+- Enviar correos de configuración de Active Directory a Minicor.
+- Corregir la regla XLS de SiteWatchman antes del viernes.
+- Subir inventario de procedimientos en SiteWatchman durante la mañana.`
+	answer, ok := explicitAssignmentAnswer("Según la reunión del 13 de octubre, ¿qué debía enviar Fran a la responsable de seguridad de Minicor?", notes, nil)
+	if !ok {
+		t.Fatal("expected the Minicor assignment to be extracted")
+	}
+	if !strings.Contains(answer, "Enviar correos de configuración") || !strings.Contains(answer, "Minicor") {
+		t.Fatalf("answer omitted the requested Minicor action: %s", answer)
+	}
+	if strings.Contains(answer, "SiteWatchman") {
+		t.Fatalf("answer included unrelated SiteWatchman actions: %s", answer)
+	}
+}
