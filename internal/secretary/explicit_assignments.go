@@ -76,7 +76,13 @@ func explicitAssignmentAnswer(question, source string, evidence []EvidenceRef) (
 			queryWords = append(queryWords, word)
 		}
 	}
+	type scoredAction struct {
+		action explicitAction
+		score  int
+	}
 	var selected []explicitAction
+	var scored []scoredAction
+	bestScore := 0
 	var ownerFallback []explicitAction
 	for _, action := range actions {
 		ownerRequested := false
@@ -86,12 +92,11 @@ func explicitAssignmentAnswer(question, source string, evidence []EvidenceRef) (
 				break
 			}
 		}
-		termMatched := false
+		matchScore := 0
 		text := normalizedIntentText(action.title)
 		for _, word := range queryWords {
 			if strings.Contains(text, word) {
-				termMatched = true
-				break
+				matchScore++
 			}
 		}
 		if hasOwnerFilter && len(queryWords) == 0 {
@@ -102,12 +107,25 @@ func explicitAssignmentAnswer(question, source string, evidence []EvidenceRef) (
 			if ownerRequested {
 				ownerFallback = append(ownerFallback, action)
 			}
-			if termMatched {
-				selected = append(selected, action)
-			}
-		} else if termMatched || len(queryWords) == 0 {
-			selected = append(selected, action)
 		}
+		if matchScore > 0 {
+			if matchScore > bestScore {
+				bestScore = matchScore
+				scored = scored[:0]
+			}
+			if matchScore == bestScore {
+				scored = append(scored, scoredAction{action: action, score: matchScore})
+			}
+		}
+	}
+	if bestScore > 0 {
+		for _, candidate := range scored {
+			if candidate.score == bestScore {
+				selected = append(selected, candidate.action)
+			}
+		}
+	} else if !hasOwnerFilter && len(queryWords) == 0 {
+		selected = actions
 	}
 	if len(selected) == 0 && hasOwnerFilter {
 		selected = ownerFallback

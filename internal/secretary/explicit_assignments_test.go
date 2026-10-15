@@ -207,7 +207,8 @@ func TestExplicitAssignmentAnswerExtractsUploadQuestionWithDeadline(t *testing.T
 
 # Próximos Pasos
 - Fran: Subir inventario de procedimientos en SiteWatchman.
-	Unos 15-16 procedimientos recibidos el viernes, objetivo dejarlo listo durante la mañana.`
+	Unos 15-16 procedimientos recibidos el viernes, objetivo dejarlo listo durante la mañana.
+- Fran: Arreglar regla de Amplify para descarga de ficheros XLS en SiteWatchman.`
 	answer, ok := explicitAssignmentAnswer("Según Granola, ¿qué tenía que subir Fran a SiteWatchman el 13 de octubre y para cuándo?", notes, nil)
 	if !ok {
 		t.Fatal("expected the upload task question to use structured assignments")
@@ -217,7 +218,9 @@ func TestExplicitAssignmentAnswerExtractsUploadQuestionWithDeadline(t *testing.T
 			t.Errorf("structured answer omitted %q: %s", expected, answer)
 		}
 	}
-	if strings.Contains(answer, "incidencias sin ubicación") {
-		t.Fatalf("structured answer included an unrelated task: %s", answer)
+	for _, unrelated := range []string{"incidencias sin ubicación", "Arreglar regla de Amplify"} {
+		if strings.Contains(answer, unrelated) {
+			t.Fatalf("structured answer included unrelated task %q: %s", unrelated, answer)
+		}
 	}
 }
