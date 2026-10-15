@@ -190,7 +190,7 @@ func (c *Connectors) session(ctx context.Context, config OAuthConfig) (*mcpSessi
 	return s, err
 }
 
-var readTools = map[string]bool{"getAccessibleAtlassianResources": true, "searchJiraIssuesUsingJql": true, "search": true, "list_meetings": true, "get_meetings": true}
+var readTools = map[string]bool{"getAccessibleAtlassianResources": true, "searchJiraIssuesUsingJql": true, "getJiraIssue": true, "search": true, "list_meetings": true, "get_meetings": true, "query_granola_meetings": true}
 
 func (c *Connectors) tool(ctx context.Context, config OAuthConfig, name string, args map[string]any) (json.RawMessage, error) {
 	if !readTools[name] {
@@ -340,13 +340,41 @@ func (c *Connectors) RovoResult(ctx context.Context, query string) (CapabilityRe
 		}
 	}
 	raw, err := s.callTool(ctx, "search", map[string]any{
-		"cloudId": cloud, "query": query, "targetApp": "ALL", "mode": "STANDARD", "limit": 10,
+		"cloudId": cloud, "query": query, "targetApp": "JIRA", "mode": "STANDARD", "limit": 10,
 	})
 	if err != nil {
 		return CapabilityResult{}, err
 	}
 	if rovoHasNoResults(raw) {
 		return CapabilityResult{}, nil
+	}
+	evidence := parseRovoEvidence(raw)
+	verified := make([]string, 0, 5)
+	verifiedEvidence := make([]EvidenceRef, 0, 5)
+	for _, candidate := range evidence {
+		if !jiraIssueKey.MatchString(candidate.ID) || len(verified) == 5 {
+			continue
+		}
+		issueRaw, err := s.callTool(ctx, "getJiraIssue", map[string]any{
+			"cloudId": cloud, "issueIdOrKey": candidate.ID,
+			"fields": []string{"summary", "status", "assignee", "duedate", "updated", "project"},
+			"updateHistory": false,
+		})
+		if err != nil {
+			continue
+		}
+		line, issueEvidence, ok := parseJiraIssueEvidence(issueRaw, candidate)
+		if !ok {
+			continue
+		}
+		verified = append(verified, line)
+		verifiedEvidence = append(verifiedEvidence, issueEvidence)
+	}
+	if len(verified) > 0 {
+		return CapabilityResult{
+			Text:        "Jira · incidencias verificadas en la consulta actual:\n" + strings.Join(verified, "\n"),
+			ResultCount: len(verified), Evidence: verifiedEvidence, DirectAnswer: true,
+		}, nil
 	}
 	text := strings.TrimSpace(string(raw))
 	if len(text) > 12000 {
@@ -355,12 +383,78 @@ func (c *Connectors) RovoResult(ctx context.Context, query string) (CapabilityRe
 	if text == "" || text == `""` {
 		return CapabilityResult{}, nil
 	}
-	evidence := parseRovoEvidence(raw)
 	count := len(evidence)
 	if count == 0 {
 		count = 1
 	}
-	return CapabilityResult{Text: "Atlassian Rovo · resultados de Jira y Confluence:\n" + text, ResultCount: count, Evidence: evidence}, nil
+	return CapabilityResult{Text: "Rovo · resultados de búsqueda en Jira (sin verificación de campos):\n" + text, ResultCount: count, Evidence: evidence}, nil
+}
+
+var jiraIssueKey = regexp.MustCompile(`^[A-Z][A-Z0-9]*-[0-9]+$`)
+
+func parseJiraIssueEvidence(raw json.RawMessage, candidate EvidenceRef) (string, EvidenceRef, bool) {
+	var root any
+	if json.Unmarshal(raw, &root) != nil {
+		return "", EvidenceRef{}, false
+	}
+	var issue map[string]any
+	var find func(any)
+	find = func(value any) {
+		if issue != nil {
+			return
+		}
+		switch node := value.(type) {
+		case map[string]any:
+			if key, _ := node["key"].(string); key == candidate.ID {
+				if _, ok := node["fields"].(map[string]any); ok {
+					issue = node
+					return
+				}
+			}
+			for _, child := range node {
+				find(child)
+			}
+		case []any:
+			for _, child := range node {
+				find(child)
+			}
+		}
+	}
+	find(root)
+	if issue == nil {
+		return "", EvidenceRef{}, false
+	}
+	fields, _ := issue["fields"].(map[string]any)
+	readName := func(value any, field string) string {
+		row, _ := value.(map[string]any)
+		name, _ := row[field].(string)
+		return strings.TrimSpace(name)
+	}
+	summary, _ := fields["summary"].(string)
+	status := readName(fields["status"], "name")
+	assignee := readName(fields["assignee"], "displayName")
+	if assignee == "" {
+		assignee = readName(fields["assignee"], "name")
+	}
+	due, _ := fields["duedate"].(string)
+	updated, _ := fields["updated"].(string)
+	if strings.TrimSpace(summary) == "" || status == "" {
+		return "", EvidenceRef{}, false
+	}
+	if assignee == "" {
+		assignee = "sin asignar"
+	}
+	if strings.TrimSpace(due) == "" {
+		due = "sin vencimiento"
+	}
+	line := fmt.Sprintf("[%s](%s) %s · Estado: %s · Responsable: %s · Vencimiento: %s", candidate.ID, candidate.URL, short(summary), short(status), short(assignee), short(due))
+	if updated != "" {
+		line += " · Actualizada: " + short(updated)
+	}
+	candidate.Provider = "Jira"
+	candidate.Title = summary
+	candidate.RetrievedAt = time.Now()
+	return line, candidate, true
 }
 
 func parseRovoEvidence(raw json.RawMessage) []EvidenceRef {
@@ -378,7 +472,11 @@ func parseRovoEvidence(raw json.RawMessage) []EvidenceRef {
 				continue
 			}
 			switch strings.ToLower(key) {
-			case "id", "issuekey", "pageid", "contentid", "key":
+			case "key", "issuekey":
+				if jiraIssueKey.MatchString(strings.TrimSpace(text)) {
+					ref.ID = strings.TrimSpace(text)
+				}
+			case "id", "pageid", "contentid":
 				if ref.ID == "" {
 					ref.ID = strings.TrimSpace(text)
 				}
@@ -532,6 +630,75 @@ func rovoHasNoResults(raw json.RawMessage) bool {
 func (c *Connectors) Granola(ctx context.Context) (string, error) {
 	result, err := c.GranolaResult(ctx)
 	return result.Text, err
+}
+
+var granolaCitation = regexp.MustCompile(`\[\[(\d+)\]\]\((https://notes\.granola\.ai/d/[^)]+)\)`)
+
+func (c *Connectors) GranolaQueryResult(ctx context.Context, query string) (CapabilityResult, error) {
+	query = strings.TrimSpace(query)
+	if query == "" || len([]rune(query)) > 2000 {
+		return CapabilityResult{}, errors.New("Granola query length rejected")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.Config.Granola.AccessToken == "" {
+		return CapabilityResult{}, errors.New("Granola no conectado")
+	}
+	if c.Config.Granola.ServerURL != "https://mcp.granola.ai/mcp" && !c.allowTestHTTP {
+		return CapabilityResult{}, errors.New("Granola credential destination rejected")
+	}
+	if err := c.access(ctx, &c.Config.Granola); err != nil {
+		return CapabilityResult{}, err
+	}
+	s, err := c.session(ctx, c.Config.Granola)
+	if err != nil {
+		return CapabilityResult{}, err
+	}
+	raw, err := s.rpc(ctx, "tools/list", map[string]any{}, false)
+	if err != nil {
+		return CapabilityResult{}, err
+	}
+	var tools struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	if json.Unmarshal(raw, &tools) != nil {
+		return CapabilityResult{}, errors.New("unexpected Granola tools schema")
+	}
+	queryAvailable := false
+	for _, tool := range tools.Tools {
+		if tool.Name == "query_granola_meetings" {
+			queryAvailable = true
+			break
+		}
+	}
+	if !queryAvailable {
+		return CapabilityResult{}, errors.New("Granola query tool unavailable")
+	}
+	raw, err = s.callTool(ctx, "query_granola_meetings", map[string]any{"query": query})
+	if err != nil {
+		return CapabilityResult{}, err
+	}
+	var text string
+	if json.Unmarshal(raw, &text) != nil {
+		return CapabilityResult{}, errors.New("unexpected Granola query response")
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return CapabilityResult{}, nil
+	}
+	evidence := make([]EvidenceRef, 0, 3)
+	seen := map[string]bool{}
+	for _, match := range granolaCitation.FindAllStringSubmatch(text, 10) {
+		if len(match) != 3 || !validEvidenceURL(match[2]) || seen[match[2]] {
+			continue
+		}
+		seen[match[2]] = true
+		id := strings.TrimPrefix(match[2], "https://notes.granola.ai/d/")
+		evidence = append(evidence, EvidenceRef{Provider: "Granola", ID: id, URL: match[2], RetrievedAt: time.Now()})
+	}
+	return CapabilityResult{Text: text, ResultCount: len(evidence), Evidence: evidence, DirectAnswer: true}, nil
 }
 
 func (c *Connectors) GranolaResult(ctx context.Context) (CapabilityResult, error) {

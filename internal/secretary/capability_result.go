@@ -11,6 +11,7 @@ type CapabilityResult struct {
 	Text        string
 	ResultCount int
 	Evidence    []EvidenceRef
+	DirectAnswer bool
 }
 
 type EvidenceRef struct {
@@ -34,4 +35,9 @@ type CapabilityOutcome struct {
 type StructuredSourceReader interface {
 	GranolaResult(context.Context) (CapabilityResult, error)
 	RovoResult(context.Context, string) (CapabilityResult, error)
+}
+
+// GranolaQueryReader exposes query-aware retrieval when the provider supports it.
+type GranolaQueryReader interface {
+	GranolaQueryResult(context.Context, string) (CapabilityResult, error)
 }

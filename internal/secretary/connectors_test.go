@@ -113,6 +113,54 @@ func TestGranolaMissingConnectionIsAnErrorNotSourceContent(t *testing.T) {
 	}
 }
 
+func TestGranolaQueryPassesQuestionAndPreservesCitation(t *testing.T) {
+	const query = "¿Qué decisiones y responsables aparecen en Stonecare el 14 de octubre?"
+	var gotQuery string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		switch req.Method {
+		case "initialize":
+			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`)
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"query_granola_meetings","inputSchema":{"type":"object","required":["query"]}}]}}`)
+		case "tools/call":
+			if req.Params.Name != "query_granola_meetings" {
+				t.Errorf("unexpected Granola tool %q", req.Params.Name)
+			}
+			gotQuery, _ = req.Params.Arguments["query"].(string)
+			text := "Iris revisa textos y Fran implementa los cambios. [[1]](https://notes.granola.ai/d/meeting-1)"
+			b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": text}}}})
+			w.Write(b)
+		default:
+			t.Errorf("unexpected MCP method %q", req.Method)
+		}
+	}))
+	defer server.Close()
+	c := &Connectors{Config: ConnectorConfig{Granola: OAuthConfig{ServerURL: server.URL, AccessToken: "secret"}}, Client: server.Client(), allowTestHTTP: true}
+	result, err := c.GranolaQueryResult(context.Background(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotQuery != query || !result.DirectAnswer || !strings.Contains(result.Text, "Iris revisa") {
+		t.Fatalf("query=%q result=%+v", gotQuery, result)
+	}
+	if result.ResultCount != 1 || len(result.Evidence) != 1 || result.Evidence[0].ID != "meeting-1" || result.Evidence[0].URL != "https://notes.granola.ai/d/meeting-1" {
+		t.Fatalf("citation not preserved as evidence: %+v", result)
+	}
+}
+
 func TestCredentialsDoNotCrossProviderBoundary(t *testing.T) {
 	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: "https://mcp.granola.ai/mcp", AccessToken: "jira-secret"}}}
 	if _, err := c.Jira(context.Background()); err == nil {
@@ -123,6 +171,7 @@ func TestCredentialsDoNotCrossProviderBoundary(t *testing.T) {
 func TestRovoSearchPassesNaturalLanguageToReadOnlyMCP(t *testing.T) {
 	var gotName string
 	var gotArgs map[string]any
+	var gotSearchArgs map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ID     int    `json:"id"`
@@ -142,7 +191,20 @@ func TestRovoSearchPassesNaturalLanguageToReadOnlyMCP(t *testing.T) {
 			w.WriteHeader(http.StatusAccepted)
 		case "tools/call":
 			gotName, gotArgs = req.Params.Name, req.Params.Arguments
-			io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"results\":[{\"key\":\"STRAT-42\",\"title\":\"Plan de lanzamiento\",\"snippet\":\"Revisar tareas pendientes\",\"url\":\"https://stratecode.atlassian.net/browse/STRAT-42\"}]}"}]}}`)
+			if req.Params.Name == "search" {
+				gotSearchArgs = req.Params.Arguments
+			}
+			text := `{"results":[{"key":"STRAT-42","title":"Plan de lanzamiento","snippet":"Revisar tareas pendientes","url":"https://stratecode.atlassian.net/browse/STRAT-42"}]}`
+			if req.Params.Name == "getJiraIssue" {
+				if req.Params.Arguments["issueIdOrKey"] != "STRAT-42" || req.Params.Arguments["updateHistory"] != false {
+					t.Errorf("unexpected exact Jira lookup arguments: %#v", req.Params.Arguments)
+				}
+				text = `{"key":"STRAT-42","fields":{"summary":"Plan de lanzamiento","status":{"name":"En curso"},"assignee":{"displayName":"Ana Pérez"},"duedate":null}}`
+			} else if req.Params.Name != "search" {
+				t.Errorf("unexpected Jira tool %q", req.Params.Name)
+			}
+			b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": text}}}})
+			w.Write(b)
 		default:
 			t.Errorf("unexpected MCP method %q", req.Method)
 		}
@@ -155,11 +217,14 @@ func TestRovoSearchPassesNaturalLanguageToReadOnlyMCP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotName != "search" || gotArgs["cloudId"] != "cloud-1" || gotArgs["query"] != question || gotArgs["targetApp"] != "ALL" || gotArgs["mode"] != "STANDARD" || gotArgs["limit"] != float64(10) {
+	if gotName != "getJiraIssue" || gotArgs["cloudId"] != "cloud-1" || gotArgs["issueIdOrKey"] != "STRAT-42" || gotArgs["updateHistory"] != false {
 		t.Fatalf("unexpected Rovo call %q %#v", gotName, gotArgs)
 	}
-	if !strings.Contains(result.Text, "Plan de lanzamiento") || !strings.Contains(result.Text, "Revisar tareas pendientes") {
-		t.Fatalf("Rovo results were not preserved for synthesis: %q", result.Text)
+	if gotSearchArgs["query"] != question || gotSearchArgs["targetApp"] != "JIRA" || gotSearchArgs["limit"] != float64(10) {
+		t.Fatalf("Jira search was not scoped to relevant issue results: %#v", gotSearchArgs)
+	}
+	if !strings.Contains(result.Text, "Plan de lanzamiento") || !strings.Contains(result.Text, "En curso") || !strings.Contains(result.Text, "Ana Pérez") || !strings.Contains(result.Text, "sin vencimiento") {
+		t.Fatalf("verified Jira fields were not preserved: %q", result.Text)
 	}
 	if result.ResultCount != 1 || len(result.Evidence) != 1 || result.Evidence[0].ID != "STRAT-42" || result.Evidence[0].URL != "https://stratecode.atlassian.net/browse/STRAT-42" {
 		t.Fatalf("Rovo evidence was not sourced from the provider response: %+v", result)

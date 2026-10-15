@@ -29,3 +29,10 @@ func TestMeetingImperativeSummaryIsRecognizedLocally(t *testing.T) {
 		t.Fatalf("localIntent(summary imperative) = %q, want %q", got, intentCapability)
 	}
 }
+
+func TestNamedMeetingFollowUpIsRecognizedAsGranolaIntent(t *testing.T) {
+	question := "¿Quién revisa los textos en español e inglés de Stonecare según la reunión del 14 de octubre?"
+	if got := localIntent(question); got != intentCapability {
+		t.Fatalf("localIntent(%q) = %q, want %q", question, got, intentCapability)
+	}
+}

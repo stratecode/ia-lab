@@ -749,6 +749,63 @@ func TestNaturalLanguageMeetingTaskQueriesGranolaAndRovoAndSummarizes(t *testing
 	}
 }
 
+type queryAwareGranolaSource struct {
+	intentSource
+	query        string
+	queryCalls   int
+	queryContent string
+}
+
+func (s *queryAwareGranolaSource) GranolaQueryResult(_ context.Context, query string) (CapabilityResult, error) {
+	s.queryCalls++
+	s.query = query
+	return CapabilityResult{Text: s.queryContent, ResultCount: 1}, nil
+}
+
+func TestGranolaCapabilityPassesQuestionToQueryAwareConnector(t *testing.T) {
+	const question = "¿Quién revisa los textos en español e inglés de Stonecare según la reunión del 14 de octubre?"
+	source := &queryAwareGranolaSource{queryContent: "Iris revisa textos; Fran implementa."}
+	s := &Service{Sources: source}
+	capabilities := s.capabilities()
+	if len(capabilities) == 0 {
+		t.Fatal("Granola capability was not registered")
+	}
+	result, err := capabilities[0].Read(context.Background(), question)
+	if err != nil || result.Text != source.queryContent || source.queryCalls != 1 || source.query != question || source.granolaCalls != 0 {
+		t.Fatalf("result=%+v query=%q queryCalls=%d legacyCalls=%d err=%v", result, source.query, source.queryCalls, source.granolaCalls, err)
+	}
+}
+
+func TestSourcedAnswerDoesNotMixConversationMemory(t *testing.T) {
+	const unrelated = "Cambia Tu Euro KYC operación bancaria"
+	const source = "Granola: Stonecare, Iris revisa textos y Fran implementa el viernes."
+	var gotPrompt string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []Turn `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		for _, message := range body.Messages {
+			gotPrompt += message.Content + "\n"
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"Iris revisa los textos; Fran implementa los cambios para el viernes."}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), nil)
+	capability := ReadCapability{Name: "Granola", Description: "notas", Read: func(context.Context, string) (CapabilityResult, error) {
+		return CapabilityResult{Text: source, ResultCount: 1}, nil
+	}}
+	_, _, _, err := s.answerFromCapabilities(context.Background(), "¿Quién revisa Stonecare?", []ReadCapability{capability}, []conversationMemory{{User: "qué pasó", Assistant: unrelated}}, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotPrompt, source) || strings.Contains(gotPrompt, unrelated) {
+		t.Fatalf("sourced synthesis included unrelated memory or omitted source: %q", gotPrompt)
+	}
+}
+
 func TestGranolaCapabilityCarriesToNaturalTaskFollowUp(t *testing.T) {
 	const firstQuestion = "Hola, dona. Oye, ¿qué tareas tengo pendientes de hacer según las reuniones que tenéis?"
 	const followUp = "Hola, dona. Oye, ¿qué cosas tenemos que hacer para hoy?"

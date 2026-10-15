@@ -36,6 +36,7 @@ func TestCapabilitiesForIntentSelectsExpectedSources(t *testing.T) {
 		want  []string
 	}{
 		{name: "meeting summary", query: "Dame el resumen de las reuniones de hoy", want: []string{"Granola"}},
+		{name: "meeting owner question", query: "¿Quién revisa los textos en español e inglés de Stonecare según la reunión del 14 de octubre?", want: []string{"Granola"}},
 		{name: "work task", query: "¿Qué tareas tengo pendientes?", want: []string{"Rovo"}},
 		{name: "meeting follow-up task", query: "¿Qué tareas debería hacer según las reuniones de esta mañana?", want: []string{"Granola", "Rovo"}},
 	}
