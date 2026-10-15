@@ -774,9 +774,14 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question, readQuer
 		answer := strings.TrimSpace(directAnswer.Text)
 		return answer + capabilityCoverageNote(emptyCapabilities, failures), outcomes, "", nil
 	}
-	if successes == 1 && len(successfulResults) == 1 {
-		if answer, ok := explicitAssignmentAnswer(question, successfulResults[0].Text, successfulResults[0].Evidence); ok {
-			return answer + capabilityCoverageNote(emptyCapabilities, failures), outcomes, "", nil
+	if explicitMeetingAnchor(question) && !hasExplicitRovoReference(question) {
+		for i, result := range successfulResults {
+			if i >= len(successfulCapabilities) || !strings.EqualFold(successfulCapabilities[i], "Granola") {
+				continue
+			}
+			if answer, ok := explicitAssignmentAnswer(question, result.Text, result.Evidence); ok {
+				return answer + capabilityCoverageNote(emptyCapabilities, failures), outcomes, "", nil
+			}
 		}
 	}
 	var approvedMemories []conversationMemory

@@ -878,6 +878,47 @@ func TestEmptySecondarySourceIsNotPresentedAsEvidence(t *testing.T) {
 	}
 }
 
+func TestMeetingTaskQuestionUsesExplicitGranolaOwnersWhenRovoHasUnrelatedHits(t *testing.T) {
+	const question = "En la reunión de Stonecare del 14 de octubre, dime quién debía enviar las imágenes y qué tareas tenía Fran para dejar la web lista."
+	const notes = `# Próximos Pasos
+- **Enviar imágenes adaptadas a Fran para la home y profesionales** (Paula, Alba)
+  Incluir las imágenes del shooting organizadas por página.
+- **Revisar textos de la página en inglés y castellano** (Iris)
+  Confirmar que no falta contenido.
+- **Aplicar cambios acordados y tener la web lista para el viernes** (Fran)
+  Renombrar shop y subir imágenes definitivas.`
+	modelCalls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
+		io.WriteString(w, `{"choices":[{"message":{"content":"respuesta no fundamentada"}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), nil)
+	capabilities := []ReadCapability{
+		{Name: "Granola", Description: "notas", Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{Text: notes, ResultCount: 1, Evidence: []EvidenceRef{{Provider: "Granola", URL: "https://notes.granola.ai/d/meeting-1"}}}, nil
+		}},
+		{Name: "Rovo", Description: "Jira", Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{Text: "Rovo: resultados de Confluence sin relación con Stonecare", ResultCount: 2}, nil
+		}},
+	}
+
+	answer, outcomes, reason, err := s.answerFromCapabilities(context.Background(), question, question, capabilities, nil, nil, nil, nil)
+	if err != nil || reason != "" || modelCalls != 0 || len(outcomes) != 2 {
+		t.Fatalf("answer=%q outcomes=%+v reason=%q modelCalls=%d err=%v", answer, outcomes, reason, modelCalls, err)
+	}
+	for _, expected := range []string{"Paula, Alba: Enviar imágenes", "Fran: Aplicar cambios", "nota de Granola"} {
+		if !strings.Contains(answer, expected) {
+			t.Errorf("answer omitted %q: %s", expected, answer)
+		}
+	}
+	for _, wrong := range []string{"Fran: Enviar imágenes", "Iris:", "Rovo:"} {
+		if strings.Contains(answer, wrong) {
+			t.Errorf("answer included unsupported detail %q: %s", wrong, answer)
+		}
+	}
+}
+
 func TestSourcedAnswerDoesNotMixConversationMemory(t *testing.T) {
 	const unrelated = "Cambia Tu Euro KYC operación bancaria"
 	const source = "Granola: Stonecare, Iris revisa textos y Fran implementa el viernes."
