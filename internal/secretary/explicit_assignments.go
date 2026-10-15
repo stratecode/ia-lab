@@ -40,7 +40,7 @@ type explicitAction struct {
 
 func explicitAssignmentAnswer(question, source string, evidence []EvidenceRef) (string, bool) {
 	query := normalizedIntentText(question)
-	if !containsAny(query, "tarea", "pendiente", "responsable", "asignad", "quien", "compromiso", "enviar", "entregar", "revis", "hacer", "debia", "debe") {
+	if !containsAny(query, "tarea", "pendiente", "responsable", "asignad", "quien", "compromiso", "enviar", "entregar", "subir", "sube", "subio", "revis", "hacer", "debia", "debe") {
 		return "", false
 	}
 	actions := parseExplicitActions(source)

@@ -200,3 +200,24 @@ func TestExplicitAssignmentAnswerReturnsAllOwnersWhenAskedToGroupActions(t *test
 		}
 	}
 }
+
+func TestExplicitAssignmentAnswerExtractsUploadQuestionWithDeadline(t *testing.T) {
+	const notes = `# Proyectos Fran
+- SiteWatchman: subir unos 15-16 procedimientos de inventario recibidos el viernes.
+
+# Próximos Pasos
+- Fran: Subir inventario de procedimientos en SiteWatchman.
+	Unos 15-16 procedimientos recibidos el viernes, objetivo dejarlo listo durante la mañana.`
+	answer, ok := explicitAssignmentAnswer("Según Granola, ¿qué tenía que subir Fran a SiteWatchman el 13 de octubre y para cuándo?", notes, nil)
+	if !ok {
+		t.Fatal("expected the upload task question to use structured assignments")
+	}
+	for _, expected := range []string{"Fran: Subir inventario", "durante la mañana"} {
+		if !strings.Contains(answer, expected) {
+			t.Errorf("structured answer omitted %q: %s", expected, answer)
+		}
+	}
+	if strings.Contains(answer, "incidencias sin ubicación") {
+		t.Fatalf("structured answer included an unrelated task: %s", answer)
+	}
+}
