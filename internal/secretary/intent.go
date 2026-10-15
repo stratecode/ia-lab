@@ -27,6 +27,9 @@ func localIntent(text string) secretaryIntent {
 	if !hasMeeting && containsAny(query, "que hablamos", "que comentamos", "que acordamos") {
 		return intentMemory
 	}
+	if containsAny(query, "granola") {
+		return intentCapability
+	}
 	if hasMeeting && containsAny(query, "pendiente", "accion", "decision", "resum", "recuerd", "ultima", "reciente", "acordamos", "hablamos", "compromiso", "tarea", "seguimiento", "ejecut", "realizar", "llevar a cabo", "que salio", "que se dijo", "quien", "responsable", "revisa", "quedo", "quedaron", "hacer", "envia", "mandar", "compart", "prepar", "crear", "investig", "implementar", "terminar", "coordinar") {
 		return intentCapability
 	}

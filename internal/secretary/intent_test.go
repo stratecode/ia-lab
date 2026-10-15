@@ -37,6 +37,13 @@ func TestNamedMeetingFollowUpIsRecognizedAsGranolaIntent(t *testing.T) {
 	}
 }
 
+func TestExplicitGranolaTaskQuestionRoutesWithoutVerbKeyword(t *testing.T) {
+	question := "Según Granola, ¿qué tenía que subir Fran a SiteWatchman el 13 de octubre y para cuándo?"
+	if got := localIntent(question); got != intentCapability {
+		t.Fatalf("localIntent(%q) = %q, want %q", question, got, intentCapability)
+	}
+}
+
 func TestMeetingActionQuestionWithoutSourceNameRoutesToCapability(t *testing.T) {
 	question := "En la reunión de Stonecare del 14 de octubre, ¿qué tenía que enviar Paula y Alba y para qué?"
 	if got := localIntent(question); got != intentCapability {
