@@ -754,6 +754,9 @@ func (s *Service) answerWithContext(ctx context.Context, question string, histor
 	if memoryOnly {
 		prompt += "\n\nEl usuario pregunta por conversaciones anteriores. Responde solo con el contexto recuperado. Si no contiene la respuesta, dilo; no inventes ni completes recuerdos. Indica la fecha del intercambio cuando esté disponible."
 	}
+	if containsAny(normalizedIntentText(question), "tarea", "asignad", "responsable", "compromiso", "pendiente") {
+		prompt += "\n\nCuando pregunten por responsables o tareas, incluye cada persona mencionada y todas sus acciones explícitas. Conserva las acciones compartidas y nombra a todas las personas asignadas; separa las tareas que corresponden al usuario de las del resto. Distingue asignaciones explícitas de propuestas o tareas sin responsable. No reduzcas una lista a ejemplos si la fuente contiene más elementos."
+	}
 	if len(memories) > 0 {
 		prompt += "\n\n" + formatMemoryContext(memories)
 	}

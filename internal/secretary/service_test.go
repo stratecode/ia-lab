@@ -825,6 +825,33 @@ func TestSourcedAnswerDoesNotMixConversationMemory(t *testing.T) {
 	}
 }
 
+func TestTaskSynthesisPromptPreservesEveryExplicitAssignment(t *testing.T) {
+	var systemPrompt string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []Turn `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Messages) > 0 {
+			systemPrompt = body.Messages[0].Content
+		}
+		io.WriteString(w, `{"choices":[{"message":{"content":"resumen"}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), nil)
+	_, err := s.answerWithContext(context.Background(), "¿Qué tareas quedaron asignadas a cada persona?", nil, nil, false, nil, "Granola: Paula y Alba enviarán imágenes; Iris revisará los textos.", "Granola")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, phrase := range []string{"cada persona mencionada", "acciones compartidas", "tareas que corresponden al usuario"} {
+		if !strings.Contains(strings.ToLower(systemPrompt), phrase) {
+			t.Errorf("task synthesis prompt omitted %q: %s", phrase, systemPrompt)
+		}
+	}
+}
+
 func TestGranolaCapabilityCarriesToNaturalTaskFollowUp(t *testing.T) {
 	const firstQuestion = "Hola, dona. Oye, ¿qué tareas tengo pendientes de hacer según las reuniones que tenéis?"
 	const followUp = "Hola, dona. Oye, ¿qué cosas tenemos que hacer para hoy?"
