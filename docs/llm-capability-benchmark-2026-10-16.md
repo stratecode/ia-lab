@@ -3,9 +3,9 @@
 ## Executive decision
 
 Keep `main` (LFM2.5 1.2B) for low-latency requests and `qwen-eval` (Qwen3 4B)
-as the stronger general-purpose model. This is the best two-model operating
-pair in this sample: `main` completed the ten cases in 38.4 seconds total,
-while Qwen3 scored 34/40 and completed them in 172.8 seconds.
+as the higher-quality general-purpose model. This is the best two-model
+operating pair in this sample: `main` completed the ten cases in 38.4 seconds
+total, while Qwen3 scored 34/40 and completed them in 172.8 seconds.
 
 Qwen3 and LFM2.5 2.6B tied at 34/40. Qwen3 is the more practical second model:
 it was about 2.8 times faster across the suite, handled the ambiguous-person
@@ -24,7 +24,7 @@ Open WebUI were not changed.
 | Model alias | Manual quality | Median end-to-end latency | Total for 10 cases | Median generated throughput | Generated tokens per case, avg. | Quality points / elapsed second |
 |---|---:|---:|---:|---:|---:|---:|
 | `main` — LFM2.5 1.2B | 19/40 (47.5%) | 2.71 s | 38.4 s | 47.03 tok/s | 138 | 0.49 |
-| `qwen-eval` — Qwen3 4B | **34/40 (85%)** | 14.37 s | 172.8 s | 12.92 tok/s | 145 | **0.20** |
+| `qwen-eval` — Qwen3 4B | **34/40 (85%)** | 14.37 s | 172.8 s | 12.92 tok/s | 145 | 0.20 |
 | `lfm-2.6b` — LFM2.5 2.6B | **34/40 (85%)** | 41.68 s | 476.3 s | 19.70 tok/s* | 875* | 0.07 |
 | `qwen25-7b-q4_0` — Qwen2.5 7B | 26/40 (65%) | 23.90 s | 282.6 s | 8.24 tok/s | 178 | 0.09 |
 
