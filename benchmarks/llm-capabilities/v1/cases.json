@@ -1,0 +1,264 @@
+{
+  "version": "1.0",
+  "language": "es-ES",
+  "system_prompt": "Eres un asistente profesional. Responde en español de España. Usa solo la información proporcionada, no inventes hechos y sigue el formato que solicite el usuario.",
+  "scoring": {
+    "scale": "0-4 per case; 0 = wrong or unusable, 1 = major errors, 2 = partly correct with an important omission, 3 = correct with minor omissions, 4 = fully correct, grounded and format-compliant",
+    "quality_score": "sum of ten case scores, maximum 40; scores are human rubric judgements, not model-as-judge outputs",
+    "latency": "wall time and time to first token measured over streaming response; cases run serially"
+  },
+  "cases": [
+    {
+      "id": "01-code-group-open-hours",
+      "category": "code_generation",
+      "measures": [
+        "code",
+        "edge_cases",
+        "instruction_following"
+      ],
+      "max_tokens": 1536,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Escribe solo una función Python `sum_open_hours(rows)` sin dependencias. Cada elemento tiene `owner`, `hours` y `status`. Suma las horas por responsable solo cuando status sea `open` o `in_progress`, ignora mayúsculas/minúsculas en status, ignora filas con horas negativas o no numéricas, conserva responsables distintos aunque cambie el uso de mayúsculas y devuelve un diccionario ordenado alfabéticamente por la grafía original del responsable. Incluye una breve docstring y no incluyas explicación fuera del código."
+        }
+      ],
+      "rubric": [
+        "código Python válido y función con nombre/firma correcta",
+        "filtra estados válidos sin distinguir mayúsculas",
+        "ignora horas negativas y no numéricas",
+        "agrupa por responsable sin colapsar grafías distintas y ordena el resultado",
+        "respeta código solo, con docstring breve"
+      ]
+    },
+    {
+      "id": "02-constraint-scheduling",
+      "category": "logic",
+      "measures": [
+        "deduction",
+        "constraint_tracking",
+        "explanation"
+      ],
+      "max_tokens": 1536,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hay tres reuniones, Alba, Bruno y Carla, en tres franjas: 09:00, 10:00 y 11:00. Bruno va inmediatamente antes que Carla. Alba no puede ir a las 11:00. Cada persona tiene una sola reunión. ¿Cuál es el orden? Da la solución y una comprobación breve de las restricciones."
+        }
+      ],
+      "rubric": [
+        "ordena Bruno 10:00, Carla 11:00 y Alba 09:00",
+        "explica que Bruno precede inmediatamente a Carla",
+        "comprueba que Alba no ocupa las 11:00 y que las tres franjas se usan una sola vez"
+      ]
+    },
+    {
+      "id": "03-multi-step-time-budget",
+      "category": "quantitative_reasoning",
+      "measures": [
+        "arithmetic",
+        "planning",
+        "units"
+      ],
+      "max_tokens": 1536,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Mi jornada va de 09:00 a 17:00. Tengo reuniones de 45, 60 y 30 minutos; una pausa de comida de 45 minutos; y necesito reservar 20 minutos de preparación no solapada con las reuniones. ¿Cuánto tiempo queda para trabajo de concentración? Da el cálculo y el resultado en horas y minutos."
+        }
+      ],
+      "rubric": [
+        "calcula 8 horas totales",
+        "resta 135 minutos de reuniones, 45 de comida y 20 de preparación",
+        "resultado correcto: 280 minutos = 4 h 40 min",
+        "no cuenta dos veces la preparación ni mezcla unidades"
+      ]
+    },
+    {
+      "id": "04-action-extraction-json",
+      "category": "structured_extraction",
+      "measures": [
+        "information_extraction",
+        "dates",
+        "ownership",
+        "format"
+      ],
+      "max_tokens": 1536,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Extrae las acciones de estas notas y devuelve únicamente un array JSON válido. Esquema por elemento: `accion`, `responsable`, `fecha_limite`, `estado`. Notas: ‘Lucía enviará el presupuesto revisado antes del 21 de octubre. Marcos ya validó el acceso al entorno el 15 de octubre. Queda pendiente confirmar quién actualizará el calendario; no se fijó fecha.’ No conviertas trabajo ya terminado en tarea pendiente ni inventes responsables o fechas. Usa null cuando falte un dato."
+        }
+      ],
+      "rubric": [
+        "JSON válido, sin prosa envolvente",
+        "presupuesto: Lucía, fecha 2026-10-21, pendiente",
+        "acceso al entorno: Marcos, fecha 2026-10-15, completado",
+        "confirmar actualización de calendario: responsable y fecha null, pendiente",
+        "no añade acciones ni cambia estados"
+      ]
+    },
+    {
+      "id": "05-long-context-retrieval",
+      "category": "long_context",
+      "measures": [
+        "retrieval",
+        "entity_disambiguation",
+        "grounding"
+      ],
+      "max_tokens": 1536,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Lee el registro y enumera solo las acciones pendientes del proyecto VEGA: acción, responsable, fecha y estado. Excluye el trabajo completado y la reunión planificada. Si falta algo, di que no consta.\n\nRegistro de seguimiento:\n1. Proyecto AURORA — responsable: Irene Soler — entregar mapa de riesgos — 20 oct 2026 — pendiente.\n2. Proyecto BRUMA — responsable: Irene Sola — revisar contrato — 21 oct 2026 — completado.\n3. Proyecto VEGA — responsable: Pablo Núñez — enviar borrador de migración al equipo — 23 oct 2026 — pendiente.\n4. Proyecto NUBE — responsable: Pablo Núñez — confirmar presupuesto — 22 oct 2026 — pendiente.\n5. Proyecto VEGA — responsable: Elena Vidal — preparar entorno de pruebas — 19 oct 2026 — completado.\n6. Proyecto BRUMA — responsable: Pablo Núñez — solicitar acceso — 24 oct 2026 — pendiente.\n7. Proyecto AURORA — responsable: Elena Vidal — cerrar incidencia 481 — 18 oct 2026 — pendiente.\n8. Proyecto NUBE — responsable: Irene Soler — actualizar cronograma — 27 oct 2026 — completado.\n9. Proyecto VEGA — responsable: Marta Gil — revisar dependencias externas — sin fecha — pendiente.\n10. Proyecto BRUMA — responsable: Elena Vidal — preparar demo — 26 oct 2026 — pendiente.\n11. Proyecto AURORA — responsable: Marta Gil — enviar acta — 22 oct 2026 — completado.\n12. Proyecto VEGA — responsable: Pablo Núñez — reunión de seguimiento — 24 oct 2026 — planificada, no es una acción de entrega.\n13. Proyecto NUBE — responsable: Marta Gil — revisar alertas — 25 oct 2026 — pendiente.\n14. Proyecto BRUMA — responsable: Irene Sola — publicar documentación — 28 oct 2026 — pendiente.\n15. Proyecto VEGA — responsable: Elena Vidal — aprobar alcance — 22 oct 2026 — pendiente."
+        }
+      ],
+      "rubric": [
+        "recupera enviar borrador de migración — Pablo Núñez — 23 oct 2026 — pendiente",
+        "puede mencionar revisar dependencias — Marta Gil — fecha no consta — pendiente",
+        "puede mencionar aprobar alcance — Elena Vidal — 22 oct 2026 — pendiente",
+        "no mezcla BRUMA ni AURORA y excluye la reunión planificada como entrega",
+        "respuesta expresa y concisa"
+      ]
+    },
+    {
+      "id": "06-conversation-follow-up-memory",
+      "category": "conversation_context",
+      "measures": [
+        "multi_turn_memory",
+        "referential_follow_up",
+        "constraint_retention"
+      ],
+      "max_tokens": 1536,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Tengo que preparar una propuesta para Atlas y otra para Nimbus. Para Atlas solo quiero actualizar precios; para Nimbus hay que añadir soporte de fin de semana. No mezcles los alcances."
+        },
+        {
+          "role": "assistant",
+          "content": "Entendido: Atlas solo precios; Nimbus incluye soporte de fin de semana."
+        },
+        {
+          "role": "user",
+          "content": "He terminado la tabla de precios de Atlas."
+        },
+        {
+          "role": "assistant",
+          "content": "Anotado."
+        },
+        {
+          "role": "user",
+          "content": "Nimbus tiene que salir hoy antes de las 16:00. Primero prepara el borrador y después valida con Operaciones la cobertura del fin de semana."
+        },
+        {
+          "role": "assistant",
+          "content": "De acuerdo."
+        },
+        {
+          "role": "user",
+          "content": "¿Qué hago ahora y qué parte no debo añadir a esa propuesta?"
+        }
+      ],
+      "rubric": [
+        "entiende que ‘esa propuesta’ se refiere a Nimbus",
+        "prioriza preparar borrador antes de validar cobertura con Operaciones",
+        "conserva el plazo de hoy antes de las 16:00",
+        "indica que no debe añadir el alcance de actualización de precios de Atlas",
+        "no inventa tareas nuevas"
+      ]
+    },
+    {
+      "id": "07-strict-json-plan",
+      "category": "format_and_instruction_following",
+      "measures": [
+        "json",
+        "extraction",
+        "schema_compliance"
+      ],
+      "max_tokens": 1536,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Devuelve únicamente JSON válido con las claves `prioridad`, `tarea`, `responsable`, `fecha`. Nota: ‘Prioridad alta: Diego debe revisar el informe de seguridad mañana, 17 de octubre de 2026. La publicación queda bloqueada hasta que termine la revisión.’ Usa la fecha ISO 2026-10-17. No agregues otras claves ni texto."
+        }
+      ],
+      "rubric": [
+        "JSON parseable sin fences ni texto adicional",
+        "claves exactas y sin claves extra",
+        "prioridad alta",
+        "tarea de revisión del informe de seguridad",
+        "responsable Diego y fecha 2026-10-17"
+      ]
+    },
+    {
+      "id": "08-ambiguous-person-resolution",
+      "category": "entity_resolution_and_calibration",
+      "measures": [
+        "person_disambiguation",
+        "uncertainty",
+        "safe_clarification"
+      ],
+      "max_tokens": 1536,
+      "messages": [
+        {
+          "role": "user",
+          "content": "En las notas aparecen Ana Pérez (cliente de Lumen, área de compras) y Ana Pereda (equipo interno, responsable de QA). También aparece una tarea ‘confirmar entrega’ asignada a ‘Ana P.’ sin empresa ni equipo. ¿Quién tiene esa tarea?"
+        }
+      ],
+      "rubric": [
+        "no atribuye la tarea a ninguna de las dos como hecho",
+        "explica que ‘Ana P.’ es insuficiente para desambiguar",
+        "pide un dato concreto para resolverlo, por ejemplo empresa/equipo o apellido completo",
+        "no mezcla cliente y empleada"
+      ]
+    },
+    {
+      "id": "09-executive-synthesis-grounded",
+      "category": "executive_synthesis",
+      "measures": [
+        "prioritization",
+        "status_distinction",
+        "grounding",
+        "conciseness"
+      ],
+      "max_tokens": 1536,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Redacta un resumen ejecutivo breve para organizar hoy, con máximo tres acciones ordenadas. Datos: Proyecto Faro: el acceso de QA se habilitó ayer y está hecho. Sigue pendiente que Sara revise el informe antes de las 14:00; el despliegue no puede empezar hasta esa revisión. Proyecto Delta: falta confirmar con Finanzas el coste de licencias; no hay fecha límite ni responsable asignado. No inventes prioridades fuera de las dependencias explícitas."
+        }
+      ],
+      "rubric": [
+        "prioriza revisar informe de Faro antes de las 14:00",
+        "explica que desbloquea el despliegue y que no debe presentarlo como ya iniciado",
+        "separa el acceso de QA como completado",
+        "marca coste Delta como pendiente pero sin responsable/fecha",
+        "máximo tres acciones, útil y sin inventar urgencias"
+      ]
+    },
+    {
+      "id": "10-versatile-audience-adaptation",
+      "category": "generation_and_adaptation",
+      "measures": [
+        "text_generation",
+        "audience_adaptation",
+        "factual_consistency"
+      ],
+      "max_tokens": 1536,
+      "messages": [
+        {
+          "role": "user",
+          "content": "A partir solo de estos datos, escribe dos versiones del mismo aviso: (A) mensaje interno directo al equipo, máximo 35 palabras; (B) mensaje cordial para un cliente, máximo 45 palabras. Hechos: la entrega prevista para el martes se mueve al jueves porque falta una validación del proveedor; la nueva fecha está confirmada; no hay que mencionar compensaciones. No inventes el nombre del cliente ni prometas más fechas."
+        }
+      ],
+      "rubric": [
+        "entrega ambas versiones y respeta límites de palabras",
+        "distingue tono interno directo y tono cordial externo",
+        "mantiene martes→jueves y la causa de validación del proveedor",
+        "deja claro que jueves está confirmado",
+        "no inventa cliente, compensación ni promesas"
+      ]
+    }
+  ]
+}

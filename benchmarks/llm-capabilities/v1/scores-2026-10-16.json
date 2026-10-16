@@ -1,0 +1,88 @@
+{
+  "suite_version": "1.0",
+  "run_date": "2026-10-16",
+  "scoring_method": "Manual rubric review of final visible assistant responses; no LLM judge.",
+  "maximum_score": 40,
+  "case_order": [
+    "01-code-group-open-hours",
+    "02-constraint-scheduling",
+    "03-multi-step-time-budget",
+    "04-action-extraction-json",
+    "05-long-context-retrieval",
+    "06-conversation-follow-up-memory",
+    "07-strict-json-plan",
+    "08-ambiguous-person-resolution",
+    "09-executive-synthesis-grounded",
+    "10-versatile-audience-adaptation"
+  ],
+  "models": [
+    {
+      "alias": "main",
+      "score": 19,
+      "case_scores": [1, 3, 2, 2, 1, 0, 4, 0, 4, 2],
+      "notes": [
+        "Valid Python syntax, but iterates over hours as though it were a list and counts values instead of summing them.",
+        "Final schedule is correct; one intermediate constraint explanation contradicts itself.",
+        "Correctly gets 280 minutes, then converts it incorrectly to 4 h 20 min.",
+        "Includes mostly correct facts, but malformed JSON with an extra closing bracket.",
+        "Mixes VEGA with unrelated projects and changes owners and statuses.",
+        "Confuses the follow-up about Nimbus with the completed Atlas price table.",
+        "Valid JSON with the requested keys and values.",
+        "Assigns Ana P. to Ana Pereda without evidence.",
+        "Useful summary; distinguishes completed QA access from Sara's blocking review and Delta's pending cost confirmation.",
+        "Provides two short lines, but splits and omits required date/cause facts across the audiences."
+      ]
+    },
+    {
+      "alias": "qwen-eval",
+      "score": 34,
+      "case_scores": [4, 4, 4, 2, 4, 3, 4, 3, 3, 3],
+      "notes": [
+        "Correct grouping, numeric filtering, case-sensitive owner identity and sorting.",
+        "Correct unique schedule with consistent verification.",
+        "Correct arithmetic and 4 h 40 min result.",
+        "Extracts the actions, but invents 2023 as the year and leaves known completion states null.",
+        "Returns all three pending VEGA actions and excludes completed/planned records.",
+        "Keeps Nimbus and Atlas separate and sequences validation correctly, but omits today's 16:00 deadline.",
+        "Valid JSON matching the requested schema.",
+        "Recognizes the identity ambiguity and declines to choose, but does not ask a concrete clarifying question.",
+        "Captures the main dependency and missing Delta owner/date; the suggested waiting language is imprecise.",
+        "Adapts tone and facts, but explicitly mentions compensation despite the instruction not to mention it."
+      ]
+    },
+    {
+      "alias": "lfm-2.6b",
+      "score": 34,
+      "case_scores": [4, 4, 4, 3, 4, 3, 4, 1, 3, 4],
+      "notes": [
+        "Correct aggregation and case-insensitive status handling; valid Python syntax.",
+        "Correct unique schedule and checks all constraints.",
+        "Correct arithmetic and 4 h 40 min result.",
+        "Correct actions, owners and states, but wraps JSON in Markdown fences despite the JSON-only request.",
+        "Returns all three pending VEGA actions and excludes completed/planned records.",
+        "Keeps Nimbus scope and order of work, but omits today's 16:00 deadline.",
+        "Valid JSON matching the requested schema.",
+        "Overconfidently assigns Ana P. to Ana Pereda without evidence; answer also hits the token cap.",
+        "Gets Sara's dependency and Delta uncertainty; adds an unrequested deployment-monitoring action.",
+        "Meets both audience and word limits while preserving date, cause and confirmation."
+      ]
+    },
+    {
+      "alias": "qwen25-7b-q4_0",
+      "score": 26,
+      "case_scores": [3, 0, 4, 2, 3, 3, 4, 1, 3, 3],
+      "notes": [
+        "Mostly correct aggregation, but its numeric regex accepts empty/dot-only strings that then fail during float conversion.",
+        "Violates the explicit Alba constraint and incorrectly certifies the result.",
+        "Correct arithmetic and 4 h 40 min result.",
+        "Includes the actions but invents 2023 and omits known completion states.",
+        "Finds two of three pending VEGA actions; misses approval of scope.",
+        "Keeps Nimbus scope and task order, but omits today's 16:00 deadline.",
+        "Valid JSON matching the requested schema.",
+        "Notes uncertainty, then still infers Ana Pereda without evidence.",
+        "Captures the main tasks but adds an unrequested monitoring action.",
+        "Mostly adapts correctly, but drops the supplier-validation reason from the customer version."
+      ]
+    }
+  ]
+}
