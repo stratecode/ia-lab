@@ -2,6 +2,7 @@
 group_vars/vault.yml
 ssh/
 .env
+.venv*/
 .venv/
 .venv-phase4/
 .venv-research/
