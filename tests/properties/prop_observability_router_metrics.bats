@@ -11,10 +11,13 @@ import sys
 
 root = Path(sys.argv[1])
 tasks = (root / "roles/observability/tasks/router_monitoring.yml").read_text()
-if "validate: promtool check config %s" not in tasks:
-    raise SystemExit("Prometheus configuration must validate before replacement")
 if "validate: promtool check rules %s" not in tasks:
     raise SystemExit("Prometheus rules must validate before replacement")
+handlers = (root / "roles/observability/handlers/main.yml").read_text()
+if "promtool check config /var/snap/prometheus/current/prometheus.yml" not in handlers:
+    raise SystemExit("Prometheus configuration must validate at its installed snap path before restart")
+if "promtool check rules /var/snap/prometheus/current/promreg/*.yml" not in handlers:
+    raise SystemExit("Prometheus rules must validate at their installed path before restart")
 for alias, job in (("main", "llama-cpp-main"), ("qwen-eval", "llama-cpp-qwen-eval")):
     marker = f'job_name: "{job}"'
     if marker not in tasks:

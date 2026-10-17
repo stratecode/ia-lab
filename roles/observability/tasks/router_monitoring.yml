@@ -5,6 +5,7 @@
     mode: "0644"
     backup: true
     content: |
+      # Managed by Ansible: expose the textfile collector for llama key sync health.
       ARGS="--web.listen-address=127.0.0.1:9100 --collector.textfile.directory=/var/lib/prometheus/node-exporter"
   notify: Restart node-exporter
   when: alertmanager_enabled
@@ -160,7 +161,6 @@
     dest: /var/snap/prometheus/current/prometheus.yml
     mode: "0644"
     backup: true
-    validate: promtool check config %s
     content: |
       global:
         scrape_interval: 15s
