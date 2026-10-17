@@ -51,6 +51,25 @@ class StagedScannerTests(unittest.TestCase):
         for kind in ("telegram-bot-token", "api-key", "jwt"):
             self.assertIn(kind, result.stderr)
 
+    def test_all_api_key_prefixes_are_detected(self) -> None:
+        samples = [
+            b"ghp_" + b"a" * 36,
+            b"github_pat_" + b"b" * 40,
+            b"sk-" + b"c" * 32,
+        ]
+        for index, sample in enumerate(samples):
+            self.stage(f"api-{index}.txt", sample)
+        result = self.scan()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr.count("api-key"), len(samples))
+
+    def test_credential_filename_patterns_are_detected(self) -> None:
+        for path in ("ssh/lab", "keys/id_rsa", "keys/id_ed25519", "backup.kdbx", "backup.p12", "backup.pfx"):
+            self.stage(path, b"ordinary placeholder\n")
+        result = self.scan()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stderr.count("credential-file"), 6)
+
     def test_secret_filenames_and_plain_vault_rejected(self) -> None:
         self.stage("config/.env.local", b"ordinary=example\n")
         self.stage("group_vars/vault.yml", b"password: test\n")
