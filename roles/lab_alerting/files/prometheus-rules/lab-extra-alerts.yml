@@ -73,3 +73,19 @@ groups:
         labels: {severity: none, category: heartbeat}
         annotations:
           summary: "Latido: la cadena de alertas está viva"
+  - name: lab-llama-prom-key
+    rules:
+      - alert: LlamaPromKeyOutOfSync
+        expr: lab_llama_prom_key_in_sync == 0 or absent(lab_llama_prom_key_in_sync)
+        for: 10m
+        labels: {severity: warning, category: monitoring}
+        annotations:
+          summary: "La clave de llama.cpp no está sincronizada con Prometheus"
+          description: "Prometheus no puede autenticarse al consultar el router llama.cpp."
+      - alert: LlamaPromKeySyncStale
+        expr: time() - lab_llama_prom_key_sync_timestamp_seconds > 600 or absent(lab_llama_prom_key_sync_timestamp_seconds)
+        for: 1m
+        labels: {severity: warning, category: monitoring}
+        annotations:
+          summary: "La sincronización de la clave llama.cpp no se ejecuta"
+          description: "El timer no ha registrado un intento de sincronización durante más de diez minutos."

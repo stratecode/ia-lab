@@ -1,5 +1,11 @@
 [Unit]
 Description=Sincronizar la clave de llama.cpp con Prometheus
+
 [Service]
 Type=oneshot
+User=root
+Group=root
+UMask=0027
+StandardOutput=null
+StandardError=journal
 ExecStart=/usr/local/bin/sync-llama-prom-key

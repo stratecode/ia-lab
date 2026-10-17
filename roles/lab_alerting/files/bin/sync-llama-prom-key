@@ -1,14 +1,110 @@
-#!/bin/bash
-# Copia la --api-key de llama-cpp-main.service al credentials_file de Prometheus.
-# Prometheus relee credentials_file en cada scrape: no hace falta recargarlo.
-set -eu
-DEST=/var/snap/prometheus/current/llama-api-key
-key=$(systemctl cat llama-cpp-main.service | sed -nE 's/.*--api-key[= ]+([^ \\]+).*/\1/p' | head -1 | tr -d "\"'")
-[ -n "$key" ] || { logger -t sync-llama-prom-key "no se encontró --api-key en llama-cpp-main.service"; exit 1; }
-if [ -f "$DEST" ] && [ "$(cat "$DEST")" = "$key" ]; then exit 0; fi
+#!/usr/bin/env bash
+# Actualiza la credencial Bearer de Prometheus sin imprimirla.
+# Por defecto extrae --api-key del unit; también acepta --api-key o --api-key-file.
+set -Eeuo pipefail
 umask 077
-tmp=$(mktemp "$DEST.XXXXXX")
-printf '%s' "$key" > "$tmp"
-chown root:root "$tmp"; chmod 640 "$tmp"
-mv "$tmp" "$DEST"
-logger -t sync-llama-prom-key "credencial de llama.cpp actualizada para Prometheus"
+
+DEST=${LLAMA_PROM_CREDENTIALS_FILE:-/var/snap/prometheus/current/llama-api-key}
+METRIC=${LLAMA_PROM_METRIC_FILE:-/var/lib/prometheus/node-exporter/lab-llama-prom-key.prom}
+SERVICE=${LLAMA_PROM_SYSTEMD_SERVICE:-llama-cpp-main.service}
+key=''
+source_kind='unit'
+tmp_key=''
+
+log_message() {
+  if command -v logger >/dev/null 2>&1; then
+    logger -t sync-llama-prom-key "$1" >/dev/null 2>&1 || true
+  fi
+}
+
+write_metric() {
+  local value=$1 timestamp metric_tmp
+  timestamp=$(date +%s)
+  mkdir -p "$(dirname "$METRIC")"
+  metric_tmp=$(mktemp "${METRIC}.XXXXXX")
+  {
+    printf '%s\n' '# HELP lab_llama_prom_key_in_sync Whether Prometheus has the current llama.cpp API key.'
+    printf '%s\n' '# TYPE lab_llama_prom_key_in_sync gauge'
+    printf 'lab_llama_prom_key_in_sync %s\n' "$value"
+    printf '%s\n' '# HELP lab_llama_prom_key_sync_timestamp_seconds Unix timestamp of the last key sync attempt.'
+    printf '%s\n' '# TYPE lab_llama_prom_key_sync_timestamp_seconds gauge'
+    printf 'lab_llama_prom_key_sync_timestamp_seconds %s\n' "$timestamp"
+  } > "$metric_tmp"
+  chmod 0644 "$metric_tmp"
+  mv -f "$metric_tmp" "$METRIC"
+}
+
+on_exit() {
+  local status=$?
+  trap - EXIT
+  if [[ -n "$tmp_key" ]]; then rm -f "$tmp_key"; fi
+  if (( status != 0 )); then
+    write_metric 0 || true
+    log_message 'key synchronization failed; credential value suppressed'
+  fi
+  exit "$status"
+}
+trap on_exit EXIT
+
+usage() {
+  printf '%s\n' 'Usage: sync-llama-prom-key [--api-key VALUE | --api-key-file PATH]' >&2
+  exit 2
+}
+
+while (($#)); do
+  case "$1" in
+    --api-key)
+      (($# >= 2)) || usage
+      [[ "$source_kind" == unit ]] || usage
+      source_kind=argument
+      key=$2
+      shift 2
+      ;;
+    --api-key-file)
+      (($# >= 2)) || usage
+      [[ "$source_kind" == unit ]] || usage
+      source_kind=file
+      [[ -r "$2" ]] || { printf '%s\n' 'sync-llama-prom-key: API key file is not readable' >&2; exit 1; }
+      key=$(<"$2")
+      shift 2
+      ;;
+    -h|--help) usage ;;
+    *) usage ;;
+  esac
+done
+
+if [[ "$source_kind" == unit ]]; then
+  key=$(systemctl cat "$SERVICE" 2>/dev/null | awk '
+    {
+      if (!match($0, /--api-key(=|[[:space:]]+)/)) next
+      value = substr($0, RSTART + RLENGTH)
+      quote = substr(value, 1, 1)
+      if (quote == "\"" || quote == sprintf("%c", 39)) {
+        value = substr(value, 2)
+        end = index(value, quote)
+        if (end > 0) value = substr(value, 1, end - 1)
+      } else {
+        sub(/[[:space:]].*$/, "", value)
+      }
+      if (value != "") { print value; exit }
+    }
+  ')
+fi
+
+[[ -n "$key" ]] || { printf '%s\n' 'sync-llama-prom-key: no usable API key was found' >&2; exit 1; }
+
+mkdir -p "$(dirname "$DEST")"
+if [[ -f "$DEST" ]] && [[ "$(<"$DEST")" == "$key" ]]; then
+  write_metric 1
+  log_message 'Prometheus llama.cpp credential is in sync'
+  exit 0
+fi
+
+tmp_key=$(mktemp "${DEST}.XXXXXX")
+printf '%s' "$key" > "$tmp_key"
+if (( EUID == 0 )); then chown root:root "$tmp_key"; fi
+chmod 0640 "$tmp_key"
+mv -f "$tmp_key" "$DEST"
+tmp_key=''
+write_metric 1
+log_message 'Prometheus llama.cpp credential synchronized'

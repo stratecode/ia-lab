@@ -5,6 +5,7 @@
 from pathlib import Path
 
 tasks = Path("roles/observability/tasks/main.yml").read_text()
+tasks += Path("roles/observability/tasks/router_monitoring.yml").read_text()
 
 required = {
     "Prometheus loopback binding": "--web.listen-address=127.0.0.1:9090",

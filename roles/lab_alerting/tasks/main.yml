@@ -187,24 +187,10 @@
       register: lab_alerting_cert_units
 
 # ---------------------------------------------------------------- Rotación de clave de llama.cpp
-- name: Sync llama.cpp API key to Prometheus credentials file
+- name: Install and schedule llama.cpp key synchronization
+  ansible.builtin.import_tasks: llama_key_sync.yml
   when: lab_alerting_enable_llama_key_sync
   tags: [llama-key]
-  block:
-    - name: Install key sync script
-      ansible.builtin.copy:
-        src: bin/sync-llama-prom-key
-        dest: /usr/local/bin/sync-llama-prom-key
-        mode: "0755"
-    - name: Install key sync units
-      ansible.builtin.copy:
-        src: "systemd/{{ item }}"
-        dest: "/etc/systemd/system/{{ item }}"
-        mode: "0644"
-      loop:
-        - sync-llama-prom-key.service
-        - sync-llama-prom-key.path
-      register: lab_alerting_keysync_units
 
 # ---------------------------------------------------------------- systemd
 - name: Reload systemd after unit changes
@@ -212,7 +198,7 @@
     daemon_reload: true
   when: >-
     (lab_alerting_nut_units is changed) or (lab_alerting_docker_units is changed)
-    or (lab_alerting_cert_units is changed) or (lab_alerting_keysync_units is changed)
+    or (lab_alerting_cert_units is changed)
   tags: [always]
 
 - name: Enable and start timers and path units
@@ -228,15 +214,8 @@
       - {name: nut-textfile-exporter.timer, when: "{{ lab_alerting_enable_ups }}"}
       - {name: docker-textfile-exporter.timer, when: "{{ lab_alerting_enable_docker_exporter }}"}
       - {name: cert-textfile-exporter.timer, when: "{{ lab_alerting_enable_cert_exporter }}"}
-      - {name: sync-llama-prom-key.path, when: "{{ lab_alerting_enable_llama_key_sync }}"}
   when: item.when | bool
   tags: [exporters, ups, llama-key]
-
-- name: Run the llama.cpp key sync once
-  ansible.builtin.command: /usr/local/bin/sync-llama-prom-key
-  changed_when: false
-  when: lab_alerting_enable_llama_key_sync
-  tags: [llama-key]
 
 # ---------------------------------------------------------------- Grafana
 - name: Install UPS Grafana dashboard

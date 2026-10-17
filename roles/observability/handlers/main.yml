@@ -16,9 +16,11 @@
   changed_when: false
   listen: Restart prometheus
 
-- name: Validate Prometheus alert rules
-  ansible.builtin.command: >-
-    promtool check rules /var/snap/prometheus/current/promreg/lab-alerts.yml
+- name: Validate all Prometheus alert rules
+  ansible.builtin.shell: >-
+    promtool check rules /var/snap/prometheus/current/promreg/*.yml
+  args:
+    executable: /bin/bash
   changed_when: false
   listen: Restart prometheus
 

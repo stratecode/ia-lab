@@ -1,0 +1,12 @@
+[Unit]
+Description=Sincronizar la clave de llama.cpp con Prometheus periódicamente
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=sync-llama-prom-key.service
+
+[Install]
+WantedBy=timers.target

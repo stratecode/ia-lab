@@ -11,6 +11,7 @@ import sys
 
 root = Path(sys.argv[1])
 tasks = (root / "roles/observability/tasks/main.yml").read_text()
+tasks += (root / "roles/observability/tasks/router_monitoring.yml").read_text()
 for job in ("grafana", "alertmanager", "llama-cpp-main", "llm-telemetry", "lab-secretary"):
     if f'job_name: "{job}"' not in tasks:
         raise SystemExit(f"missing Prometheus job: {job}")
@@ -25,6 +26,7 @@ import sys
 
 root = Path(sys.argv[1])
 tasks = (root / "roles/observability/tasks/main.yml").read_text()
+tasks += (root / "roles/observability/tasks/router_monitoring.yml").read_text()
 required_alerts = [
     "GrafanaDown",
     "AlertmanagerDown",
@@ -70,6 +72,7 @@ import sys
 
 root = Path(sys.argv[1])
 tasks = (root / "roles/observability/tasks/main.yml").read_text()
+tasks += (root / "roles/observability/tasks/router_monitoring.yml").read_text()
 if "dest: /etc/alertmanager/alertmanager.yml" in tasks:
     raise SystemExit("observability must not write a second Alertmanager config")
 if "credentials_file: /var/snap/prometheus/current/llama-api-key" not in tasks:

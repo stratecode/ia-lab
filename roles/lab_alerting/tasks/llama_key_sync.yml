@@ -1,0 +1,43 @@
+---
+- name: Install llama.cpp key sync script
+  ansible.builtin.copy:
+    src: bin/sync-llama-prom-key
+    dest: /usr/local/bin/sync-llama-prom-key
+    owner: root
+    group: root
+    mode: "0755"
+    backup: true
+
+- name: Install llama.cpp key sync units
+  ansible.builtin.copy:
+    src: "systemd/{{ item }}"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  loop:
+    - sync-llama-prom-key.service
+    - sync-llama-prom-key.path
+    - sync-llama-prom-key.timer
+  register: lab_alerting_keysync_units
+
+- name: Reload systemd after llama.cpp key sync unit changes
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: lab_alerting_keysync_units is changed
+
+- name: Enable and start llama.cpp key sync triggers
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - sync-llama-prom-key.path
+    - sync-llama-prom-key.timer
+  when: not ansible_check_mode
+
+- name: Run the llama.cpp key sync once
+  ansible.builtin.command: /usr/local/bin/sync-llama-prom-key
+  changed_when: false
+  when: not ansible_check_mode

@@ -1,0 +1,39 @@
+---
+# Reconciles router-aware Prometheus scraping and key sync in one deployment.
+# No vault or connector credentials are loaded by this playbook.
+- name: Deploy llama.cpp monitoring
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Ensure Prometheus and textfile collector directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - /var/snap/prometheus/current/promreg
+        - /var/lib/prometheus/node-exporter
+
+    - name: Reconcile router-aware Prometheus scraping and alert rules
+      ansible.builtin.import_role:
+        name: observability
+        tasks_from: router_monitoring.yml
+
+    - name: Install and schedule the llama.cpp Prometheus key sync
+      ansible.builtin.import_role:
+        name: lab_alerting
+        tasks_from: llama_key_sync.yml
+
+    - name: Install llama.cpp key synchronization alert rules
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../roles/lab_alerting/files/prometheus-rules/lab-extra-alerts.yml"
+        dest: /var/snap/prometheus/current/promreg/lab-extra-alerts.yml
+        owner: root
+        group: root
+        mode: "0644"
+        backup: true
+        validate: promtool check rules %s
+      notify: Restart prometheus
