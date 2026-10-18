@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source_file="${1:?usage: lab-alerting-promtool-check RULES_FILE}"
+validation_dir="${LAB_PROMTOOL_VALIDATION_DIR:-/var/snap/prometheus/current/promreg}"
+promtool_bin="${LAB_PROMTOOL_BIN:-promtool}"
+
+tmp_file="$(mktemp "${validation_dir%/}/.ansible-promrules.XXXXXX.yml")"
+trap 'rm -f "$tmp_file"' EXIT
+
+install -m 0644 -- "$source_file" "$tmp_file"
+"$promtool_bin" check rules "$tmp_file"

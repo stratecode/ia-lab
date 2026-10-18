@@ -1,4 +1,7 @@
 from pathlib import Path
+import os
+import subprocess
+import tempfile
 import unittest
 
 
@@ -60,6 +63,41 @@ class WatchdogRelayConfigTests(unittest.TestCase):
         self.assertIn("ansible_check_mode", timer_task)
         self.assertIn("ansible_check_mode", marker_task)
         self.assertIn("ansible_check_mode", baseline_task)
+
+    def test_promtool_validator_stages_rules_inside_snap_accessible_directory(self):
+        tasks = (ROOT / "roles/lab_alerting/tasks/main.yml").read_text()
+        script = ROOT / "roles/lab_alerting/files/bin/lab-alerting-promtool-check"
+        self.assertIn("validate: /usr/local/bin/lab-alerting-promtool-check %s", tasks)
+        self.assertTrue(script.exists())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            validation_dir = Path(tmpdir) / "promreg"
+            validation_dir.mkdir()
+            rules = Path(tmpdir) / "rules.yml"
+            rules.write_text("groups: []\n")
+            recorder = Path(tmpdir) / "promtool-recorder"
+            recorder.write_text(
+                "#!/usr/bin/env python3\n"
+                "import pathlib, sys\n"
+                "assert sys.argv[1:3] == ['check', 'rules']\n"
+                "path = pathlib.Path(sys.argv[3])\n"
+                "assert path.parent == pathlib.Path(__import__('os').environ['LAB_PROMTOOL_VALIDATION_DIR'])\n"
+                "assert path.read_text() == 'groups: []\\n'\n"
+            )
+            recorder.chmod(0o755)
+            result = subprocess.run(
+                [str(script), str(rules)],
+                env={
+                    **os.environ,
+                    "LAB_PROMTOOL_BIN": str(recorder),
+                    "LAB_PROMTOOL_VALIDATION_DIR": str(validation_dir),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(list(validation_dir.iterdir()), [])
 
 
 if __name__ == "__main__":

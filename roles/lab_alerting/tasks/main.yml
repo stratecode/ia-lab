@@ -96,12 +96,21 @@
       when: lab_watchdog_manage_ufw | default(false) | bool
 
 # ---------------------------------------------------------------- Reglas de Prometheus
+- name: Install Prometheus rule validator for Snap-confined promtool
+  ansible.builtin.copy:
+    src: bin/lab-alerting-promtool-check
+    dest: /usr/local/bin/lab-alerting-promtool-check
+    owner: root
+    group: root
+    mode: "0755"
+  tags: [rules]
+
 - name: Install Prometheus alert rules
   ansible.builtin.copy:
     src: "prometheus-rules/{{ item }}"
     dest: "{{ lab_alerting_promreg_dir }}/{{ item }}"
     mode: "0644"
-    validate: promtool check rules %s
+    validate: /usr/local/bin/lab-alerting-promtool-check %s
   loop:
     - lab-ups-alerts.yml
     - lab-extra-alerts.yml
