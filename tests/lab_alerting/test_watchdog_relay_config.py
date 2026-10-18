@@ -9,6 +9,35 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class WatchdogRelayConfigTests(unittest.TestCase):
+    def test_alertmanager_technical_alerts_default_to_watchdog_and_donna_is_opt_in(self):
+        alertmanager = (ROOT / "roles/lab_alerting/templates/alertmanager.yml.j2").read_text()
+
+        self.assertIn("receiver: telegram-watchdog", alertmanager)
+        self.assertIn('matchers: [notify_donna="true"]', alertmanager)
+        self.assertIn("receiver: telegram-donna", alertmanager)
+        self.assertIn("continue: true", alertmanager)
+        self.assertIn("- receiver: telegram-watchdog", alertmanager)
+        self.assertIn("bot_token_file: {{ lab_alerting_watchdog_telegram_token_file }}", alertmanager)
+        self.assertIn('bot_token_file: /etc/prometheus/telegram_bot_token', alertmanager)
+
+    def test_watchdog_token_is_installed_privately_from_existing_env_variable(self):
+        defaults = (ROOT / "roles/lab_alerting/defaults/main.yml").read_text()
+        tasks = (ROOT / "roles/lab_alerting/tasks/main.yml").read_text()
+        env_example = (ROOT / ".env.example").read_text()
+        docs = (ROOT / "docs/monitoring.md").read_text()
+
+        self.assertIn("lookup('env', 'LAB_WATCHDOG_TELEGRAM_TOKEN')", defaults)
+        task_start = tasks.index("- name: Install Watchdog Telegram bot token file")
+        task_end = tasks.index("\n    - name:", task_start + 1)
+        install_task = tasks[task_start:task_end]
+        self.assertIn('dest: "{{ lab_alerting_watchdog_telegram_token_file }}"', install_task)
+        self.assertIn("mode: \"0640\"", install_task)
+        self.assertIn("no_log: true", install_task)
+        self.assertIn("lab_alerting_watchdog_telegram_token_file: /etc/prometheus/watchdog_telegram_bot_token", defaults)
+        self.assertIn("LAB_WATCHDOG_TELEGRAM_TOKEN=replace-with-watchdog-bot-token", env_example)
+        self.assertIn("LAB_WATCHDOG_TELEGRAM_TOKEN", docs)
+        self.assertIn("al `.env` de la raíz del checkout local", docs)
+
     def test_alertmanager_endpoint_is_post_only_and_pi_scoped_before_grafana(self):
         nginx = (ROOT / "roles/monitor/tasks/main.yml").read_text()
         route_index = nginx.index("location = /alertmanager/api/v2/alerts {")

@@ -1,7 +1,7 @@
 ---
 # Aplica solo el rol lab_alerting (avisos Telegram, SAI, exportadores y alertas extra).
 # Uso:
-#   set -a && source .env && set +a   # LAB_TELEGRAM_BOT_TOKEN, LAB_TELEGRAM_ALLOWED_USERS
+#   set -a && source .env && set +a   # Donna + Watchdog Telegram tokens and allowed chat id
 #   ansible-playbook playbooks/lab-alerting.yml --check --diff
 #   ansible-playbook playbooks/lab-alerting.yml
 # Requiere vault_nut_upsmon_password en group_vars/vault.yml.

@@ -1,9 +1,12 @@
 ---
-# --- Telegram (reutiliza el bot de la secretaria; mismos orígenes que orchestrator_telegram_*) ---
+# --- Telegram ---
 lab_alerting_telegram_bot_token: "{{ lookup('env', 'LAB_TELEGRAM_BOT_TOKEN') | default('', true) }}"
+# The watchdog token is also used by the Raspberry Pi; keep the same secret source.
+lab_alerting_watchdog_telegram_bot_token: "{{ vault_lab_watchdog_telegram_token | default(lookup('env', 'LAB_WATCHDOG_TELEGRAM_TOKEN') | default('', true), true) }}"
 # Primer id de LAB_TELEGRAM_ALLOWED_USERS (en chats privados el chat_id es el id de usuario).
 lab_alerting_telegram_chat_id: "{{ (lookup('env', 'LAB_TELEGRAM_ALLOWED_USERS') | default('', true)).split(',') | first | trim }}"
 lab_alerting_telegram_token_file: /etc/prometheus/telegram_bot_token
+lab_alerting_watchdog_telegram_token_file: /etc/prometheus/watchdog_telegram_bot_token
 
 # --- Rutas ---
 lab_alerting_alertmanager_dir: /etc/prometheus          # ruta por defecto de Debian: el servicio la lee sin --config.file

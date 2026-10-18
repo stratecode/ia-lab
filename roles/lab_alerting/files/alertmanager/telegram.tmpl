@@ -13,6 +13,13 @@
 Desde: {{ .StartsAt.Local.Format "02/01 15:04:05" }}{{ if ne .Status "firing" }} · Fin: {{ .EndsAt.Local.Format "15:04:05" }}{{ end }}
 {{ end }}
 {{- end }}
+{{ define "telegram.donna-summary" -}}
+{{ if eq .Status "firing" -}}
+⚠️ Fran, hay una incidencia técnica en el lab. El Watchdog está gestionando el diagnóstico y te avisará con el detalle.
+{{- else -}}
+✅ La incidencia técnica del lab se ha resuelto. El Watchdog conserva el seguimiento técnico.
+{{- end }}
+{{- end }}
 {{ define "telegram.heartbeat" -}}
 💚 Latido diario · lab
 Prometheus, Alertmanager y Telegram operativos.
