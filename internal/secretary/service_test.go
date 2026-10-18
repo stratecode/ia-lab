@@ -148,22 +148,27 @@ func TestCapabilityFailureEmitsBlockedNotCompleted(t *testing.T) {
 	}
 }
 
-func TestCapabilityFailureExplainsMissingRovoScopes(t *testing.T) {
+func TestCapabilityFailureDoesNotExposeProviderDetails(t *testing.T) {
 	s := &Service{}
 	capability := ReadCapability{
-		Name: "Rovo",
+		Name: "Jira",
 		Read: func(context.Context, string) (CapabilityResult, error) {
-			return CapabilityResult{}, errors.New("Rovo missing required scopes: read:jira:agent-interface, search:jira:agent-interface")
+			return CapabilityResult{}, errors.New("Jira REST HTTP 401: private provider payload")
 		},
 	}
 	answer, outcomes, reason, err := s.answerFromCapabilities(context.Background(), "Dame las tareas de SW-76", "Dame las tareas de SW-76", []ReadCapability{capability}, nil, nil, nil, nil)
 	if err != nil || reason != BlockConnectorFailure || len(outcomes) != 1 {
 		t.Fatalf("unexpected connector failure result: %q %#v %q %v", answer, outcomes, reason, err)
 	}
-	for _, scope := range []string{"read:jira:agent-interface", "search:jira:agent-interface"} {
-		if !strings.Contains(answer, scope) {
-			t.Errorf("user-facing failure did not identify missing scope %q: %q", scope, answer)
-		}
+	if !strings.Contains(answer, "Jira no está disponible") || strings.Contains(answer, "private provider payload") || strings.Contains(answer, "401") {
+		t.Fatalf("provider details escaped the safe failure response: %q", answer)
+	}
+}
+
+func TestWebForbiddenFailureExplainsAutomatedAccessBlock(t *testing.T) {
+	got := capabilityFailureLabel(sharedWebCapabilityName, errors.New("el enlace respondió con HTTP 403"))
+	if !strings.Contains(got, "bloquea la lectura automatizada") || !strings.Contains(got, "403") {
+		t.Fatalf("web 403 was not explained clearly: %q", got)
 	}
 }
 
@@ -470,9 +475,9 @@ func TestOpenWebUINaturalLanguageUsesSharedRouterAndMemory(t *testing.T) {
 	}
 }
 
-func TestOpenWebUITaskQuestionUsesRovoThroughSharedRouter(t *testing.T) {
+func TestOpenWebUITaskQuestionUsesJiraThroughSharedRouter(t *testing.T) {
 	const question = "¿Qué tareas importantes debería priorizar hoy?"
-	const source = "Rovo: STRAT-18 · Preparar el plan de despliegue antes del mediodía."
+	const source = "Jira: STRAT-18 · Preparar el plan de despliegue antes del mediodía."
 	const summary = "Prioriza preparar el plan de despliegue antes del mediodía."
 	var modelCalls int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -488,23 +493,23 @@ func TestOpenWebUITaskQuestionUsesRovoThroughSharedRouter(t *testing.T) {
 			joined += message.Content + "\n"
 		}
 		if !strings.Contains(joined, source) || !strings.Contains(joined, question) {
-			t.Errorf("shared router did not pass Rovo results to the model: %q", joined)
+			t.Errorf("shared router did not pass Jira results to the model: %q", joined)
 		}
 		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
 	}))
 	defer upstream.Close()
 	s := New(upstream.URL, "key", "shared secretary instructions", t.TempDir(), map[int64]bool{7: true})
-	reader := &rovoIntentSource{intentSource: intentSource{granola: "Granola not queried for this task request."}, rovo: source}
+	reader := &jiraIntentSource{intentSource: intentSource{granola: "Granola not queried for this task request."}, jira: source}
 	s.Sources = reader
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"main","stream":false,"messages":[{"role":"user","content":"`+question+`"}]}`))
 	request.Header.Set("Authorization", "Bearer key")
 	request.Header.Set("X-OpenWebUI-User-Id", "owner")
 	request.Header.Set("X-OpenWebUI-User-Role", "admin")
-	request.Header.Set("X-OpenWebUI-Chat-Id", "rovo-task-test")
+	request.Header.Set("X-OpenWebUI-Chat-Id", "jira-task-test")
 	result := httptest.NewRecorder()
 	s.Handler().ServeHTTP(result, request)
-	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), summary) || reader.rovoCalls != 1 || reader.lastQuery != question || reader.granolaCalls != 0 || modelCalls != 1 {
-		t.Fatalf("Open WebUI answer=%q status=%d Rovo=%d Granola=%d model=%d", result.Body.String(), result.Code, reader.rovoCalls, reader.granolaCalls, modelCalls)
+	if result.Code != http.StatusOK || !strings.Contains(result.Body.String(), summary) || reader.jiraCalls != 1 || reader.lastQuery != question || reader.granolaCalls != 0 || modelCalls != 1 {
+		t.Fatalf("Open WebUI answer=%q status=%d Jira=%d Granola=%d model=%d", result.Body.String(), result.Code, reader.jiraCalls, reader.granolaCalls, modelCalls)
 	}
 }
 
@@ -731,23 +736,23 @@ func (s *intentSource) Granola(context.Context) (string, error) {
 }
 func (s *intentSource) Status() map[string]bool { return map[string]bool{"Granola": true} }
 
-type rovoIntentSource struct {
+type jiraIntentSource struct {
 	intentSource
-	rovo      string
-	rovoCalls int
+	jira      string
+	jiraCalls int
 	lastQuery string
 }
 
-func (s *rovoIntentSource) Rovo(_ context.Context, query string) (string, error) {
-	s.rovoCalls++
+func (s *jiraIntentSource) JiraQueryResult(_ context.Context, query string) (CapabilityResult, error) {
+	s.jiraCalls++
 	s.lastQuery = query
-	return s.rovo, nil
+	return capabilityResultFromText(s.jira), nil
 }
 
-func TestMeetingTaskQuestionRoutesToGranolaAndRovo(t *testing.T) {
+func TestMeetingTaskQuestionRoutesToGranolaAndJira(t *testing.T) {
 	const question = "¿Qué tareas importantes tengo pendientes hoy según las reuniones de esta mañana?"
 	const granolaSource = "Granola: Plan de lanzamiento · Revisar propuesta antes de las 16:00."
-	const source = "Rovo: Plan de lanzamiento · Revisar propuesta antes de las 16:00."
+	const source = "Jira: Plan de lanzamiento · Revisar propuesta antes de las 16:00."
 	const summary = "Prioriza revisar la propuesta antes de las 16:00."
 	var modelCalls int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -768,13 +773,13 @@ func TestMeetingTaskQuestionRoutesToGranolaAndRovo(t *testing.T) {
 		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
 	}))
 	defer upstream.Close()
-	sourceReader := &rovoIntentSource{intentSource: intentSource{granola: granolaSource}, rovo: source}
+	sourceReader := &jiraIntentSource{intentSource: intentSource{granola: granolaSource}, jira: source}
 	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
 	s.Sources = sourceReader
 
 	answer, err := s.Reply(context.Background(), 7, question)
-	if err != nil || answer != summary || modelCalls != 1 || sourceReader.rovoCalls != 1 || sourceReader.lastQuery != question || sourceReader.granolaCalls != 1 {
-		t.Fatalf("answer=%q model=%d Rovo=%d Granola=%d query=%q err=%v", answer, modelCalls, sourceReader.rovoCalls, sourceReader.granolaCalls, sourceReader.lastQuery, err)
+	if err != nil || answer != summary || modelCalls != 1 || sourceReader.jiraCalls != 1 || sourceReader.lastQuery != question || sourceReader.granolaCalls != 1 {
+		t.Fatalf("answer=%q model=%d Jira=%d Granola=%d query=%q err=%v", answer, modelCalls, sourceReader.jiraCalls, sourceReader.granolaCalls, sourceReader.lastQuery, err)
 	}
 }
 
@@ -801,20 +806,20 @@ func TestMeetingSummaryRoutesToGranolaWhenNoTaskIntentIsPresent(t *testing.T) {
 		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
 	}))
 	defer upstream.Close()
-	sourceReader := &rovoIntentSource{intentSource: intentSource{granola: source}, rovo: "Rovo must not be consulted for a meeting summary."}
+	sourceReader := &jiraIntentSource{intentSource: intentSource{granola: source}, jira: "Jira must not be consulted for a meeting summary."}
 	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
 	s.Sources = sourceReader
 
 	answer, err := s.Reply(context.Background(), 7, question)
-	if err != nil || answer != summary || modelCalls != 1 || sourceReader.granolaCalls != 1 || sourceReader.rovoCalls != 0 {
-		t.Fatalf("answer=%q model=%d Granola=%d Rovo=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.rovoCalls, err)
+	if err != nil || answer != summary || modelCalls != 1 || sourceReader.granolaCalls != 1 || sourceReader.jiraCalls != 0 {
+		t.Fatalf("answer=%q model=%d Granola=%d Jira=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.jiraCalls, err)
 	}
 }
 
-func TestNaturalLanguageMeetingTaskQueriesGranolaAndRovoAndSummarizes(t *testing.T) {
+func TestNaturalLanguageMeetingTaskQueriesGranolaAndJiraAndSummarizes(t *testing.T) {
 	const question = "Hola, dona. Oye, ¿qué tareas tengo pendientes de hacer según las reuniones que tenéis?"
 	const source = "Notas de Granola (últimos 7 días):\nPlanificación · 2026-10-12\nAcordamos publicar el viernes."
-	const rovoSource = "Rovo: buscar tareas asociadas a las decisiones."
+	const jiraSource = "Jira: buscar tareas asociadas a las decisiones."
 	const summary = "Pendiente: publicar el viernes, según Planificación del 12 de octubre."
 	var modelCalls int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -829,18 +834,18 @@ func TestNaturalLanguageMeetingTaskQueriesGranolaAndRovoAndSummarizes(t *testing
 		for _, message := range body.Messages {
 			joined += message.Content + "\n"
 		}
-		if !strings.Contains(joined, source) || !strings.Contains(joined, rovoSource) || !strings.Contains(joined, question) {
+		if !strings.Contains(joined, source) || !strings.Contains(joined, jiraSource) || !strings.Contains(joined, question) {
 			t.Errorf("model did not receive the user question and both source results: %q", joined)
 		}
 		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
 	}))
 	defer upstream.Close()
-	sourceReader := &rovoIntentSource{intentSource: intentSource{granola: source}, rovo: rovoSource}
+	sourceReader := &jiraIntentSource{intentSource: intentSource{granola: source}, jira: jiraSource}
 	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
 	s.Sources = sourceReader
 	answer, err := s.Reply(context.Background(), 7, question)
-	if err != nil || answer != summary || modelCalls != 1 || sourceReader.granolaCalls != 1 || sourceReader.rovoCalls != 1 || sourceReader.jiraCalls != 0 {
-		t.Fatalf("answer=%q model=%d granola=%d rovo=%d jira=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.rovoCalls, sourceReader.jiraCalls, err)
+	if err != nil || answer != summary || modelCalls != 1 || sourceReader.granolaCalls != 1 || sourceReader.jiraCalls != 1 {
+		t.Fatalf("answer=%q model=%d granola=%d jira=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.jiraCalls, err)
 	}
 }
 
@@ -874,7 +879,7 @@ func TestGranolaCapabilityPassesQuestionToQueryAwareConnector(t *testing.T) {
 func TestMeetingFollowUpUsesAnchorWithoutRepeatingPreviousTaskDetails(t *testing.T) {
 	s := &Service{Capabilities: []ReadCapability{
 		{Name: "Granola", Match: func(string) bool { return true }, Read: func(context.Context, string) (CapabilityResult, error) { return CapabilityResult{}, nil }},
-		{Name: "Rovo", Match: func(string) bool { return true }, Read: func(context.Context, string) (CapabilityResult, error) { return CapabilityResult{}, nil }},
+		{Name: "Jira", Match: func(string) bool { return true }, Read: func(context.Context, string) (CapabilityResult, error) { return CapabilityResult{}, nil }},
 	}}
 	previous := "En la reunión de Stonecare del 14 de octubre, dime quién debía enviar las imágenes y qué tareas tenía Fran para dejar la web lista."
 	followUp := "¿Y qué tareas relacionadas con los textos en castellano e inglés le quedan a Fran?"
@@ -903,15 +908,15 @@ func TestDirectSourceAnswerSurvivesSecondaryConnectorFailure(t *testing.T) {
 		{Name: "Granola", Description: "notas", Read: func(context.Context, string) (CapabilityResult, error) {
 			return CapabilityResult{Text: sourceAnswer, ResultCount: 1, DirectAnswer: true}, nil
 		}},
-		{Name: "Rovo", Description: "Jira", Read: func(context.Context, string) (CapabilityResult, error) {
-			return CapabilityResult{}, errors.New("Rovo missing required scopes: read:jira:agent-interface")
+		{Name: "Jira", Description: "Jira", Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{}, errors.New("Jira REST HTTP 403")
 		}},
 	}
 	answer, outcomes, reason, err := s.answerFromCapabilities(context.Background(), "¿Qué tareas quedaron asignadas?", "¿Qué tareas quedaron asignadas?", capabilities, nil, nil, nil, nil)
 	if err != nil || reason != "" || len(outcomes) != 2 || modelCalls != 0 {
 		t.Fatalf("answer=%q outcomes=%+v reason=%q calls=%d err=%v", answer, outcomes, reason, modelCalls, err)
 	}
-	if !strings.Contains(answer, sourceAnswer) || !strings.Contains(answer, "Rovo (faltan permisos: read:jira:agent-interface)") || strings.Contains(answer, "invented answer") {
+	if !strings.Contains(answer, sourceAnswer) || !strings.Contains(answer, "No he podido verificar en Jira") || strings.Contains(answer, "invented answer") {
 		t.Fatalf("direct source answer or connector limitation was lost: %q", answer)
 	}
 }
@@ -938,7 +943,7 @@ func TestEmptySecondarySourceIsNotPresentedAsEvidence(t *testing.T) {
 		{Name: "Granola", Description: "notas", Read: func(context.Context, string) (CapabilityResult, error) {
 			return CapabilityResult{Text: meetingNotes, ResultCount: 1}, nil
 		}},
-		{Name: "Rovo", Description: "Jira", Read: func(context.Context, string) (CapabilityResult, error) {
+		{Name: "Jira", Description: "Jira", Read: func(context.Context, string) (CapabilityResult, error) {
 			return CapabilityResult{}, nil
 		}},
 	}
@@ -946,15 +951,15 @@ func TestEmptySecondarySourceIsNotPresentedAsEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(modelInput, meetingNotes) || strings.Contains(modelInput, "Rovo — Jira") || strings.Contains(modelInput, "no devolvió resultados") {
+	if !strings.Contains(modelInput, meetingNotes) || strings.Contains(modelInput, "Jira — Jira") || strings.Contains(modelInput, "no devolvió resultados") {
 		t.Fatalf("model received a source without evidence: %q", modelInput)
 	}
-	if !strings.Contains(answer, "Rovo") || !strings.Contains(answer, "no devolvió resultados") {
+	if !strings.Contains(answer, "Jira") || !strings.Contains(answer, "no devolvió resultados") {
 		t.Fatalf("empty secondary-source coverage was not reported separately: %q", answer)
 	}
 }
 
-func TestMeetingTaskQuestionUsesExplicitGranolaOwnersWhenRovoHasUnrelatedHits(t *testing.T) {
+func TestMeetingTaskQuestionUsesExplicitGranolaOwnersWhenJiraHasUnrelatedHits(t *testing.T) {
 	const question = "En la reunión de Stonecare del 14 de octubre, dime quién debía enviar las imágenes y qué tareas tenía Fran para dejar la web lista."
 	const notes = `# Próximos Pasos
 - **Enviar imágenes adaptadas a Fran para la home y profesionales** (Paula, Alba)
@@ -974,8 +979,8 @@ func TestMeetingTaskQuestionUsesExplicitGranolaOwnersWhenRovoHasUnrelatedHits(t 
 		{Name: "Granola", Description: "notas", Read: func(context.Context, string) (CapabilityResult, error) {
 			return CapabilityResult{Text: notes, ResultCount: 1, Evidence: []EvidenceRef{{Provider: "Granola", URL: "https://notes.granola.ai/d/meeting-1"}}}, nil
 		}},
-		{Name: "Rovo", Description: "Jira", Read: func(context.Context, string) (CapabilityResult, error) {
-			return CapabilityResult{Text: "Rovo: resultados de Confluence sin relación con Stonecare", ResultCount: 2}, nil
+		{Name: "Jira", Description: "Jira", Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{Text: "Jira: resultados de Confluence sin relación con Stonecare", ResultCount: 2}, nil
 		}},
 	}
 
@@ -988,7 +993,7 @@ func TestMeetingTaskQuestionUsesExplicitGranolaOwnersWhenRovoHasUnrelatedHits(t 
 			t.Errorf("answer omitted %q: %s", expected, answer)
 		}
 	}
-	for _, wrong := range []string{"Fran: Enviar imágenes", "Iris:", "Rovo:"} {
+	for _, wrong := range []string{"Fran: Enviar imágenes", "Iris:", "Jira:"} {
 		if strings.Contains(answer, wrong) {
 			t.Errorf("answer included unsupported detail %q: %s", wrong, answer)
 		}
@@ -1020,7 +1025,7 @@ func TestMorningTaskQuestionReturnsStructuredOwnerActionsFromGranola(t *testing.
 		{Name: "Granola", Description: "notas", Read: func(context.Context, string) (CapabilityResult, error) {
 			return CapabilityResult{Text: notes, ResultCount: 1, Evidence: []EvidenceRef{{Provider: "Granola", ID: "meeting-1", URL: "https://notes.granola.ai/d/meeting-1"}}}, nil
 		}},
-		{Name: "Rovo", Description: "Jira", Read: func(context.Context, string) (CapabilityResult, error) {
+		{Name: "Jira", Description: "Jira", Read: func(context.Context, string) (CapabilityResult, error) {
 			return CapabilityResult{}, nil
 		}},
 	}
@@ -1150,15 +1155,15 @@ func TestGranolaCapabilityCarriesToNaturalTaskFollowUp(t *testing.T) {
 		io.WriteString(w, `{"choices":[{"message":{"content":"`+summary+`"}}]}`)
 	}))
 	defer upstream.Close()
-	sourceReader := &rovoIntentSource{intentSource: intentSource{granola: source}, rovo: "Rovo: acción asociada a la reunión."}
+	sourceReader := &jiraIntentSource{intentSource: intentSource{granola: source}, jira: "Jira: acción asociada a la reunión."}
 	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
 	s.Sources = sourceReader
 	if _, err := s.Reply(context.Background(), 7, firstQuestion); err != nil {
 		t.Fatal(err)
 	}
 	answer, err := s.Reply(context.Background(), 7, followUp)
-	if err != nil || !strings.HasPrefix(answer, summary) || modelCalls != 2 || sourceReader.granolaCalls != 2 || sourceReader.rovoCalls != 2 || sourceReader.jiraCalls != 0 {
-		t.Fatalf("answer=%q model=%d granola=%d rovo=%d jira=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.rovoCalls, sourceReader.jiraCalls, err)
+	if err != nil || !strings.HasPrefix(answer, summary) || modelCalls != 2 || sourceReader.granolaCalls != 2 || sourceReader.jiraCalls != 2 {
+		t.Fatalf("answer=%q model=%d granola=%d jira=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.jiraCalls, err)
 	}
 }
 
@@ -1183,17 +1188,17 @@ func TestMeetingFollowUpKeepsMeetingContextInConnectorQuery(t *testing.T) {
 			return CapabilityResult{Text: source, ResultCount: 1}, nil
 		},
 	}, {
-		Name: "Rovo", Description: "tareas",
-		Match: rovoTaskIntent,
+		Name: "Jira", Description: "tareas",
+		Match: jiraTaskIntent,
 		Read: func(_ context.Context, query string) (CapabilityResult, error) {
-			return CapabilityResult{Text: "Rovo sin coincidencias", ResultCount: 0}, nil
+			return CapabilityResult{Text: "Jira sin coincidencias", ResultCount: 0}, nil
 		},
 	}}
 	if _, err := s.Reply(context.Background(), 7, firstQuestion); err != nil {
 		t.Fatal(err)
 	}
 	answer, err := s.Reply(context.Background(), 7, followUp)
-	if err != nil || answer != summary+"\n\nRovo no devolvió resultados en esta consulta." {
+	if err != nil || answer != summary+"\n\nJira no devolvió resultados en esta consulta." {
 		t.Fatalf("answer=%q err=%v", answer, err)
 	}
 	if !strings.Contains(gotQuery, "Stonecare del 14 de octubre") || !strings.Contains(gotQuery, followUp) {

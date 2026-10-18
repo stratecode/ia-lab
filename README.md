@@ -6,8 +6,8 @@ Ansible-managed homelab infrastructure. Provisions and configures an Ubuntu serv
 
 - Current direction: a personal work assistant with one local principal LLM.
 - LFM2.5-1.2B Instruct Q4_0 on CPU, 16k context, Open WebUI for browser conversation.
-- Shared secretary service fronts Open WebUI; Telegram migration and readonly
-  Jira/Granola OAuth are tracked in [secretary operation](docs/secretary-operation.md).
+- Shared secretary service fronts Open WebUI; Telegram, Jira REST/JQL and
+  Granola setup are tracked in [secretary operation](docs/secretary-operation.md).
 - Reproduce the current profile with `playbooks/deploy-principal-model.yml`.
 - Monitoring, HTTPS access and WireGuard remain active; the orchestrator and
   Codex gateway remain retired. External Oráculo/OpenSearch projects are excluded.

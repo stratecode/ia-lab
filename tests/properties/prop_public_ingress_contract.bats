@@ -17,7 +17,6 @@ required = {
     "assistant vhost": "server_name {{ lab_assistant_domain }};",
     "webhook loopback upstream": "proxy_pass http://127.0.0.1:{{ lab_secretary_port }}/telegram/webhook;",
     "webhook POST restriction": "limit_except POST",
-    "Jira OAuth loopback upstream": "proxy_pass http://127.0.0.1:18765/callback;",
     "Granola OAuth loopback upstream": "proxy_pass http://127.0.0.1:18766/callback;",
     "unknown path rejection": "location / {\n              return 404;",
     "assistant CNAME target": "route53_assistant_cname_target:",
@@ -33,7 +32,6 @@ sources = {
     "assistant vhost": monitor,
     "webhook loopback upstream": monitor,
     "webhook POST restriction": monitor,
-    "Jira OAuth loopback upstream": monitor,
     "Granola OAuth loopback upstream": monitor,
     "unknown path rejection": monitor,
     "assistant CNAME target": group_vars,
@@ -45,6 +43,9 @@ sources = {
 missing = [name for name, needle in required.items() if needle not in sources[name]]
 if missing:
     raise SystemExit("public ingress contract missing: " + ", ".join(missing))
+
+if "/oauth/jira/callback" in monitor or "127.0.0.1:18765/callback" in monitor:
+    raise SystemExit("retired Jira OAuth callback must not be exposed")
 
 if "assistant.stratecode.com" not in route53 and "route53_assistant_cname_target" not in route53:
     raise SystemExit("Route53 role does not reconcile the assistant alias")

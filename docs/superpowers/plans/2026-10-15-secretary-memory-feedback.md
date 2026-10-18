@@ -16,7 +16,7 @@
 - Operational traces expire after 90 days; unresolved candidates expire after 30 days; approved memories remain until `/forget` or their explicit expiry.
 - Keep runtime records on the lab server; Git fixtures must be synthetic or redacted.
 - Keep trace directory permissions at `0700` and files at `0600`.
-- Never persist complete Granola/Rovo payloads or duplicate full prompts and answers in interaction traces.
+- Never persist complete Granola or Jira REST/JQL payloads or duplicate full prompts and answers in interaction traces.
 - `/forget` removes every operator-identifiable history, trace, feedback event, candidate, and approved memory.
 - All external capabilities remain read-only. Do not add Jira writes, new channels, online learning, automatic prompt/rule mutation, fine-tuning, or reinforcement learning.
 - Prometheus labels are restricted to `channel`, `intent`, `capability`, and `outcome`; never use content, person names, conversation IDs, URLs, Jira keys, or Granola IDs as labels.
@@ -24,7 +24,7 @@
 
 ## Review Focus
 
-- A meeting question asking for follow-up work must select both Granola and Rovo; a meeting summary alone selects Granola, and an unrelated task query selects Rovo. Pin this in `TestCapabilitiesForIntentSelectsExpectedSources` and `TestMeetingTaskQuestionUsesGranolaAndRovo`.
+- A meeting question asking for follow-up work must select both Granola and Jira; a meeting summary alone selects Granola, and an unrelated task query selects Jira. Pin this in `TestCapabilitiesForIntentSelectsExpectedSources` and `TestMeetingTaskQuestionUsesGranolaAndJira`.
 - Identical person names must not be merged without an exact identifier or reviewed alias. Pin this in `TestResolveEntityLeavesAmbiguousAliasUnresolved`.
 - Empty connector results and connector failures must remain distinguishable and must not become “no tasks.” Pin this in `TestTraceDistinguishesEmptyFromConnectorFailure`.
 - Feedback must bind to the latest interaction in the same authenticated operator/channel/conversation and must never cross those boundaries. Pin this in `TestFeedbackIsScopedToOperatorChannelAndConversation`.
@@ -40,7 +40,7 @@
 - Create `internal/secretary/capability_result.go` for typed evidence-bearing capability results.
 - Create `internal/secretary/entities.go` for deterministic entity alias resolution.
 - Modify `internal/secretary/service.go` to route one or more capabilities, capture traces, retrieve approved knowledge, and parse common feedback/review commands.
-- Modify `internal/secretary/connectors.go` to return stable Granola/Rovo evidence references only when provider responses contain them.
+- Modify `internal/secretary/connectors.go` to return stable Granola and Jira REST/JQL evidence references only when provider responses contain them.
 - Modify `internal/secretary/intent.go` to preserve source-only intent while identifying mixed meeting/task queries.
 - Modify `internal/secretary/memory.go` to include knowledge retrieval and cascade `/forget` through the learning store.
 - Modify `internal/secretary/interaction.go` only if a typed interaction event needs to carry the stable interaction ID; keep progress events channel-neutral and ephemeral.
@@ -61,7 +61,7 @@ type CapabilityResult struct {
 
 type StructuredSourceReader interface {
     GranolaResult(context.Context) (CapabilityResult, error)
-    RovoResult(context.Context, string) (CapabilityResult, error)
+    JiraQueryResult(context.Context, string) (CapabilityResult, error)
 }
 
 type EvidenceRef struct {
@@ -195,14 +195,14 @@ conversation identity, and IDs owned by another operator.
 - Test: `internal/secretary/connectors_test.go`
 
 **Interfaces:**
-- Consumes: existing `ReadCapability`, `capabilityFor`, `answerFromCapability`, and Granola/Rovo readers.
+- Consumes: existing `ReadCapability`, `capabilityFor`, `answerFromCapability`, and Granola and Jira REST/JQL readers.
 - Produces: `CapabilityResult`, `EvidenceRef`, `StructuredSourceReader`, `(*Service).capabilitiesFor(query string, history []Turn) ([]ReadCapability, bool)`, and `(*Service).answerFromCapabilities(...)`.
 
-- [ ] **Step 1: Add failing source-selection tests.** Add `TestCapabilitiesForIntentSelectsExpectedSources`, `TestMeetingTaskQuestionUsesGranolaAndRovo`, and `TestMeetingSummaryUsesGranolaOnly`. Assert source names and order, and assert ambiguous matches fail closed.
+- [ ] **Step 1: Add failing source-selection tests.** Add `TestCapabilitiesForIntentSelectsExpectedSources`, `TestMeetingTaskQuestionUsesGranolaAndJira`, and `TestMeetingSummaryUsesGranolaOnly`. Assert source names and order, and assert ambiguous matches fail closed.
 - [ ] **Step 2: Run the secretary test harness and confirm the new tests fail.** Run `./scripts/test-orchestrator-go.sh`. Expected: compile failure or the new mixed-source assertions fail; existing behavior remains the baseline.
 - [ ] **Step 3: Introduce `CapabilityResult` and `EvidenceRef`, then change `ReadCapability.Read` to return `CapabilityResult`.** Update production registrations and test fakes together. `ResultCount` is zero for an explicit empty response; errors stay errors.
-- [ ] **Step 4: Implement `(*Service).capabilitiesFor(query string, history []Turn) ([]ReadCapability, bool)` and `answerFromCapabilities(...)`.** Route task questions about meetings to Granola plus Rovo; route meeting summaries without task intent to Granola; route other task questions to Rovo. Keep the existing single-capability behavior for non-mixed prompts.
-- [ ] **Step 5: Populate only provider-backed evidence.** Add `GranolaResult(context.Context) (CapabilityResult, error)` and `RovoResult(context.Context, string) (CapabilityResult, error)` on `Connectors`; retain the existing string-returning `Granola`/`Rovo` wrappers for direct commands. Granola evidence uses parsed meeting IDs/titles/links. Rovo evidence uses stable issue/page IDs or links only when present in the MCP response. Add `TestCapabilityResultEvidenceIsNotInvented` for missing and malformed IDs.
+- [ ] **Step 4: Implement `(*Service).capabilitiesFor(query string, history []Turn) ([]ReadCapability, bool)` and `answerFromCapabilities(...)`.** Route task questions about meetings to Granola plus Jira REST; route meeting summaries without task intent to Granola; route other task questions to Jira REST. Keep the existing single-capability behavior for non-mixed prompts.
+- [ ] **Step 5: Populate only provider-backed evidence.** Add `GranolaResult(context.Context) (CapabilityResult, error)` and `JiraQueryResult(context.Context, string) (CapabilityResult, error)` on `Connectors`; retain the existing string-returning `Granola`/`Jira` wrappers for direct commands. Granola evidence uses parsed meeting IDs/titles/links. Jira evidence uses stable issue keys and titles from the REST response. Add `TestCapabilityResultEvidenceIsNotInvented` for missing and malformed IDs.
 - [ ] **Step 6: Run `./scripts/test-orchestrator-go.sh` and commit/push the task.** Expected: all tests pass; commit message `feat(secretary): route mixed-source meeting tasks`.
 
 ## Task 2: Versioned JSONL Learning Store
@@ -285,7 +285,7 @@ conversation identity, and IDs owned by another operator.
 - [ ] **Step 2: Run the secretary harness and verify the tests fail.** Expected: no entity registry or approved-knowledge retrieval exists.
 - [ ] **Step 3: Define entity fields in `learning_types.go` and implement `ResolveEntity(query string, entityType EntityType, items []KnowledgeItem) EntityResolution` in `entities.go`.** Match exact external IDs and approved normalized aliases; return unresolved when multiple candidates match or when only a pending candidate matches. Never auto-merge people by a shared display name.
 - [ ] **Step 4: Add `Service.relevantKnowledge(operatorID int64, query string, at time.Time) ([]KnowledgeItem, error)`.** Filter by operator, status, validity and date before lexical ranking. Include source labels and dates in the prompt. Keep existing conversation recall as episodic context, clearly distinguished from verified facts.
-- [ ] **Step 5: Add the knowledge context to the common synthesis path.** Current Jira/Rovo state must still be fetched live; approved memory may supply context and entity links, not replace live task status. Pending or rejected knowledge never enters model context.
+- [ ] **Step 5: Add the knowledge context to the common synthesis path.** Current Jira REST state must still be fetched live; approved memory may supply context and entity links, not replace live task status. Pending or rejected knowledge never enters model context.
 - [ ] **Step 6: Run targeted and full tests; commit/push.** Expected: lexical retrieval stays bounded, ambiguous identities ask for clarification, and approved facts preserve provenance. Commit message `feat(secretary): retrieve approved work knowledge`.
 
 ## Task 6: Forget, Retention, Operational Documentation, and Release
@@ -310,7 +310,7 @@ conversation identity, and IDs owned by another operator.
 - [ ] **Step 4: Implement retention pruning at startup and once every 24 hours.** Use validated 90-day trace and 30-day unresolved-candidate defaults; never prune approved knowledge before explicit expiry. Add `TestLearningMaintenancePrunesOnStartAndDaily`. Ensure cleanup errors do not prevent the HTTP service from starting, but expose a bounded operational metric.
 - [ ] **Step 5: Update `docs/secretary-operation.md`, `docs/architecture/master-plan.md`, `group_vars/all.yml`, and `roles/lab_secretary/tasks/main.yml`.** Document command syntax, reviewed-candidate lifecycle, retention, privacy and current read-only/multi-source behavior. Keep all live entity mappings and real interaction data out of Git.
 - [ ] **Step 6: Run repository verification.** Run `./scripts/test-orchestrator-go.sh`, `./scripts/build-orchestrator-go.sh`, and `ansible-playbook --syntax-check playbooks/deploy-secretary.yml`. Expected: all secretary and repository Go tests pass, Linux binary builds, and the role syntax is valid.
-- [ ] **Step 7: Commit/push and deploy the secretary through its tracked playbook.** Preserve existing configuration and secrets; deploy only the secretary, verify its health and `/metrics`, then run authorized read-only canary prompts for Granola-only, Jira/Rovo-only and mixed-source routing. Roll back the secretary binary/configuration if health or canary checks fail. Commit message `feat(secretary): complete supervised memory learning loop`.
+- [ ] **Step 7: Commit/push and deploy the secretary through its tracked playbook.** Preserve existing configuration and secrets; deploy only the secretary, verify its health and `/metrics`, then run authorized read-only canary prompts for Granola-only, Jira REST-only and mixed-source routing. Roll back the secretary binary/configuration if health or canary checks fail. Commit message `feat(secretary): complete supervised memory learning loop`.
 
 ## Completion Criteria
 

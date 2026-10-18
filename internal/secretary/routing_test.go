@@ -20,8 +20,8 @@ func routingServiceForTest() *Service {
 			},
 		},
 		{
-			Name: "Rovo", Description: "tareas",
-			Match: rovoTaskIntent,
+			Name: "Jira", Description: "tareas",
+			Match: jiraTaskIntent,
 			Read: func(_ context.Context, _ string) (CapabilityResult, error) {
 				return CapabilityResult{Text: "tareas", ResultCount: 1}, nil
 			},
@@ -39,9 +39,9 @@ func TestCapabilitiesForIntentSelectsExpectedSources(t *testing.T) {
 		{name: "meeting summary", query: "Dame el resumen de las reuniones de hoy", want: []string{"Granola"}},
 		{name: "meeting owner question", query: "¿Quién revisa los textos en español e inglés de Stonecare según la reunión del 14 de octubre?", want: []string{"Granola"}},
 		{name: "meeting assigned work phrased as obligation", query: "Según la reunión de Stonecare del 14 de octubre, ¿qué debía completar Fran y para cuándo?", want: []string{"Granola"}},
-		{name: "work task", query: "¿Qué tareas tengo pendientes?", want: []string{"Rovo"}},
-		{name: "specific Jira issue fields", query: "Dame el estado, la persona asignada y el vencimiento de SW-76, actualizar importador de locations.", want: []string{"Rovo"}},
-		{name: "meeting follow-up task", query: "¿Qué tareas debería hacer según las reuniones de esta mañana?", want: []string{"Granola", "Rovo"}},
+		{name: "work task", query: "¿Qué tareas tengo pendientes?", want: []string{"Jira"}},
+		{name: "specific Jira issue fields", query: "Dame el estado, la persona asignada y el vencimiento de SW-76, actualizar importador de locations.", want: []string{"Jira"}},
+		{name: "meeting follow-up task", query: "¿Qué tareas debería hacer según las reuniones de esta mañana?", want: []string{"Granola", "Jira"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -60,11 +60,11 @@ func TestCapabilitiesForIntentSelectsExpectedSources(t *testing.T) {
 	}
 }
 
-func TestMeetingTaskQuestionUsesGranolaAndRovo(t *testing.T) {
+func TestMeetingTaskQuestionUsesGranolaAndJira(t *testing.T) {
 	query := "¿Tengo algo importante que ejecutar según las reuniones de esta mañana?"
 	capabilities, ok, _ := routingServiceForTest().capabilitiesFor(query, nil)
-	if !ok || len(capabilities) != 2 || capabilities[0].Name != "Granola" || capabilities[1].Name != "Rovo" {
-		t.Fatalf("meeting task route = %v, %t; want Granola then Rovo", capabilityNames(capabilities), ok)
+	if !ok || len(capabilities) != 2 || capabilities[0].Name != "Granola" || capabilities[1].Name != "Jira" {
+		t.Fatalf("meeting task route = %v, %t; want Granola then Jira", capabilityNames(capabilities), ok)
 	}
 }
 
@@ -72,8 +72,8 @@ func TestExplicitJiraIssueDoesNotInheritPriorMeetingContext(t *testing.T) {
 	query := "Dame el estado actual y la persona asignada de SW-76."
 	history := []Turn{{Role: "user", Content: "Resume la reunión de Stonecare del 14 de octubre."}}
 	capabilities, ok, readQuery := routingServiceForTest().capabilitiesFor(query, history)
-	if !ok || !reflect.DeepEqual(capabilityNames(capabilities), []string{"Rovo"}) {
-		t.Fatalf("explicit Jira issue route = %v, %t; want only Rovo", capabilityNames(capabilities), ok)
+	if !ok || !reflect.DeepEqual(capabilityNames(capabilities), []string{"Jira"}) {
+		t.Fatalf("explicit Jira issue route = %v, %t; want only Jira", capabilityNames(capabilities), ok)
 	}
 	if readQuery != query {
 		t.Fatalf("explicit Jira query inherited meeting context: %q", readQuery)

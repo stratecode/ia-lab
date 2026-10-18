@@ -38,7 +38,8 @@ Shared service deployed on 8082; Open WebUI routes to it with authentication and
 streaming preserved. Fresh Go test/build, race tests and six OAuth helper tests
 pass. Real synthetic streaming: first token 0.620 s, total 0.854 s. Model/tool
 permissions remain read-only. Telegram delivery test awaits migration decision;
-Jira/Granola real queries await interactive OAuth consent.
+Jira REST/JQL and Granola queries await their connector credentials and real
+read-only acceptance checks.
 
 Telegram preflight passed getMe/no-webhook, but polling while our service was
 stopped still returned 409. The operator Mac has Hermes gateway PID 3771 under

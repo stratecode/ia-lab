@@ -114,14 +114,16 @@ query; missing owners and dates are never inferred, and transcripts are excluded
 Jira and `/resumen` still return source-labelled fields directly. Natural-language
 routing selects from a registry of read-only capabilities, each with its own
 matching rule, retrieval function and description. Questions about plans, tasks,
-priorities or pending activities route to Atlassian Rovo across Jira and Confluence,
-even if the question mentions a meeting. Meeting summaries and decisions without a
-task request route to Granola. Cross-source correlation between Granola, Rovo and
-company people or customers is a later phase. Adding a source means registering
-another capability, not changing Telegram or the shared conversation pipeline.
-The principal model synthesizes retrieved data and must not invent facts. Rovo
-uses standard semantic search with the MCP server's minimum ten-result request;
-retrieved content is
+priorities or pending activities use Jira Cloud REST with locally compiled JQL,
+even if the question also mentions a meeting. Jira requests go to the fixed
+`api.atlassian.com/ex/jira/<cloud_id>/rest/api/3/search/jql` endpoint and never
+through an MCP. Meeting summaries and decisions without a task request route to
+Granola. Cross-source correlation between Granola and
+company people or customers is a later phase. Confluence is not yet a registered
+capability; when added, it must use Confluence REST/CQL directly. Adding a source
+means registering another capability, not changing Telegram or the shared
+conversation pipeline. The principal model synthesizes retrieved data and must
+not invent facts. Jira content is
 treated as untrusted source data. If a source is unavailable or returns no results,
 the service says so directly instead of asking the model to improvise from an empty
 result. Empty or failed sources are excluded from the model's evidence and reported
@@ -151,7 +153,7 @@ Feedback binds to the latest interaction for the same authenticated operator,
 channel and conversation. A correction remains a candidate until `/aprueba ID`;
 only approved items enter retrieval, with their source and validity dates. Similar
 person names remain unresolved unless an exact external ID or approved alias
-identifies one person. Live Jira/Rovo or Granola data remains authoritative for
+identifies one person. Live Jira or Granola data remains authoritative for
 current state. `/forget` also removes all learning records for that operator.
 
 The metrics endpoint exposes bounded interaction outcome and duration labels,
@@ -323,12 +325,11 @@ GPL-3.0-or-later; the [Spanish voice](https://huggingface.co/rhasspy/piper-voice
 is MIT-licensed. Review each license before redistributing a built image or
 model bundle.
 
-## OAuth enrollment
+## Connector credentials
 
 Run on the operator's Mac; authorize from a browser on that same machine:
 
 ```bash
-python3 scripts/connect-secretary.py jira
 python3 scripts/connect-secretary.py granola --port 18766
 ```
 
@@ -339,27 +340,37 @@ on loopback. Tokens are written with mode 0600 to
 `.env`, vault or SSH credentials are needed. `--discover` probes public metadata
 without enrollment. A failed consent is not a connected account.
 
-Jira OAuth requests `read:me`, `read:jira:agent-interface`,
-`search:jira:agent-interface` and `offline_access`, without write scopes. The
-natural-language Rovo capability uses the Atlassian MCP `search` tool and needs an
-API key with `search:rovo:agent-interface`; it also reads matching issue details
-with `getJiraIssue`, which requires `read:jira:agent-interface`. `/jira` continues
-to use JQL and needs `search:jira:agent-interface`. This connector accepts a
-service-account API key using Bearer auth; a personal API token uses Basic auth
-and is not supported by this credential format. For API-key enrollment, request
-the three read-only scopes above and have an organisation admin enable API-token
-access in Rovo. Do not add write scopes. If the account exposes multiple Jira
-sites, enroll with `--cloud-id <selected-site-id>`; the adapter refuses to guess.
-Granola exposes its general `mcp` OAuth scope;
-the adapter's hard allowlist permits `list_meetings` only. Its current response
-is markup rather than JSON, so the adapter extracts only meeting ID, title and
-date; it does not pass transcript or note bodies into chat. Verify remote tool
-and result schemas with the authorised account before POC acceptance. Atlassian's
-[Rovo supported-tools reference](https://developer.atlassian.com/cloud/rovo-mcp/guides/supported-tools/)
-lists `read:jira:agent-interface` for issue reads, `search:jira:agent-interface`
-for JQL, and `search:rovo:agent-interface` for semantic search. See Atlassian's
-[API-token authentication guide](https://developer.atlassian.com/cloud/rovo-mcp/guides/configuring-authentication-via-api-token/)
-for the Basic-versus-Bearer distinction.
+Jira credentials are not enrolled with this OAuth helper. Store the existing
+read-only service-account API key, selected site `cloud_id`, and the operator's
+Jira `account_id` in the private connector JSON; do not put these values in the
+repository. Donna sends the key as Bearer only to the fixed
+`api.atlassian.com/ex/jira/<cloud_id>/...` REST host. Jira natural-language
+queries use bounded JQL and request issue summary, status, assignee, due date and
+update time. Personal-task searches filter by the configured operator account
+ID; they never use `currentUser()` with the service-account token, which would
+silently show the service account's own assignments. The configured Jira
+credential is never sent to an MCP endpoint.
+If the account exposes multiple Jira sites, configure the intended `cloud_id`
+explicitly; the adapter refuses to guess. Jira is read-only. Confluence is not
+yet connected to Donna; its future connector must use REST/CQL directly.
+
+The private connector JSON has this shape (keep the real token only in the
+private file):
+
+```json
+{
+  "jira": {
+    "access_token": "<service-account-api-token>",
+    "cloud_id": "<jira-cloud-id>",
+    "operator_account_id": "<operator-account-id>"
+  },
+  "granola": { "server_url": "https://mcp.granola.ai/mcp", "access_token": "<granola-token>" }
+}
+```
+
+Granola uses its OAuth connector and a hard allowlist of meeting query/detail
+tools. Meeting summaries—not transcripts—enter the model context. Verify remote
+tool and result schemas with the authorised account before POC acceptance.
 
 ```bash
 ./scripts/test-orchestrator-go.sh
@@ -404,8 +415,9 @@ The retired orchestrator stays stopped.
 Tests exercise allowlist rejection, private chat identity, preserved streaming,
 restart history, failure handling, durable polling offsets, source fidelity,
 malformed source responses, provider credential destination checks and denied
-write tools. OAuth tests cover issuer path discovery, allowed hosts, state and
-read-only requested Jira scopes. Execute the Docker Go harness and Python tests:
+write tools. Jira tests cover REST authentication, safe JQL compilation, and
+result validation; OAuth tests cover Granola issuer discovery, allowed hosts and
+state validation. Execute the Docker Go harness and Python tests:
 
 ```bash
 python3 scripts/test-secretary-oauth.py
@@ -421,6 +433,6 @@ operator message/reply on Telegram and real readonly Jira/Granola queries.
 Voice evidence: [validation directory](validation/2026-10-12-secretary-voice/).
 Telegram evidence: [validation directory](validation/2026-10-11-secretary-telegram/).
 Primary provider contracts: [Telegram Bot API](https://core.telegram.org/bots/api),
-[Atlassian MCP](https://atlassian.github.io/atlassian-mcp-server/),
-[supported tools](https://support.atlassian.com/atlassian-ai-gateway/docs/supported-tools/),
+[Jira Cloud REST API v3](https://developer.atlassian.com/cloud/jira/platform/rest/v3/),
+[JQL issue search](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/),
 [Granola MCP](https://docs.granola.ai/help-center/sharing/integrations/mcp).

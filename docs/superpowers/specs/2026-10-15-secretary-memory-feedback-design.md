@@ -24,7 +24,8 @@ Las capacidades externas siguen siendo de solo lectura.
   permite recuperar contexto principalmente con palabras clave. `/forget` borra
   la memoria del operador.
 - El enrutador comparte capacidades de lectura. Granola aporta resúmenes de
-  reuniones; Rovo busca en Jira y Confluence. La correlación entre reuniones,
+  reuniones; Jira REST/JQL consulta incidencias de Jira. Confluence no está
+  integrado. La correlación entre reuniones,
   proyectos y personas aún no está implementada.
 - Los eventos de interacción que presentan 🔍, ✅, 👍 y el avance de una consulta
   son transitorios. No registran el resultado del enrutado ni una valoración de
@@ -69,11 +70,11 @@ una migración posterior a B o C no acople el servicio a un proveedor concreto.
 2. La secretaria recupera el contexto corto de esa conversación y, cuando
    procede, recuerdos aprobados por fecha, entidad y relevancia.
 3. El enrutador decide una o varias capacidades de lectura. Las preguntas sobre
-   acciones derivadas de reuniones pueden requerir Granola y Rovo; la ambigüedad
+   acciones derivadas de reuniones pueden requerir Granola y Jira REST; la ambigüedad
    de fuente o entidad no se resuelve inventando una asociación.
 4. Los conectores devuelven evidencia con identificador, sistema de origen,
    fecha y enlace cuando esté disponible. El estado actual de tareas se
-   consulta en la fuente autoritativa; la memoria no sustituye Jira/Rovo ni
+   consulta en la fuente autoritativa; la memoria no sustituye Jira REST ni
    Granola.
 5. El sintetizador recibe solo la evidencia recuperada y debe distinguir hechos,
    ausencias y errores de acceso. Cada afirmación factual importante conserva su
@@ -176,8 +177,8 @@ El repositorio incluirá fixtures sintéticos o redactados y casos de regresión
 para:
 
 - consulta exclusiva de Granola;
-- consulta exclusiva de Jira/Rovo;
-- consulta que debe cruzar Granola y Rovo;
+- consulta exclusiva de Jira REST;
+- consulta que debe cruzar Granola y Jira REST;
 - aliases ambiguos de persona/cliente/proyecto;
 - fuente vacía, desconectada o con error;
 - recuerdo temporal como “la semana pasada” frente a estado actual.
@@ -197,7 +198,7 @@ labels.
 - Los datos permanecen en el servidor del lab; ejemplos en Git serán sintéticos
   o redactados. El registro de entidades reales y las correcciones no se
   versionan en Git.
-- Los payloads completos de Granola/Rovo no se guardan en la traza. Se conservan
+- Los payloads completos de Granola y Jira REST/JQL no se guardan en la traza. Se conservan
   únicamente referencias y los campos mínimos necesarios para la memoria
   aprobada.
 - `/forget` debe borrar historial corto/largo, trazas y feedback vinculados al

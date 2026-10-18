@@ -38,7 +38,7 @@ ya implementados ni necesariamente los nombres del proveedor.
 
 | Área | Operaciones mínimas | Integración | Prioridad y alcance inicial |
 |---|---|---|---|
-| Jira | Buscar por JQL, leer incidencia, listar mis pendientes; preparar creación/actualización | REST oficial con OAuth y permisos por proyecto | P0: lectura; escrituras separadas y verificadas |
+| Jira | Buscar por JQL, leer incidencia, listar mis pendientes; preparar creación/actualización | REST oficial con token de cuenta de servicio y permisos por proyecto | P0: lectura; escrituras separadas y verificadas |
 | Granola | Listar reuniones, recuperar notas, buscar decisiones y compromisos | MCP remoto con OAuth o API oficial | P0: notas propias; verificar plan y workspace |
 | Calendario | Agenda por intervalo, disponibilidad y conflictos; preparar evento/cambio | Google Calendar API o Microsoft Graph según cuenta | P0: lectura, zona horaria y fecha explícitas |
 | Correo | Buscar hilos, leer correo relevante, redactar borrador | Gmail API o Microsoft Graph según cuenta | P1: lectura y texto de borrador; envío como operación distinta |

@@ -3,9 +3,13 @@
 **Status:** design approved in conversation; awaiting written-spec review  
 **Date:** 2026-10-12
 
+> **Current-state note (2026-10-19):** this is a historical ingress design.
+> Jira OAuth enrollment and its callback route were retired when Jira moved to
+> direct REST/JQL with a private service token. Only Granola OAuth remains.
+
 ## Goal
 
-Provide a stable public HTTPS origin for the secretary's Jira/Granola OAuth
+Provide a stable public HTTPS origin for the secretary's Granola OAuth
 callbacks and Telegram webhook while keeping the browser UI and internal model
 services private. Use the existing home router, lab Nginx, and Route53 dynamic
 DNS rather than adding a cloud relay.
@@ -48,7 +52,6 @@ only these exact paths:
 | Public path | Method | Private destination | Purpose |
 |---|---|---|---|
 | `/telegram/webhook` | POST | `127.0.0.1:8082` | Telegram updates |
-| `/oauth/jira/callback` | GET | loopback-forwarded port `18765`, path `/callback` | One Jira OAuth enrollment |
 | `/oauth/granola/callback` | GET | loopback-forwarded port `18766`, path `/callback` | One Granola OAuth enrollment |
 
 All other paths and methods return a non-success response. Existing chat,
@@ -58,11 +61,11 @@ interface.
 
 ## OAuth callback flow
 
-The operator starts the existing provider helper on the Mac and opens the
+The operator starts the existing Granola helper on the Mac and opens the
 authorization URL in a browser. The helper registers the exact HTTPS callback
-URI for that provider and continues to bind its local handler only to
+URI and continues to bind its local handler only to
 `127.0.0.1`. During the short enrollment window, an SSH reverse forward from the
-Mac maps the matching lab loopback port (`18765` or `18766`) to the Mac's
+Mac maps the lab loopback port (`18766`) to the Mac's
 loopback listener. Nginx forwards only the matching public callback path to that
 loopback port. The SSH listener is never bound to a LAN or public interface.
 
@@ -72,7 +75,7 @@ the normalized URI path and status, never `$request` or query arguments, since
 authorization codes and state arrive in the query string. Do not log callback
 bodies, codes, tokens, or provider error bodies.
 
-Before treating Jira or Granola as connected, verify each provider accepts the
+Before treating Granola as connected, verify the provider accepts the
 exact custom redirect URI during dynamic client registration and consent. If a
 provider rejects it, stop that provider's enrollment and use only a
 provider-supported callback pattern; do not weaken PKCE, state, endpoint
@@ -172,8 +175,6 @@ increment.
 - [Telegram webhook guide](https://core.telegram.org/bots/webhooks) and
   [Telegram bot FAQ](https://core.telegram.org/bots/faq): HTTPS/IPv4/443,
   webhook versus polling, and webhook setup/rollback behavior.
-- [Atlassian Rovo MCP OAuth](https://developer.atlassian.com/cloud/rovo-mcp/guides/configuring-oauth-2-1/)
-  and [Atlassian OAuth 3LO callback configuration](https://developer.atlassian.com/cloud/oauth/getting-started/enabling-oauth-3lo/): redirect URI matching and provider-side redirect constraints.
 - Existing repository contracts: `roles/monitor/tasks/main.yml`,
   `roles/lab_secretary/tasks/main.yml`, `scripts/connect-secretary.py`,
   `internal/secretary/telegram.go`, and `docs/secretary-operation.md`.
