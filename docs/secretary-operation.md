@@ -190,6 +190,20 @@ Slack and WhatsApp are not connected yet; future adapters should render this
 same event contract using their own native presentation, without adding a
 channel-specific classifier.
 
+## Shared web links
+
+When an operator includes a public HTTPS URL in a message, the shared router
+reads that page and gives its extracted text and source URL to the model for a
+concise answer. The page body is treated as untrusted data, never as
+instructions. The source URL accompanies the synthesis context; page content
+is not persisted in conversation memory or learning traces. This first increment
+accepts HTML, XHTML and plain text only, reads at most 1 MiB, and passes at most
+20,000 characters to synthesis. HTTP, nonstandard ports, credentials in URLs, private
+or special-use IP addresses, mixed public/private DNS answers, and redirects to
+disallowed destinations are rejected. PDFs and office documents are not yet
+read from links; document uploads and connector attachments are separate later
+increments.
+
 Conversation memory is stored on the lab server as per-operator JSONL records
 with private file permissions. Lexical retrieval selects up to three relevant
 prior exchanges for context; `/new` clears only the short conversation window,
