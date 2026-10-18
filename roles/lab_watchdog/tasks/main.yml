@@ -27,6 +27,18 @@
   when: lab_watchdog_indicator_enabled | bool
   tags: [packages]
 
+- name: Create the systemd drop-in directories (Raspberry Pi OS does not ship them)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/systemd/timesyncd.conf.d
+    - /etc/systemd/system.conf.d
+  tags: [packages, hardware]
+
 - name: Take the time from the lab (no RTC, no Internet; TLS needs the date)
   ansible.builtin.copy:
     dest: /etc/systemd/timesyncd.conf.d/10-lab-watchdog.conf

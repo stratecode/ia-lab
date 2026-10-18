@@ -40,7 +40,8 @@ lab_watchdog_plug_off_seconds: 10
 # The Pi has NO Internet. It reports through the lab: events are POSTed to Alertmanager on the lab (LAN only)
 # and the lab's own Telegram receiver delivers them. While the lab is down they wait in the Pi's outbox, then
 # go out with the time the Pi detected the failure. Lab-side prerequisites: docs/watchdog-lado-lab.md.
-lab_watchdog_relay_enabled: true
+# Not named lab_watchdog_relay_enabled: group_vars/all.yml uses that name for the LAB side (nginx/Alertmanager route).
+lab_watchdog_notify_relay_enabled: true
 lab_watchdog_relay_path: /alertmanager/api/v2/alerts
 lab_watchdog_relay_verify_tls: true          # needs the right date: see lab_watchdog_ntp_server
 lab_watchdog_ntp_server: "{{ lab_watchdog_lab_ip }}"   # the Pi has no RTC nor Internet: it takes the time from the lab
