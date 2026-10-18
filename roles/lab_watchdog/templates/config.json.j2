@@ -29,7 +29,8 @@
   "limits": {
     "max_recoveries_per_hour": lab_watchdog_max_recoveries_per_hour,
     "max_recoveries_per_day": lab_watchdog_max_recoveries_per_day,
-    "flap_window_seconds": lab_watchdog_flap_window_seconds
+    "flap_window_seconds": lab_watchdog_flap_window_seconds,
+    "give_up_at_second_wake": lab_watchdog_give_up_at_second_wake | bool
   },
   "plug": {
     "type": lab_watchdog_plug_type,
@@ -43,7 +44,8 @@
     "telegram_enabled": lab_watchdog_telegram_enabled,
     "chat_id": lab_watchdog_telegram_chat_id | string,
     "heartbeat_url": lab_watchdog_heartbeat_url,
-    "daily_summary_hour": lab_watchdog_daily_summary_hour
+    "daily_summary_hour": lab_watchdog_daily_summary_hour,
+    "outbox_max_age_seconds": lab_watchdog_outbox_max_age_seconds
   },
   "indicator": {
     "enabled": lab_watchdog_indicator_enabled,

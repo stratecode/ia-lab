@@ -40,7 +40,7 @@ Una Raspberry Pi **sin Internet** (solo ve la LAN del lab) vigila el estado del 
 - **Desactivar ErP/EuP** si existe: con ErP activo, el WoL desde apagado no funciona.
 - **Restore on AC Power Loss = Power On** (necesario para el enchufe y para los cortes de luz).
 
-**Telegram:** no hace falta bot ni token en la Pi. Los avisos salen por el Alertmanager del lab con el bot actual.
+**Avisos (dos canales, en este orden):** 1) **Telegram directo** desde la Pi con un **bot propio** (`lab_watchdog_telegram_enabled`; nunca el de Donna): llega al instante aunque el lab esté caído, que es cuando más importa; 2) el **relay del lab** (Alertmanager, `docs/watchdog-lado-lab.md`) como respaldo si Telegram falla. Si ninguno está disponible, los avisos esperan en una cola local y **caducan a las 6 h** (`lab_watchdog_outbox_max_age_seconds`) para que no salgan de golpe como noticias viejas. Hace falta la hora correcta (TLS): ver `lab_watchdog_ntp_servers`. Para activar Telegram directo: token del bot en `LAB_WATCHDOG_TELEGRAM_TOKEN` (en el `.env`, nunca en git) y `LAB_TELEGRAM_ALLOWED_USERS` como chat de destino.
 
 ## Puesta en marcha (por fases)
 0. **Lado del lab** (Codex, con aprobación de Fran): `docs/watchdog-lado-lab.md` (nginx, ruta de Alertmanager, chrony). Sin esto la Pi detecta y enciende, pero no puede entregar los avisos.
@@ -57,18 +57,22 @@ Una Raspberry Pi **sin Internet** (solo ve la LAN del lab) vigila el estado del 
 6. **Enchufe inteligente** (opcional): configurar `lab_watchdog_plug_type` y `lab_watchdog_plug_host` tras la prueba T6.
 
 ## Comportamiento
-| Situación | Qué hace |
-|---|---|
-| La puerta de enlace no responde | Estado `NETWORK_DOWN`: **no juzga al lab, no enciende nada**. Avisa tras 2 ciclos y al volver |
-| El lab no responde 3 ciclos (~90 s) | `DOWN`: aviso con la **última temperatura y estado del SAI** conocidos |
-| Espera de gracia (5 min; 25 min si venía a ≥ 80 °C; el doble si reincide) | No actúa: cubre reinicios y despliegues previstos |
-| Fin de la espera | **Wake-on-LAN nº 1** → espera 4 min |
-| Sigue caído | **Wake-on-LAN nº 2** → espera 4 min |
-| Sigue caído y hay enchufe | **Ciclo de corriente** → espera 4 min |
-| Sigue caído | `GAVE_UP`: aviso crítico y recordatorio cada hora; **no vuelve a actuar** |
-| Límites | 2 secuencias/hora y 4/día; si se superan, solo avisa |
-| Mantenimiento (`maintenance N`) | Silencia avisos y **pausa las acciones**; al terminar, si sigue caído, avisa |
-| Lab caído o inalcanzable | Los avisos quedan en una cola local (máx. 50) y salen al volver el lab, con la hora real del suceso ("enviado con retraso; ocurrió a las HH:MM") |
+Los valores de la tabla son los **por defecto**; el despliegue actual los ajusta para encender el lab cuanto antes (columna "Despliegue actual").
+
+| Situación | Por defecto | Despliegue actual |
+|---|---|---|
+| La puerta de enlace no responde | Estado `NETWORK_DOWN`: **no juzga al lab, no enciende nada**. Avisa tras 2 ciclos y al volver | igual |
+| Confirmar la caída (`down_after_failures`, sondeo `poll_seconds`) | 3 ciclos de 30 s (~90 s): `DOWN`, con la **última temperatura y estado del SAI** | 2 ciclos de 15 s (~30 s) |
+| Espera de gracia (`grace_seconds`; `cooldown_seconds` si venía a ≥ 80 °C; el doble si reincide) | 5 min (+20 min si venía caliente) | **0**: actúa en ese mismo ciclo |
+| **Wake-on-LAN nº 1** → ventana de arranque (`boot_window_seconds`) | 4 min | 1 min |
+| Sigue caído: **Wake-on-LAN nº 2** | tras la ventana | tras la ventana; con `give_up_at_second_wake` salta aquí el `GAVE_UP` |
+| Sigue caído y hay enchufe | **Ciclo de corriente** → espera | (sin enchufe) |
+| `GAVE_UP` (rendido) | Aviso crítico, 3 pitidos largos cada 10 min hasta pulsar el botón, recordatorio cada hora; **no vuelve a actuar** | Lo mismo, pero **sigue mandando un WoL cada `retry_seconds` (1 min)** hasta que el lab responda |
+| Límites | 2 secuencias/hora y 4/día; si se superan, no inicia otra | Los **reintentos** tras rendirse **ignoran** estos límites |
+| Mantenimiento (`maintenance N`) | Silencia avisos y **pausa las acciones**; al terminar, si sigue caído, avisa | igual |
+| Lab caído o inalcanzable | Los avisos quedan en una cola local (máx. 50) y salen al volver el lab, con la hora real del suceso | igual |
+
+Los reintentos mandan un solo mensaje cuando empiezan ("empiezo a reintentar") y después solo el recordatorio horario, para no inundar Telegram con un mensaje por minuto; cada reintento queda en el registro del sistema. Un paquete mágico enviado a un lab que ya está encendido no hace nada, así que insistir no tiene coste.
 
 ## Mensajes de Telegram (resumen)
 `Vigilante arrancado` · `El lab no responde desde las HH:MM; última temperatura …; SAI …` · `Enviado paquete Wake-on-LAN nº N` · `Lab recuperado tras … después de N min` · `Límite de intentos alcanzado` · `El lab sigue caído … necesita intervención` · `Sin red local` / `Red local recuperada` · `Latido diario` (09:00).
@@ -157,8 +161,8 @@ Tres piezas independientes, todas **desactivadas por defecto**. Las dos primeras
 No se recomienda provocar un sobrecalentamiento real: el caso se cubre con la prueba de repetición del incidente.
 
 ## Seguridad
-- La Pi **no tiene credenciales del lab ni de Telegram**: lee métricas de Prometheus (solo lectura, LAN), envía paquetes mágicos y puede **publicar alertas** en un único endpoint de Alertmanager (solo desde su IP). Si se compromete, puede encender el lab, leer métricas y mandar avisos falsos; nada más.
-- Por defecto no hay ningún secreto en la Pi. Si algún día se usa Telegram directo, el token iría en `/etc/lab-watchdog/secrets.env` (0640 `root:labwatch`), nunca en git; una prueba comprueba que los errores de envío no lo filtran.
+- La Pi **no tiene credenciales del lab**: lee métricas de Prometheus (solo lectura, LAN), envía paquetes mágicos y, si el relay está aplicado, puede **publicar alertas** en un único endpoint de Alertmanager (solo desde su IP). Con Telegram directo guarda además **el token de un bot dedicado** que solo sirve para enviar mensajes a tu chat. Si la Pi se compromete, puede encender el lab, leer métricas y mandar avisos falsos; nada más.
+- Sin Telegram directo no hay ningún secreto en la Pi. Con él, el token va en `/etc/lab-watchdog/secrets.env` (0640 `root:labwatch`), nunca en git; una prueba comprueba que los errores de envío no lo filtran.
 - El servicio corre con un usuario sin sesión, sin privilegios (solo `CAP_NET_RAW` para `ping`) y con la protección de `systemd` activada.
 - La Pi tiene su propio **watchdog de hardware**: si se cuelga, se reinicia sola.
 

@@ -436,6 +436,14 @@ class ImmediatePolicyTests(Base):
         self.assertEqual(len(self.w.calls), 1)
         self.assertEqual(self.state["recovery"]["phase"], "WAIT1")
 
+    def test_the_message_does_not_promise_a_wait_that_is_not_there(self):
+        ctl = self.controller(self.cfg_now())
+        self.drive(ctl, 60, DOWN)
+        down_text = [t for t in self.n.texts() if "no responde" in t][0]
+        self.assertIn("Lo enciendo ahora", down_text)
+        self.assertNotIn("Espero", down_text)
+        self.assertNotIn("duplico", down_text)
+
     def test_a_hot_lab_is_not_made_to_wait(self):
         ctl = self.controller(self.cfg_now())
         self.drive(ctl, 600, UP(prom={"temp_c": 85.0, "on_battery": False, "uptime_s": 9999.0}))
@@ -476,6 +484,48 @@ class ImmediatePolicyTests(Base):
         self.assertEqual(self.w.calls, [])
         self.assertTrue(any("habría reintentado" in t for t in self.n.texts()))
 
+    def cfg_fast_giveup(self, **over):
+        cfg = self.cfg_now(boot_window_seconds=60, retry_seconds=60)
+        cfg["limits"]["give_up_at_second_wake"] = True
+        return lw.deep_merge(cfg, over)
+
+    def test_gives_up_as_soon_as_the_second_packet_is_sent_then_retries_every_minute(self):
+        ctl = self.controller(self.cfg_fast_giveup())
+        self.drive(ctl, 60, DOWN)  # two failed cycles: down, packet 1
+        self.assertEqual(len(self.w.calls), 1)
+        self.assertEqual(self.state["recovery"]["phase"], "WAIT1")
+        self.drive(ctl, 60, DOWN)  # a minute later: packet 2, and the alarm goes off at once
+        self.assertEqual(len(self.w.calls), 2)
+        self.assertEqual(self.state["recovery"]["phase"], "GAVE_UP")
+        self.assertEqual(self.n.sent[-1][0], "crit")
+        self.assertIn("segundo paquete", self.n.texts()[-1])
+        self.drive(ctl, 600, DOWN)  # then one packet per minute
+        self.assertEqual(len(self.w.calls), 2 + 10)
+        self.assertEqual(self.state["recovery"]["retries"], 10)
+
+    def test_retries_do_not_flood_the_notifications(self):
+        ctl = self.controller(self.cfg_fast_giveup())
+        self.drive(ctl, 2 * 3600, DOWN)
+        self.assertGreater(len(self.w.calls), 100)  # a packet a minute, for two hours
+        self.assertEqual(sum("reintento" in t for t in self.n.texts()), 1)  # but a single "retries begin" message
+        self.assertLessEqual(len(self.n.sent), 6)  # down, packet 1, give up, first retry, hourly reminders
+
+    def test_a_configured_plug_still_gets_its_turn_before_giving_up(self):
+        cfg = self.cfg_fast_giveup(plug={"type": "shelly_gen1", "host": "192.168.0.50"})
+        ctl = self.controller(cfg, plug=FakePlug(configured=True))
+        self.drive(ctl, 120, DOWN)
+        self.assertEqual(len(self.w.calls), 2)
+        self.assertEqual(self.state["recovery"]["phase"], "WAIT2")  # not given up yet: the plug cycle comes next
+        self.drive(ctl, 60, DOWN)
+        self.assertEqual(self.plug.cycles, 1)
+
+    def test_the_second_packet_alarm_is_off_by_default(self):
+        ctl = self.controller(self.cfg_now())  # give_up_at_second_wake not set
+        self.drive(ctl, 60, DOWN)
+        self.drive(ctl, 240, DOWN)
+        self.assertEqual(len(self.w.calls), 2)
+        self.assertEqual(self.state["recovery"]["phase"], "WAIT2")
+
     def test_the_old_policy_is_still_the_default(self):
         ctl = self.controller()  # grace 300 s, no retries
         self.drive(ctl, 90, DOWN)
@@ -491,6 +541,109 @@ class ImmediatePolicyTests(Base):
         self.assertTrue(errors(grace_seconds=-1))
         self.assertTrue(errors(retry_seconds=-5))
         self.assertTrue(errors(poll_seconds=0))
+        cfg = lw.deep_merge(make_cfg(), {"limits": {"give_up_at_second_wake": "yes"}})
+        self.assertTrue([e for e in lw.validate_config(cfg) if "give_up_at_second_wake" in e])
+
+
+class ChannelAndExpiryTests(Base):
+    """Telegram goes out directly (it works with the lab down); the lab relay is only the fallback."""
+
+    def notifier(self, telegram_ok=True, relay_ok=True, **notify):
+        cfg = make_cfg(notify=dict({"telegram_enabled": True, "relay_enabled": True, "chat_id": "42"}, **notify))
+        self.state, self.t, self.via = lw.new_state(), {"now": 10_000.0}, []
+
+        def sender(token, chat, text, silent):
+            if not telegram_ok:
+                raise RuntimeError("telegram send failed (URLError)")
+            self.via.append(("telegram", chat, text))
+
+        def relay(c, level, text, when):
+            if not relay_ok:
+                raise RuntimeError("relay failed (ConnectionRefusedError)")
+            self.via.append(("relay", level, text))
+        return lw.Notifier(cfg, self.state, token="T", sender=sender, relay=relay, now=lambda: self.t["now"])
+
+    def test_telegram_is_used_first_and_the_relay_stays_quiet(self):
+        n = self.notifier()
+        n.send("crit", "El lab no responde")
+        self.assertEqual([v[0] for v in self.via], ["telegram"])
+        self.assertEqual(self.via[0][1], "42")
+        self.assertEqual(self.state["outbox"], [])
+
+    def test_the_relay_takes_over_when_telegram_fails(self):
+        n = self.notifier(telegram_ok=False)
+        n.send("crit", "El lab no responde")
+        self.assertEqual([v[0] for v in self.via], ["relay"])
+        self.assertEqual(self.state["outbox"], [])
+
+    def test_the_message_waits_when_every_channel_fails(self):
+        n = self.notifier(telegram_ok=False, relay_ok=False)
+        n.send("crit", "El lab no responde")
+        self.assertEqual(self.via, [])
+        self.assertEqual(len(self.state["outbox"]), 1)
+
+    def test_without_a_token_only_the_relay_is_tried(self):
+        n = self.notifier()
+        n.token = ""
+        n.send("info", "hola")
+        self.assertEqual([v[0] for v in self.via], ["relay"])
+
+    def test_old_queued_events_are_dropped_not_sent_as_a_burst(self):
+        n = self.notifier(telegram_ok=False, relay_ok=False, outbox_max_age_seconds=6 * 3600)
+        n.send("warn", "vieja 1")
+        n.send("warn", "vieja 2")
+        self.t["now"] += 7 * 3600  # seven hours later
+        n.send("crit", "reciente")  # arrives while still offline: queued with the old ones
+        self.assertEqual([i["text"] for i in self.state["outbox"]], ["reciente"])
+        n.sender = lambda token, chat, text, silent: self.via.append(("telegram", chat, text))
+        n.flush()
+        self.assertEqual([v[2].split(" ", 1)[1] for v in self.via], ["reciente"])
+
+    def test_without_an_age_limit_nothing_is_dropped(self):
+        n = self.notifier(telegram_ok=False, relay_ok=False)
+        n.send("warn", "vieja")
+        self.t["now"] += 30 * 24 * 3600
+        n.flush()
+        self.assertEqual(len(self.state["outbox"]), 1)
+
+    def test_a_telegram_http_error_shows_the_status_but_never_the_token(self):
+        secret = "123456:SUPERSECRETTOKEN"
+        original = lw.urllib.request.urlopen
+
+        def refused(req, timeout=0):
+            raise lw.urllib.error.HTTPError("https://api.telegram.org/bot%s/sendMessage" % secret, 400, "Bad Request", {}, None)
+        lw.urllib.request.urlopen = refused
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                lw.telegram_send(secret, "42", "hola", False)
+        finally:
+            lw.urllib.request.urlopen = original
+        self.assertIn("telegram HTTP 400", str(ctx.exception))
+        self.assertIn("Start", str(ctx.exception))
+        self.assertNotIn(secret, str(ctx.exception))
+        self.assertNotIn("SUPERSECRET", repr(ctx.exception.__cause__))
+
+    def test_when_every_channel_fails_the_log_names_each_reason(self):
+        n = self.notifier(telegram_ok=False, relay_ok=False)
+        with self.assertLogs(level="WARNING") as logs:
+            n.send("crit", "El lab no responde")
+        line = " ".join(logs.output)
+        self.assertIn("telegram send failed", line)
+        self.assertIn("relay failed", line)
+
+    def test_the_queue_can_be_purged_before_a_new_channel_is_switched_on(self):
+        n = self.notifier(telegram_ok=False, relay_ok=False)
+        for text in ("a", "b", "c"):
+            n.send("warn", text)
+        self.assertEqual(lw.purge_outbox(self.state), 3)
+        self.assertEqual(self.state["outbox"], [])
+        self.assertEqual(lw.purge_outbox(self.state), 0)
+
+    def test_age_limit_validation(self):
+        cfg = lw.deep_merge(make_cfg(), {"notify": {"outbox_max_age_seconds": -1}})
+        self.assertTrue([e for e in lw.validate_config(cfg) if "outbox_max_age_seconds" in e])
+        cfg = lw.deep_merge(make_cfg(), {"notify": {"outbox_max_age_seconds": 21600}})
+        self.assertEqual([e for e in lw.validate_config(cfg) if "outbox_max_age_seconds" in e], [])
 
 
 class FakeGpio:

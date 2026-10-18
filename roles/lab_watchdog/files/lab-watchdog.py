@@ -23,6 +23,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -57,7 +58,8 @@ DEFAULTS: Dict[str, Any] = {
         "retry_seconds": 0,         # after giving up, send another Wake-on-LAN this often (0 = never retry)
     },
     "thresholds": {"hot_celsius": 80, "hot_memory_seconds": 900},
-    "limits": {"max_recoveries_per_hour": 2, "max_recoveries_per_day": 4, "flap_window_seconds": 1800},
+    "limits": {"max_recoveries_per_hour": 2, "max_recoveries_per_day": 4, "flap_window_seconds": 1800,
+               "give_up_at_second_wake": False},  # True: raise the "gave up" alarm as soon as the 2nd packet is sent
     "plug": {"type": "none", "host": "", "off_seconds": 10},
     "notify": {
         # The Pi has no Internet: events are relayed to Alertmanager on the lab (LAN only) once it is up.
@@ -66,6 +68,7 @@ DEFAULTS: Dict[str, Any] = {
         "relay_verify_tls": True,
         "telegram_enabled": False,  # only for a Pi that does have Internet
         "chat_id": "", "heartbeat_url": "", "daily_summary_hour": 9,
+        "outbox_max_age_seconds": 0,  # drop queued events older than this (0 = keep them all)
     },
     "indicator": {
         # Local alarm on the Pi (LEDs, buzzer, mute button). It works with the lab and the network down.
@@ -127,6 +130,8 @@ def validate_config(cfg: Dict[str, Any]) -> List[str]:
     for key in ("max_recoveries_per_hour", "max_recoveries_per_day"):
         if not isinstance(cfg["limits"].get(key), int) or cfg["limits"][key] < 0:
             errors.append("limits.%s must be an integer >= 0" % key)
+    if not isinstance(cfg["limits"].get("give_up_at_second_wake"), bool):
+        errors.append("limits.give_up_at_second_wake must be true or false")
     if cfg["plug"].get("type") not in PLUG_TYPES:
         errors.append("plug.type must be one of %s" % ", ".join(PLUG_TYPES))
     if cfg["plug"].get("type") != "none" and not cfg["plug"].get("host"):
@@ -135,6 +140,8 @@ def validate_config(cfg: Dict[str, Any]) -> List[str]:
         errors.append("notify.relay_path must start with /")
     if cfg["notify"].get("telegram_enabled") and not re.match(r"^-?\d+$", str(cfg["notify"].get("chat_id", ""))):
         errors.append("notify.chat_id must be a numeric Telegram chat id")
+    if not isinstance(cfg["notify"].get("outbox_max_age_seconds"), (int, float)) or cfg["notify"]["outbox_max_age_seconds"] < 0:
+        errors.append("notify.outbox_max_age_seconds must be a number >= 0")
     if not isinstance(cfg["mode"].get("dry_run"), bool):
         errors.append("mode.dry_run must be true or false")
     ind = cfg["indicator"]
@@ -323,6 +330,12 @@ def telegram_send(token: str, chat_id: str, text: str, silent: bool) -> None:
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             if resp.status != 200:
                 raise RuntimeError("telegram HTTP %s" % resp.status)
+    except RuntimeError:
+        raise
+    except urllib.error.HTTPError as exc:  # only the status code: its URL contains the token
+        hint = {400: " (is the chat id right, and did you press Start on the bot?)", 401: " (invalid token)",
+                403: " (the bot is blocked or cannot write to that chat)"}.get(exc.code, "")
+        raise RuntimeError("telegram HTTP %s%s" % (exc.code, hint)) from None
     except Exception as exc:  # never let the token leak through an exception message
         raise RuntimeError("telegram send failed (%s)" % exc.__class__.__name__) from None
 
@@ -396,18 +409,43 @@ class Notifier:
         del box[:-self.MAX_OUTBOX]
         self.flush()
 
+    def _deliver(self, item: Dict[str, Any], text: str) -> None:
+        """Telegram directly first (it works while the lab is down); the lab relay is the fallback."""
+        n, errors = self.cfg["notify"], []
+        if n.get("telegram_enabled") and self.token:
+            try:
+                self.sender(self.token, str(n["chat_id"]), text, item["silent"])
+                return
+            except RuntimeError as exc:
+                errors.append(str(exc))
+        if n.get("relay_enabled"):
+            try:
+                self.relay(self.cfg, item["level"], text, item["t"])
+                return
+            except RuntimeError as exc:
+                errors.append(str(exc))
+        raise RuntimeError(" | ".join(errors) or "no notification channel is usable")  # every channel's reason, not just the last
+
+    def _expire(self, box: List[Dict[str, Any]]) -> None:
+        """Drop queued events that are too old to be useful (they would arrive as a burst of stale news)."""
+        max_age = float(self.cfg["notify"].get("outbox_max_age_seconds", 0) or 0)
+        if not max_age:
+            return
+        fresh = [i for i in box if self.now() - i["t"] <= max_age]
+        if len(fresh) != len(box):
+            logging.info("dropped %d queued message(s) older than %d h", len(box) - len(fresh), max_age // 3600)
+            box[:] = fresh
+
     def flush(self) -> None:
         box = self.state.setdefault("outbox", [])
+        self._expire(box)
         while box:
             item = box[0]
             text = "%s %s" % (ICON.get(item["level"], ""), item["text"])
             if self.now() - item["t"] > 120:
                 text += "\n(enviado con retraso; ocurrió a las %s)" % fmt_time(item["t"])
             try:
-                if self.cfg["notify"].get("relay_enabled"):
-                    self.relay(self.cfg, item["level"], text, item["t"])
-                else:
-                    self.sender(self.token, str(self.cfg["notify"]["chat_id"]), text, item["silent"])
+                self._deliver(item, text)
             except RuntimeError as exc:
                 logging.warning("%s; %d message(s) queued", exc, len(box))
                 return
@@ -520,11 +558,13 @@ class Controller:
         wait = self.iv["grace_seconds"] * s["flap_mult"] + (self.iv["cooldown_seconds"] * s["flap_mult"] if hot else 0)
         s["recovery"] = {"phase": "GRACE", "since": now, "wait": wait, "hot": hot, "actions": [], "last_reminder": now}
         msg = "El lab no responde desde las %s: %s." % (fmt_time(s["down_since"]), self._known())
-        if hot:
+        if wait <= 0:
+            msg += "\nLo enciendo ahora con Wake-on-LAN."
+        elif hot:
             msg += "\nVenía caliente: espero %d min antes de intentar encenderlo para no encenderlo contra el mismo problema." % (wait // 60)
         else:
             msg += "\nEspero %d min por si es un reinicio previsto." % (wait // 60)
-        if s["flap_mult"] > 1:
+        if s["flap_mult"] > 1 and wait > 0:
             msg += "\nHa vuelto a caer poco después de recuperarse: duplico la espera."
         level = "crit" if hot or s["last_known"].get("on_battery") else "warn"
         if maint:  # announce it when the maintenance window ends, if the lab is still down
@@ -576,25 +616,31 @@ class Controller:
 
     def _wake(self, n: int, now: float) -> None:
         rec, lab = self.s["recovery"], self.cfg["lab"]
+        final = n == 2 and self.cfg["limits"].get("give_up_at_second_wake") and not self.plug.configured
         if self.dry:
             self.n.send("info", "[SIMULACIÓN] habría enviado el paquete Wake-on-LAN nº %d a %s." % (n, lab["mac"]))
         else:
             self.waker.send(lab["mac"], lab["broadcast"])
-            self.n.send("warn", "Enviado paquete Wake-on-LAN nº %d. Espero %d min a que arranque."
-                        % (n, self.iv["boot_window_seconds"] // 60))
+            if not final:  # the "gave up" message below already says what happens next
+                self.n.send("warn", "Enviado paquete Wake-on-LAN nº %d. Espero %d min a que arranque."
+                            % (n, self.iv["boot_window_seconds"] // 60))
         rec["actions"].append("wol%d" % n)
         rec["phase"], rec["since"] = "WAIT%d" % n, now
+        if final:  # raise the alarm now; the retries keep going from here
+            self._give_up(now, "He enviado el segundo paquete Wake-on-LAN y el lab sigue sin responder.")
 
     def _retry_wake(self, now: float) -> None:
         """After giving up: keep trying, ignoring the attempt limits. A magic packet sent to a running lab does nothing."""
         rec, lab = self.s["recovery"], self.cfg["lab"]
         rec["last_retry"] = now
         n = rec["retries"] = rec.get("retries", 0) + 1
-        if self.dry:
-            self.n.send("info", "[SIMULACIÓN] habría reintentado el Wake-on-LAN (reintento %d)." % n, True)
-        else:
+        if not self.dry:
             self.waker.send(lab["mac"], lab["broadcast"])
-            self.n.send("warn", "Sigue caído: reintento %d del Wake-on-LAN." % n, True)
+        logging.info("retry %d of the Wake-on-LAN%s", n, " (simulated)" if self.dry else "")
+        if n == 1:  # one message when the retries begin; the hourly reminder covers the rest (no message per minute)
+            self.n.send("info" if self.dry else "warn",
+                        ("[SIMULACIÓN] habría reintentado el Wake-on-LAN (reintento %d)." if self.dry
+                         else "Sigue caído: empiezo a reintentar el Wake-on-LAN (reintento %d).") % n, True)
 
     def _cycle_plug(self, now: float) -> None:
         rec = self.s["recovery"]
@@ -933,6 +979,13 @@ def save_state(path: str, state: Dict[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def purge_outbox(state: Dict[str, Any]) -> int:
+    """Forget every queued message and say how many there were."""
+    dropped = len(state.get("outbox", []))
+    state["outbox"] = []
+    return dropped
+
+
 def maintenance_checker(path: str) -> Callable[[float], bool]:
     def active(now: float) -> bool:
         try:
@@ -1045,6 +1098,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     maint = sub.add_parser("maintenance", help="pause the watchdog for N minutes (0 = resume)")
     maint.add_argument("minutes", type=int)
     sub.add_parser("reset", help="clear the recovery state and the attempt history")
+    sub.add_parser("purge-outbox", help="drop every queued message (stop the service first: it keeps its own copy)")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
     cfg = load_config(args.config)
@@ -1110,6 +1164,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             with open(path, "w", encoding="utf-8") as handle:
                 handle.write(str(time.time() + args.minutes * 60))
         print("maintenance %s" % ("until %s" % fmt_time(time.time() + args.minutes * 60) if args.minutes > 0 else "cleared"))
+    elif args.cmd == "purge-outbox":
+        dropped = purge_outbox(state)
+        save_state(cfg["paths"]["state"], state)
+        print("dropped %d queued message(s)" % dropped)
     elif args.cmd == "reset":
         state["recovery"], state["history"], state["flap_mult"] = new_state()["recovery"], [], 1
         save_state(cfg["paths"]["state"], state)

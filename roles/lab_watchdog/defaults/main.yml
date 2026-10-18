@@ -30,6 +30,8 @@ lab_watchdog_hot_memory_seconds: 900
 lab_watchdog_max_recoveries_per_hour: 2
 lab_watchdog_max_recoveries_per_day: 4
 lab_watchdog_flap_window_seconds: 1800
+lab_watchdog_give_up_at_second_wake: false   # true: raise the "gave up" alarm as soon as the 2nd Wake-on-LAN is sent
+                                             # (no plug configured); lab_watchdog_retry_seconds then keeps retrying
 lab_watchdog_daily_summary_hour: 9           # null disables the silent daily message
 
 # --- Optional smart plug (second step; Wake-on-LAN cannot revive a HUNG machine) ---------------
@@ -43,6 +45,8 @@ lab_watchdog_plug_off_seconds: 10
 # go out with the time the Pi detected the failure. Lab-side prerequisites: docs/watchdog-lado-lab.md.
 # Not named lab_watchdog_relay_enabled: group_vars/all.yml uses that name for the LAB side (nginx/Alertmanager route).
 lab_watchdog_notify_relay_enabled: true
+lab_watchdog_outbox_max_age_seconds: 21600   # drop queued events older than this (6 h; 0 = keep them all): when a channel
+                                             # comes back they would otherwise arrive as a burst of stale news
 lab_watchdog_relay_path: /alertmanager/api/v2/alerts
 lab_watchdog_relay_verify_tls: true          # needs the right date: see lab_watchdog_ntp_servers
 # The Pi has no RTC: it boots with the time it had when it went off, so it needs a time source on the LAN.
