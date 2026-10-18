@@ -1,0 +1,62 @@
+---
+# Role lab_watchdog: runs ON THE RASPBERRY PI, never on the lab. See docs/watchdog.md.
+
+# --- Lab being watched (facts measured on the host) ---------------------------------------
+lab_watchdog_lab_name: lab
+lab_watchdog_lab_ip: 192.168.0.85            # DHCP today: make a router reservation for it
+lab_watchdog_lab_mac: ""                     # REQUIRED. NIC enp3s0 (igc). Format aa:bb:cc:dd:ee:ff
+lab_watchdog_broadcast: 192.168.0.255
+lab_watchdog_gateway: 192.168.0.1
+lab_watchdog_ports: [22, 443]
+
+# Read-only Prometheus API reachable from the LAN through nginx. The name does NOT resolve in the
+# LAN (the router does not know it): the watchdog connects to lab_watchdog_lab_ip and presents this name.
+lab_watchdog_prometheus_enabled: true
+lab_watchdog_prometheus_host: monitor.stratecode.com
+lab_watchdog_prometheus_verify_tls: true
+
+# --- Behaviour ------------------------------------------------------------------------------
+# First deployment is always a SIMULATION: it alerts but never sends Wake-on-LAN nor cycles the plug.
+lab_watchdog_dry_run: true
+lab_watchdog_poll_seconds: 30
+lab_watchdog_down_after_failures: 3          # ~90 s of silence before declaring the lab DOWN
+lab_watchdog_grace_seconds: 300              # wait before acting (planned reboots, deployments)
+lab_watchdog_boot_window_seconds: 240
+lab_watchdog_cooldown_seconds: 1200          # extra wait when the lab was hot before it went down
+lab_watchdog_remind_seconds: 3600
+lab_watchdog_hot_celsius: 80
+lab_watchdog_hot_memory_seconds: 900
+lab_watchdog_max_recoveries_per_hour: 2
+lab_watchdog_max_recoveries_per_day: 4
+lab_watchdog_flap_window_seconds: 1800
+lab_watchdog_daily_summary_hour: 9           # null disables the silent daily message
+
+# --- Optional smart plug (second step; Wake-on-LAN cannot revive a HUNG machine) ---------------
+lab_watchdog_plug_type: none                 # none | shelly_gen1 | shelly_gen2 | tasmota (local API, no cloud)
+lab_watchdog_plug_host: ""
+lab_watchdog_plug_off_seconds: 10
+
+# --- Notifications -----------------------------------------------------------------------------
+# The Pi has NO Internet. It reports through the lab: events are POSTed to Alertmanager on the lab (LAN only)
+# and the lab's own Telegram receiver delivers them. While the lab is down they wait in the Pi's outbox, then
+# go out with the time the Pi detected the failure. Lab-side prerequisites: docs/watchdog-lado-lab.md.
+lab_watchdog_relay_enabled: true
+lab_watchdog_relay_path: /alertmanager/api/v2/alerts
+lab_watchdog_relay_verify_tls: true          # needs the right date: see lab_watchdog_ntp_server
+lab_watchdog_ntp_server: "{{ lab_watchdog_lab_ip }}"   # the Pi has no RTC nor Internet: it takes the time from the lab
+
+# Optional, only for a Pi that DOES have Internet: direct Telegram with a separate bot (never Donna's).
+lab_watchdog_telegram_enabled: false
+lab_watchdog_telegram_token: "{{ vault_lab_watchdog_telegram_token | default(lookup('env', 'LAB_WATCHDOG_TELEGRAM_TOKEN') | default('', true), true) }}"
+lab_watchdog_telegram_chat_id: "{{ (lookup('env', 'LAB_TELEGRAM_ALLOWED_USERS') | default('', true)).split(',') | first | trim }}"
+lab_watchdog_heartbeat_url: ""               # optional external dead-man's switch (healthchecks.io, ntfy...)
+
+# --- Pi hardening ------------------------------------------------------------------------------
+lab_watchdog_enable_hw_watchdog: true        # the Pi's own hardware watchdog reboots it if it hangs
+
+# --- Paths --------------------------------------------------------------------------------------
+lab_watchdog_user: labwatch
+lab_watchdog_group: labwatch
+lab_watchdog_bin: /usr/local/bin/lab-watchdog
+lab_watchdog_config_dir: /etc/lab-watchdog
+lab_watchdog_state_dir: /var/lib/lab-watchdog

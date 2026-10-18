@@ -1,0 +1,43 @@
+# Managed by Ansible (role lab_watchdog)
+[Unit]
+Description=Lab watchdog: watch the lab and wake it with Wake-on-LAN
+Documentation=file:///usr/local/share/doc/lab-watchdog/README
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{ lab_watchdog_user }}
+Group={{ lab_watchdog_group }}
+{% if lab_watchdog_telegram_enabled %}
+EnvironmentFile={{ lab_watchdog_config_dir }}/secrets.env
+{% endif %}
+ExecStart={{ lab_watchdog_bin }} -c {{ lab_watchdog_config_dir }}/config.json run
+Restart=always
+RestartSec=10
+# The script pings systemd every cycle (30 s); if it stalls for 3 minutes systemd restarts it.
+WatchdogSec=180
+NotifyAccess=main
+StateDirectory=lab-watchdog
+StateDirectoryMode=0750
+UMask=0027
+
+# Sandboxing. CAP_NET_RAW only so that ping works; nothing else is needed.
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryMax=64M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

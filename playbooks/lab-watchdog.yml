@@ -1,0 +1,20 @@
+---
+# Applies the watchdog to the Raspberry Pi.
+#
+# IMPORTANT: use the SEPARATE inventory (inventory-watchdog.yml, copy of the example). NEVER add the Pi
+# to inventory.yml: playbooks with `hosts: all` (bootstrap.yml) would provision it as if it were the lab.
+#
+#   cp inventory-watchdog.example.yml inventory-watchdog.yml      # fill in the Pi address and user
+#   ansible-playbook -i inventory-watchdog.yml playbooks/lab-watchdog.yml --check --diff
+#   ansible-playbook -i inventory-watchdog.yml playbooks/lab-watchdog.yml
+#
+# The first run is a SIMULATION (lab_watchdog_dry_run: true). Leave it like that for 24-48 h.
+- name: Lab watchdog (Raspberry Pi)
+  hosts: watchdog
+  become: true
+
+  vars_files:
+    - ../group_vars/vault.yml
+
+  roles:
+    - role: lab_watchdog

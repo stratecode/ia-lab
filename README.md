@@ -11,6 +11,8 @@ Ansible-managed homelab infrastructure. Provisions and configures an Ubuntu serv
 - Reproduce the current profile with `playbooks/deploy-principal-model.yml`.
 - Monitoring, HTTPS access and WireGuard remain active; the orchestrator and
   Codex gateway remain retired. External Oráculo/OpenSearch projects are excluded.
+- The external Raspberry Pi watchdog (WoL, status checks and delayed alerts) is
+  documented in [docs/watchdog.md](docs/watchdog.md); it uses a separate inventory.
 - See [Principal model operation](docs/principal-model-operation.md) for actual
   validation and [Master Plan](docs/architecture/master-plan.md) for direction.
 
@@ -99,9 +101,12 @@ Roles are applied in dependency order:
 | 8 | `monitor` | Cockpit + Nginx reverse proxy + TLS (Let's Encrypt) |
 | 9 | `observability` | Prometheus, Grafana (Docker), Alertmanager, alert rules |
 | 10 | `lab_alerting` | UPS (NUT), Telegram alerts, health exporters, recording rules |
+| 11 | `lab_watchdog` | External Raspberry Pi watchdog with WoL; separate inventory and playbook |
 
 `lab_alerting` runs after `observability` through `playbooks/lab-alerting.yml`;
-it is not part of the historical `bootstrap.yml` path.
+it is not part of the historical `bootstrap.yml` path. The external Pi watchdog
+runs separately through [playbooks/lab-watchdog.yml](playbooks/lab-watchdog.yml)
+and a separate `inventory-watchdog.yml`; never add the Pi to the lab inventory.
 
 ## Project structure
 

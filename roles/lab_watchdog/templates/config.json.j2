@@ -1,0 +1,53 @@
+{# Rendered by Ansible (role lab_watchdog). Secrets live in secrets.env, never here. #}
+{% set cfg = {
+  "lab": {
+    "name": lab_watchdog_lab_name,
+    "ip": lab_watchdog_lab_ip,
+    "mac": lab_watchdog_lab_mac | lower,
+    "broadcast": lab_watchdog_broadcast,
+    "ports": lab_watchdog_ports
+  },
+  "gateway": lab_watchdog_gateway,
+  "prometheus": {
+    "enabled": lab_watchdog_prometheus_enabled,
+    "host": lab_watchdog_prometheus_host,
+    "verify_tls": lab_watchdog_prometheus_verify_tls
+  },
+  "intervals": {
+    "poll_seconds": lab_watchdog_poll_seconds,
+    "down_after_failures": lab_watchdog_down_after_failures,
+    "grace_seconds": lab_watchdog_grace_seconds,
+    "boot_window_seconds": lab_watchdog_boot_window_seconds,
+    "cooldown_seconds": lab_watchdog_cooldown_seconds,
+    "remind_seconds": lab_watchdog_remind_seconds
+  },
+  "thresholds": {
+    "hot_celsius": lab_watchdog_hot_celsius,
+    "hot_memory_seconds": lab_watchdog_hot_memory_seconds
+  },
+  "limits": {
+    "max_recoveries_per_hour": lab_watchdog_max_recoveries_per_hour,
+    "max_recoveries_per_day": lab_watchdog_max_recoveries_per_day,
+    "flap_window_seconds": lab_watchdog_flap_window_seconds
+  },
+  "plug": {
+    "type": lab_watchdog_plug_type,
+    "host": lab_watchdog_plug_host,
+    "off_seconds": lab_watchdog_plug_off_seconds
+  },
+  "notify": {
+    "relay_enabled": lab_watchdog_relay_enabled,
+    "relay_path": lab_watchdog_relay_path,
+    "relay_verify_tls": lab_watchdog_relay_verify_tls,
+    "telegram_enabled": lab_watchdog_telegram_enabled,
+    "chat_id": lab_watchdog_telegram_chat_id | string,
+    "heartbeat_url": lab_watchdog_heartbeat_url,
+    "daily_summary_hour": lab_watchdog_daily_summary_hour
+  },
+  "mode": {"dry_run": lab_watchdog_dry_run},
+  "paths": {
+    "state": lab_watchdog_state_dir ~ "/state.json",
+    "maintenance": lab_watchdog_state_dir ~ "/maintenance_until"
+  }
+} %}
+{{ cfg | to_nice_json }}

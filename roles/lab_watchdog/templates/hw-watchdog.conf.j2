@@ -1,0 +1,5 @@
+# Managed by Ansible (role lab_watchdog). The Raspberry Pi's own hardware watchdog:
+# if systemd stops answering for 15 s the board resets itself, so the watcher cannot stay hung.
+[Manager]
+RuntimeWatchdogSec=15
+RebootWatchdogSec=2min

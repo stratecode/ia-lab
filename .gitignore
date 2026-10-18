@@ -39,3 +39,6 @@ jetbrains-plugin/.idea/
 # Local benchmark configuration and generated reports
 benchmarks/benchmark.local.json
 benchmarks/runs/
+
+# Separate inventory for Raspberry Pi watchdog; never include it in inventory.yml.
+inventory-watchdog.yml

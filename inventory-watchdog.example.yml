@@ -1,0 +1,15 @@
+---
+# Copy to inventory-watchdog.yml (git-ignored). This inventory is ONLY for the Raspberry Pi.
+# Do not merge it into inventory.yml: `hosts: all` playbooks would target the Pi.
+all:
+  children:
+    watchdog:
+      hosts:
+        lab-watchdog:
+          ansible_host: 192.168.0.XX            # router DHCP reservation for the Pi
+          ansible_user: CHANGE_ME                # user created when flashing Raspberry Pi OS
+          ansible_ssh_private_key_file: ~/.ssh/CHANGE_ME
+          lab_watchdog_lab_mac: "c8:ff:bf:08:5e:db"   # NIC enp3s0 of the lab
+          # lab_watchdog_dry_run: false          # only after the 24-48 h simulation and tests T0-T4
+          # lab_watchdog_plug_type: shelly_gen1  # only if a smart plug is installed
+          # lab_watchdog_plug_host: 192.168.0.YY

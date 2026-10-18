@@ -1,0 +1,138 @@
+---
+# Applies the watchdog to the Raspberry Pi (inventory group "watchdog", separate inventory file).
+
+- name: Check required variables
+  ansible.builtin.assert:
+    that:
+      - lab_watchdog_lab_mac is match('^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$')
+      - (not lab_watchdog_telegram_enabled) or (lab_watchdog_telegram_token | length > 0)
+      - (not lab_watchdog_telegram_enabled) or (lab_watchdog_telegram_chat_id is match('^-?[0-9]+$'))
+      - lab_watchdog_plug_type in ['none', 'shelly_gen1', 'shelly_gen2', 'tasmota']
+      - (lab_watchdog_plug_type == 'none') or (lab_watchdog_plug_host | length > 0)
+    fail_msg: >-
+      Define lab_watchdog_lab_mac (and, only if the Pi has Internet and telegram is enabled, the token
+      vault_lab_watchdog_telegram_token / LAB_WATCHDOG_TELEGRAM_TOKEN and a numeric chat id). See docs/watchdog.md.
+  no_log: true
+  tags: [always]
+
+# The Pi has no Internet, so nothing is installed with apt: Raspberry Pi OS Lite already ships python3 and ping.
+- name: Check that python3 and ping are present (the Pi cannot download them)
+  ansible.builtin.shell: "python3 -c 'import sys; assert sys.version_info >= (3, 9)' && command -v ping"
+  changed_when: false
+  tags: [packages]
+
+- name: Take the time from the lab (no RTC, no Internet; TLS needs the date)
+  ansible.builtin.copy:
+    dest: /etc/systemd/timesyncd.conf.d/10-lab-watchdog.conf
+    content: |
+      # Managed by Ansible (role lab_watchdog)
+      [Time]
+      NTP={{ lab_watchdog_ntp_server }}
+      FallbackNTP=
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart timesyncd
+  tags: [packages]
+
+- name: Keep the clock right
+  ansible.builtin.systemd:
+    name: systemd-timesyncd
+    enabled: true
+    state: started
+  tags: [packages]
+
+- name: Create the service group
+  ansible.builtin.group:
+    name: "{{ lab_watchdog_group }}"
+    system: true
+
+- name: Create the service user (no login, no home)
+  ansible.builtin.user:
+    name: "{{ lab_watchdog_user }}"
+    group: "{{ lab_watchdog_group }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Create the configuration directory
+  ansible.builtin.file:
+    path: "{{ lab_watchdog_config_dir }}"
+    state: directory
+    owner: root
+    group: "{{ lab_watchdog_group }}"
+    mode: "0750"
+
+- name: Install the watchdog (syntax checked before it replaces the old one)
+  ansible.builtin.copy:
+    src: lab-watchdog.py
+    dest: "{{ lab_watchdog_bin }}"
+    owner: root
+    group: root
+    mode: "0755"
+    backup: false
+    validate: python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" %s
+  notify: Restart lab-watchdog
+  tags: [script]
+
+- name: Render the configuration (no secrets in it)
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: "{{ lab_watchdog_config_dir }}/config.json"
+    owner: root
+    group: "{{ lab_watchdog_group }}"
+    mode: "0640"
+  notify: Restart lab-watchdog
+  tags: [config]
+
+- name: Validate the rendered configuration with the installed script
+  ansible.builtin.command: "{{ lab_watchdog_bin }} -c {{ lab_watchdog_config_dir }}/config.json check-config"
+  changed_when: false
+  tags: [config]
+
+- name: Install the Telegram token (only if direct Telegram is enabled)
+  ansible.builtin.template:
+    src: secrets.env.j2
+    dest: "{{ lab_watchdog_config_dir }}/secrets.env"
+    owner: root
+    group: "{{ lab_watchdog_group }}"
+    mode: "0640"
+  no_log: true
+  notify: Restart lab-watchdog
+  when: lab_watchdog_telegram_enabled
+  tags: [secrets]
+
+- name: Install the systemd unit
+  ansible.builtin.template:
+    src: lab-watchdog.service.j2
+    dest: /etc/systemd/system/lab-watchdog.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: lab_watchdog_unit
+  notify: Restart lab-watchdog
+  tags: [unit]
+
+- name: Enable the Pi hardware watchdog (the Pi reboots itself if it hangs)
+  ansible.builtin.template:
+    src: hw-watchdog.conf.j2
+    dest: /etc/systemd/system.conf.d/10-lab-watchdog-hw.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: lab_watchdog_enable_hw_watchdog
+  notify: Reexecute systemd
+  tags: [hardware]
+
+- name: Reload systemd after unit changes
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: lab_watchdog_unit is changed
+  tags: [unit]
+
+- name: Enable and start the watchdog
+  ansible.builtin.systemd:
+    name: lab-watchdog
+    enabled: true
+    state: started
+  tags: [unit]
