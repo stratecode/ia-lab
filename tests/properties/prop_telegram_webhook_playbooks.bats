@@ -80,6 +80,8 @@ for expected in (
 ):
     if expected not in voice_deploy:
         raise SystemExit(f"voice deployment is missing {expected!r}")
+if "Install shared secretary instructions" in voice_deploy:
+    raise SystemExit("voice-only deployment must not overwrite secretary instructions")
 
 for deployment in ("playbooks/deploy-lab-surface.yml", "playbooks/deploy-principal-model.yml"):
     play = yaml.safe_load(Path(deployment).read_text())[0]
