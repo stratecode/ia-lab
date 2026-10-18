@@ -8,7 +8,8 @@
 
   vars:
     lab_secretary_telegram_mode: webhook
-    lab_secretary_voice_enabled: true
+    lab_secretary_transcription_enabled: true
+    lab_secretary_voice_enabled: false
     telegram_public_probe_passed: false
 
   pre_tasks:

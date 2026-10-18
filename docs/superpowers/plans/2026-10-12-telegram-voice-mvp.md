@@ -205,7 +205,7 @@ Run Whisper on `127.0.0.1:8083` with CPU-only inference, four threads by default
 
 - [ ] **Step 3: Add switch-based disable and rollback behavior**
 
-Include `lab_speech` in `playbooks/deploy-secretary.yml`. When `lab_secretary_voice_enabled` is false, stop and disable both speech services and configure the secretary text path to ignore voice updates. Do not delete binaries or model files during rollback. Enable the feature explicitly in the tracked secretary playbook for the initial deployment.
+Historical plan note: the implementation now separates `lab_secretary_transcription_enabled` (Whisper/STT input) from `lab_secretary_voice_enabled` (Piper/TTS output). Disabling spoken replies must leave transcription enabled when Telegram voice-note input is desired. Do not delete binaries or model files during rollback.
 
 - [ ] **Step 4: Run static deployment checks**
 

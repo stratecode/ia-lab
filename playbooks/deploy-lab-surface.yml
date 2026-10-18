@@ -8,7 +8,8 @@
 
   vars:
     open_webui_enabled: true
-    lab_secretary_voice_enabled: true
+    lab_secretary_transcription_enabled: true
+    lab_secretary_voice_enabled: false
     # Keep the July-retired control plane out of the running lab baseline.
     codex_gateway_enabled: false
     orchestrator_enabled: false
@@ -18,7 +19,7 @@
     - role: llm_telemetry
       when: llm_telemetry_enabled
     - role: lab_speech
-      when: lab_secretary_voice_enabled | bool
+      when: (lab_secretary_transcription_enabled | bool) or (lab_secretary_voice_enabled | bool)
     - role: lab_secretary
       when: lab_secretary_enabled
     - role: route53_ddns

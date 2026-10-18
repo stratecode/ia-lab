@@ -4,6 +4,8 @@ lab_speech_model_dir: "{{ lab_speech_root }}/models"
 lab_speech_whisper_source: /opt/lab-speech/whisper.cpp
 lab_speech_whisper_build: "{{ lab_speech_whisper_source }}/build"
 lab_speech_piper_venv: /opt/lab-speech/piper-venv
+lab_secretary_transcription_enabled: false
+lab_secretary_voice_enabled: false
 
 lab_whisper_version: v1.9.5
 lab_whisper_commit: d1be6fde11ac6e0407606b4e42fe72d34add8037

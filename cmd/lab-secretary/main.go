@@ -70,8 +70,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", service.Handler())
 	voiceMaxDuration := 120 * time.Second
-	voiceEnabled := env("LAB_SECRETARY_VOICE_ENABLED", "false") == "true"
-	if voiceEnabled {
+	transcriptionEnabled := parseTranscriptionEnabled(os.Getenv("LAB_SECRETARY_TRANSCRIPTION_ENABLED"), os.Getenv("LAB_SECRETARY_VOICE_ENABLED"))
+	if transcriptionEnabled {
 		seconds, err := strconv.Atoi(env("LAB_SECRETARY_VOICE_MAX_DURATION_SECONDS", "120"))
 		if err != nil || seconds < 1 || seconds > 3600 {
 			log.Fatal("valid voice duration required")
@@ -83,16 +83,8 @@ func main() {
 		log.Fatal("valid secretary progress delay required")
 	}
 	bot := &secretary.Bot{Base: "https://api.telegram.org", Token: os.Getenv("LAB_TELEGRAM_BOT_TOKEN"), Client: &http.Client{Timeout: 40 * time.Second}, Service: service, Metrics: service.VoiceMetrics(), VoiceMaxDuration: voiceMaxDuration, ProgressDelay: progressDelay, OnEvent: func(event string) { log.Print(event) }}
-	if voiceEnabled {
-		whisperURL := env("LAB_WHISPER_URL", "")
-		piperURL := env("LAB_PIPER_URL", "")
-		if whisperURL != "" && piperURL != "" {
-			bot.Speech = secretary.NewHTTPVoiceClient(whisperURL, piperURL, nil)
-			bot.Audio = secretary.FFmpegAudioConverter{Binary: env("LAB_FFMPEG_BINARY", "/usr/bin/ffmpeg")}
-			bot.VoiceEnabled = true
-		} else {
-			log.Print("secretary_voice_disabled_missing_endpoint")
-		}
+	if transcriptionEnabled && !configureVoiceInput(bot, true, env("LAB_WHISPER_URL", ""), env("LAB_PIPER_URL", ""), env("LAB_FFMPEG_BINARY", "/usr/bin/ffmpeg")) {
+		log.Print("secretary_transcription_disabled_missing_whisper_endpoint")
 	}
 	var queue secretary.TelegramUpdateQueue
 	webhookSecret := ""
@@ -172,6 +164,24 @@ func parseTelegramMode(value string) (telegramMode, error) {
 	default:
 		return "", fmt.Errorf("unsupported Telegram mode %q", value)
 	}
+}
+
+func configureVoiceInput(bot *secretary.Bot, enabled bool, whisperURL, piperURL, ffmpegBinary string) bool {
+	if bot == nil || !enabled || strings.TrimSpace(whisperURL) == "" {
+		return false
+	}
+	bot.Speech = secretary.NewHTTPVoiceClient(whisperURL, piperURL, nil)
+	bot.Audio = secretary.FFmpegAudioConverter{Binary: ffmpegBinary}
+	bot.TranscriptionEnabled = true
+	return true
+}
+
+func parseTranscriptionEnabled(transcriptionValue, legacyVoiceValue string) bool {
+	value := strings.TrimSpace(transcriptionValue)
+	if value == "" {
+		value = strings.TrimSpace(legacyVoiceValue)
+	}
+	return strings.EqualFold(value, "true")
 }
 
 func parseProgressDelay(value string) (time.Duration, error) {

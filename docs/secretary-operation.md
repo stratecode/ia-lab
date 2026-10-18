@@ -262,13 +262,28 @@ missed synonyms and irrelevant matches against real queries first; if lexical
 retrieval is insufficient, add local embeddings and an index only then. Prometheus
 tracks bounded retrieval outcomes and hit counts without conversation content.
 
+Incoming voice transcription and spoken replies are separate features.
+`lab_secretary_transcription_enabled` controls Whisper and Telegram voice-note
+input; `lab_secretary_voice_enabled` controls Piper and spoken output. Current
+deployment playbooks enable transcription and leave spoken replies disabled, so
+a voice note is transcribed and answered with text. Turning Piper off no longer
+disables Whisper. The runtime prefers `LAB_SECRETARY_TRANSCRIPTION_ENABLED` and
+falls back to the legacy `LAB_SECRETARY_VOICE_ENABLED` setting when the new
+variable is absent.
+
+Build the secretary before using `playbooks/deploy-secretary-voice.yml`. Review
+its `--check --diff` preview before applying it. This focused playbook manages
+Whisper/Piper, updates only the three audio-mode variables in `secretary.env`
+without rewriting connector credentials, deploys the binary, and checks
+`/health`; on failure it restores the previous environment and binary when
+backups exist.
+
 Whisper runs CPU-only from `whisper.cpp` v1.9.5 using the multilingual
-`ggml-small-q5_1.bin` model with four threads by default. Piper remains
-configured as a local service with the Spanish `es_ES-sharvard-medium` voice,
-female speaker 1, at length scale `0.96`, but the Telegram reply path does not
-invoke it. The repository defaults keep the speaker and pace adjustable. Both services
-bind only to `127.0.0.1`: Whisper on port 8083 and Piper on 8084. Their systemd
-units have separate memory and CPU ceilings. Tune `lab_whisper_threads`,
+`ggml-small-q5_1.bin` model with four threads by default. Piper is optional and
+uses the Spanish `es_ES-sharvard-medium` voice, female speaker 1, at length
+scale `0.96`. The repository defaults keep the speaker and pace adjustable.
+Both services bind only to `127.0.0.1`: Whisper on port 8083 and Piper on 8084.
+Their systemd units have separate memory and CPU ceilings. Tune `lab_whisper_threads`,
 `lab_whisper_cpu_quota`, `lab_whisper_memory_max`, `lab_piper_cpu_quota`, and
 `lab_piper_memory_max` in the tracked Ansible defaults before deployment.
 
@@ -281,10 +296,12 @@ Use `python3 scripts/smoke-secretary-voice.py` on the lab host for a synthetic
 Piper → FFmpeg → Whisper check. It prints engine pins and timings, not the
 recognized phrase, and keeps audio in memory.
 
-To roll back the voice feature, set `lab_secretary_voice_enabled: false` in
-`playbooks/deploy-secretary.yml` and redeploy. This stops and disables Whisper
-and Piper and keeps text Telegram active; downloaded models and binaries remain
-on disk for a later re-enable. The switch is tracked in Git.
+To disable incoming transcription, set `lab_secretary_transcription_enabled:
+false`; this stops and disables Whisper. To disable spoken replies, set
+`lab_secretary_voice_enabled: false`; this stops and disables Piper while
+leaving transcription available. Text Telegram remains active in either case.
+Downloaded models and binaries remain on disk for a later re-enable. Both
+switches are tracked in Git.
 
 The engine and voice have separate licenses: [whisper.cpp](https://github.com/ggml-org/whisper.cpp/blob/d1be6fde11ac6e0407606b4e42fe72d34add8037/LICENSE)
 and [Piper](https://github.com/OHF-Voice/piper1-gpl/blob/v1.8.0/LICENSE.md) are

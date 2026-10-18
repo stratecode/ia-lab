@@ -25,8 +25,10 @@ if not any("telegram_public_probe_passed | bool" in str(task) for task in pre_ta
     raise SystemExit("activation has no external-reachability gate")
 if "webhook" != activate.get("vars", {}).get("lab_secretary_telegram_mode"):
     raise SystemExit("activation does not select webhook mode")
-if activate.get("vars", {}).get("lab_secretary_voice_enabled") is not True:
-    raise SystemExit("webhook activation must preserve the approved voice path")
+if activate.get("vars", {}).get("lab_secretary_transcription_enabled") is not True:
+    raise SystemExit("webhook activation must preserve incoming voice transcription")
+if activate.get("vars", {}).get("lab_secretary_voice_enabled") is not False:
+    raise SystemExit("webhook activation must keep spoken replies disabled")
 activate_roles = [item if isinstance(item, str) else item.get("role", "") for item in activate.get("roles", [])]
 if "lab_speech" not in activate_roles or activate_roles.index("lab_speech") > activate_roles.index("lab_secretary"):
     raise SystemExit("webhook activation must install speech services before the secretary")
@@ -64,11 +66,29 @@ if "LAB_SECRETARY_TELEGRAM_MODE={{ lab_secretary_telegram_mode }}" not in secret
     raise SystemExit("secretary role does not deploy the selected Telegram mode")
 if "EnvironmentFile=/etc/lab-secretary/telegram-webhook.env" not in secretary_role:
     raise SystemExit("secretary service does not load the private webhook secret")
+if "LAB_SECRETARY_TRANSCRIPTION_ENABLED={{ 'true' if lab_secretary_transcription_enabled | bool else 'false' }}" not in secretary_role:
+    raise SystemExit("secretary environment does not independently configure incoming transcription")
+if "LAB_PIPER_URL={{ lab_piper_url if lab_secretary_voice_enabled | bool else '' }}" not in secretary_role:
+    raise SystemExit("Piper endpoint must remain optional when spoken replies are disabled")
+
+voice_deploy = Path("playbooks/deploy-secretary-voice.yml").read_text()
+for expected in (
+    "LAB_SECRETARY_TRANSCRIPTION_ENABLED=true",
+    "LAB_SECRETARY_VOICE_ENABLED=false",
+    "src: \"{{ playbook_dir }}/../dist/lab-secretary-linux-amd64\"",
+    "url: http://127.0.0.1:8082/health",
+):
+    if expected not in voice_deploy:
+        raise SystemExit(f"voice deployment is missing {expected!r}")
+if "Install shared secretary instructions" in voice_deploy:
+    raise SystemExit("voice-only deployment must not overwrite secretary instructions")
 
 for deployment in ("playbooks/deploy-lab-surface.yml", "playbooks/deploy-principal-model.yml"):
     play = yaml.safe_load(Path(deployment).read_text())[0]
-    if play.get("vars", {}).get("lab_secretary_voice_enabled") is not True:
-        raise SystemExit(f"{deployment} must preserve the approved Telegram voice path")
+    if play.get("vars", {}).get("lab_secretary_transcription_enabled") is not True:
+        raise SystemExit(f"{deployment} must preserve incoming voice transcription")
+    if play.get("vars", {}).get("lab_secretary_voice_enabled") is not False:
+        raise SystemExit(f"{deployment} must keep spoken replies disabled")
     role_names = [item if isinstance(item, str) else item.get("role", "") for item in play.get("roles", [])]
     if "lab_speech" not in role_names or role_names.index("lab_speech") > role_names.index("lab_secretary"):
         raise SystemExit(f"{deployment} must install speech services before the secretary")
