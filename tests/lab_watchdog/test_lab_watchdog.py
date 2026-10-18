@@ -420,6 +420,79 @@ class IncidentReplay(Base):
         self.assertEqual(len(self.state["history"]), 1)
 
 
+class ImmediatePolicyTests(Base):
+    """'Wake it as soon as it is surely off, whatever happens': no grace, no heat wait, keep retrying."""
+
+    def cfg_now(self, **extra):
+        return make_cfg(intervals={"grace_seconds": 0, "cooldown_seconds": 0, "down_after_failures": 2,
+                                   "retry_seconds": 600, **extra},
+                        limits={"max_recoveries_per_hour": 2, "max_recoveries_per_day": 4})
+
+    def test_wakes_in_the_very_cycle_it_is_declared_down(self):
+        ctl = self.controller(self.cfg_now())
+        self.drive(ctl, 30, DOWN)  # first failed cycle: only a suspicion
+        self.assertEqual(self.w.calls, [])
+        self.drive(ctl, 30, DOWN)  # second: surely down -> Wake-on-LAN right away
+        self.assertEqual(len(self.w.calls), 1)
+        self.assertEqual(self.state["recovery"]["phase"], "WAIT1")
+
+    def test_a_hot_lab_is_not_made_to_wait(self):
+        ctl = self.controller(self.cfg_now())
+        self.drive(ctl, 600, UP(prom={"temp_c": 85.0, "on_battery": False, "uptime_s": 9999.0}))
+        self.drive(ctl, 60, DOWN)
+        self.assertEqual(len(self.w.calls), 1)
+
+    def test_flapping_does_not_slow_it_down(self):
+        cfg = self.cfg_now()
+        cfg["limits"] = {"max_recoveries_per_hour": 100, "max_recoveries_per_day": 100, "flap_window_seconds": 1800}
+        ctl = self.controller(cfg)
+        self.drive(ctl, 60, DOWN)
+        self.drive(ctl, 60, UP())  # recovered
+        self.drive(ctl, 60, DOWN)  # falls again right after: still no extra wait
+        self.assertEqual(len(self.w.calls), 2)
+
+    def test_keeps_trying_after_giving_up_even_past_the_limits(self):
+        ctl = self.controller(self.cfg_now())
+        self.drive(ctl, 3 * 3600, DOWN)
+        self.assertEqual(self.state["recovery"]["phase"], "GAVE_UP")
+        self.assertGreater(len(self.w.calls), 10)  # 2 normal packets, then a retry every 10 minutes
+        self.assertTrue(any("reintento" in t for t in self.n.texts()))
+        self.assertEqual(self.state["recovery"]["retries"], len(self.w.calls) - 2)
+
+    def test_retries_stop_when_the_lab_is_back(self):
+        ctl = self.controller(self.cfg_now())
+        self.drive(ctl, 2 * 3600, DOWN)
+        calls = len(self.w.calls)
+        self.drive(ctl, 90, UP())
+        self.assertEqual(self.state["status"], "UP")
+        self.drive(ctl, 3600, UP())
+        self.assertEqual(len(self.w.calls), calls)
+
+    def test_retries_are_only_simulated_in_dry_run(self):
+        cfg = self.cfg_now()
+        cfg["mode"]["dry_run"] = True
+        ctl = self.controller(cfg)
+        self.drive(ctl, 3 * 3600, DOWN)
+        self.assertEqual(self.w.calls, [])
+        self.assertTrue(any("habría reintentado" in t for t in self.n.texts()))
+
+    def test_the_old_policy_is_still_the_default(self):
+        ctl = self.controller()  # grace 300 s, no retries
+        self.drive(ctl, 90, DOWN)
+        self.assertEqual(self.w.calls, [])  # still inside the grace period
+        self.drive(ctl, 6 * 3600, DOWN)
+        self.assertEqual(len(self.w.calls), 2)  # gave up for good after two packets
+
+    def test_config_validation_for_the_new_waits(self):
+        def errors(**intervals):
+            cfg = lw.deep_merge(make_cfg(), {"intervals": intervals})
+            return [e for e in lw.validate_config(cfg) if "intervals" in e]
+        self.assertEqual(errors(grace_seconds=0, cooldown_seconds=0, retry_seconds=600), [])
+        self.assertTrue(errors(grace_seconds=-1))
+        self.assertTrue(errors(retry_seconds=-5))
+        self.assertTrue(errors(poll_seconds=0))
+
+
 class FakeGpio:
     """Stands in for PinctrlBackend: records levels, a settable button, and failures on demand."""
 
@@ -461,6 +534,7 @@ class IndicatorTests(Base):
 
     def new_indicator(self):
         self.gpio, self.t, self.samples, self.attempts = FakeGpio(), 1000.0, [], 0
+        self.ready_samples = []
 
         def factory():
             self.attempts += 1
@@ -473,6 +547,7 @@ class IndicatorTests(Base):
             self.ind.tick(self.t)
             lv = self.gpio.levels
             self.samples.append((self.t, lv.get(self.GREEN, False), lv.get(self.RED, False), lv.get(self.BUZZER, False)))
+            self.ready_samples.append(lv.get(24, False))
             self.t += self.STEP
 
     def feed(self, status, phase="IDLE", actions=(), net_down=False, maint=False, wall=None):
@@ -611,6 +686,56 @@ class IndicatorTests(Base):
         self.assertTrue(all(g and r for _, g, r, _ in during))
         self.assertFalse(any(g or r for _, g, r, _ in after))  # no state yet: dark
         self.assertEqual(len(self.pulses()), 1)
+
+    # ---- the optional blue "Pi ready" LED
+    def with_ready_led(self):
+        self.cfg = make_cfg(indicator={"enabled": True, "pins": {"ready": 24}})
+        self.new_indicator()
+
+    def test_ready_led_is_lit_while_the_loop_reports(self):
+        self.with_ready_led()
+        self.feed("UP")
+        self.run_for(5)
+        self.assertTrue(all(self.ready_samples[1:]))
+
+    def test_ready_led_goes_dark_if_the_loop_stalls_and_returns_when_it_reports(self):
+        self.with_ready_led()
+        self.feed("UP")
+        self.run_for(60)
+        self.assertTrue(self.ready_samples[-1])
+        self.run_for(60)  # nobody calls update(): more than 90 s of silence
+        self.assertFalse(self.ready_samples[-1])
+        self.feed("UP")
+        self.run_for(2)
+        self.assertTrue(self.ready_samples[-1])
+
+    def test_ready_led_is_dark_after_shutdown(self):
+        self.with_ready_led()
+        self.feed("UP")
+        self.run_for(2)
+        self.assertTrue(self.gpio.levels[24])
+        self.ind.shutdown()
+        self.assertFalse(self.gpio.levels[24])
+
+    def test_ready_led_is_on_during_the_demo(self):
+        self.with_ready_led()
+        lw.run_demo(self.ind, 1.0, lambda: self.t, lambda s: setattr(self, "t", self.t + s),
+                    lambda text: setattr(self.gpio, "pressed", True) if text.startswith("GAVE_UP") else None)
+        self.assertTrue(self.gpio.levels[24])
+
+    def test_without_a_ready_pin_nothing_else_is_driven(self):
+        self.feed("UP")
+        self.run_for(5)
+        self.assertNotIn(24, self.gpio.levels)
+
+    def test_ready_pin_validation(self):
+        def errors(**pins):
+            cfg = lw.deep_merge(make_cfg(), {"indicator": {"enabled": True, "pins": pins}})
+            return [e for e in lw.validate_config(cfg) if "indicator" in e]
+        self.assertEqual(errors(ready=24), [])
+        self.assertEqual(errors(ready=None), [])
+        self.assertTrue(errors(ready=17))  # same pin as the buzzer
+        self.assertTrue(errors(ready=1))  # not a usable BCM pin
 
     def test_startup_beep_can_be_turned_off_but_the_led_test_stays(self):
         self.cfg = make_cfg(indicator={"enabled": True, "startup_beep": False})

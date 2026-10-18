@@ -39,14 +39,15 @@
     - /etc/systemd/system.conf.d
   tags: [packages, hardware]
 
-- name: Take the time from the lab (no RTC, no Internet; TLS needs the date)
+- name: Take the time from the LAN (no RTC, no Internet; TLS needs the date)
   ansible.builtin.copy:
     dest: /etc/systemd/timesyncd.conf.d/10-lab-watchdog.conf
     content: |
       # Managed by Ansible (role lab_watchdog)
       [Time]
-      NTP={{ lab_watchdog_ntp_server }}
+      NTP={{ lab_watchdog_ntp_servers | join(' ') }}
       FallbackNTP=
+      PollIntervalMaxSec={{ lab_watchdog_ntp_poll_max_seconds }}
     owner: root
     group: root
     mode: "0644"
@@ -151,12 +152,21 @@
   register: lab_watchdog_boot_config
   tags: [panel]
 
-- name: Declare the front-panel overlays in the boot configuration (backup kept, removed when both are off)
+# /boot/firmware is FAT: blockinfile's own backup name (with "@" and "~") is not valid there, so keep the first original.
+- name: Keep a copy of the original boot configuration (the first time only)
+  ansible.builtin.command:
+    cmd: "cp {{ lab_watchdog_boot_config_path }} {{ lab_watchdog_boot_config_path }}.lab-watchdog.bak"
+    creates: "{{ lab_watchdog_boot_config_path }}.lab-watchdog.bak"
+  when:
+    - lab_watchdog_boot_config.stat.exists
+    - lab_watchdog_power_button_enabled | bool or lab_watchdog_status_led_enabled | bool
+  tags: [panel]
+
+- name: Declare the front-panel overlays in the boot configuration (removed when both are off)
   ansible.builtin.blockinfile:
     path: "{{ lab_watchdog_boot_config_path }}"
     marker: "# {mark} ANSIBLE MANAGED BLOCK (role lab_watchdog)"
     insertafter: EOF
-    backup: true
     state: "{{ 'present' if (lab_watchdog_power_button_enabled | bool or lab_watchdog_status_led_enabled | bool) else 'absent' }}"
     block: |
       {% if lab_watchdog_power_button_enabled | bool %}
@@ -195,6 +205,50 @@
   when: lab_watchdog_boot_beep_enabled | bool
   tags: [panel]
 
+- name: Check that the kernel status LED and the "ready" LED do not share a pin
+  ansible.builtin.assert:
+    that:
+      - not (lab_watchdog_status_led_enabled | bool and (lab_watchdog_indicator_pin_ready | string) == (lab_watchdog_status_led_pin | string))
+    fail_msg: >-
+      The kernel status LED (overlay gpio-led) and the service-driven "ready" LED use the same pin
+      ({{ lab_watchdog_status_led_pin }}). Turn lab_watchdog_status_led_enabled off or use another pin.
+  tags: [always]
+
+- name: Install the shutdown warning beeps unit
+  ansible.builtin.template:
+    src: lab-watchdog-shutdown-beep.service.j2
+    dest: /etc/systemd/system/lab-watchdog-shutdown-beep.service
+    owner: root
+    group: root
+    mode: "0644"
+  when: lab_watchdog_shutdown_beep_enabled | bool
+  tags: [panel]
+
+- name: Enable and start the shutdown warning beeps unit (it must be active for ExecStop to run at shutdown)
+  ansible.builtin.systemd:
+    name: lab-watchdog-shutdown-beep
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: lab_watchdog_shutdown_beep_enabled | bool
+  tags: [panel]
+
+- name: Disable the shutdown warning beeps unit when it is turned off
+  ansible.builtin.systemd:
+    name: lab-watchdog-shutdown-beep
+    enabled: false
+    daemon_reload: true
+  failed_when: false  # the unit may never have been installed
+  when: not (lab_watchdog_shutdown_beep_enabled | bool)
+  tags: [panel]
+
+- name: Remove the shutdown warning beeps unit file when it is turned off
+  ansible.builtin.file:
+    path: /etc/systemd/system/lab-watchdog-shutdown-beep.service
+    state: absent
+  when: not (lab_watchdog_shutdown_beep_enabled | bool)
+  tags: [panel]
+
 - name: Disable the early boot beep unit when it is turned off
   ansible.builtin.systemd:
     name: lab-watchdog-boot-beep
@@ -210,6 +264,51 @@
     state: absent
   when: not (lab_watchdog_boot_beep_enabled | bool)
   tags: [panel]
+
+# ---- persistent system log (so a reboot or shutdown can be diagnosed afterwards)
+- name: Create the journald drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: lab_watchdog_persistent_journal | bool
+  tags: [journal]
+
+# Raspberry Pi OS ships its own drop-in with Storage=volatile (to spare the SD card). Drop-ins are read in file-name
+# order and the last one wins, so ours must sort after it: 90-, not 10-.
+- name: Remove the first version of the journald drop-in (its name sorted before the Raspberry Pi OS one and lost)
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d/10-lab-watchdog.conf
+    state: absent
+  notify: Restart journald
+  tags: [journal]
+
+- name: Keep the system log across reboots (size capped)
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/90-lab-watchdog.conf
+    content: |
+      # Managed by Ansible (role lab_watchdog)
+      [Journal]
+      Storage=persistent
+      SystemMaxUse={{ lab_watchdog_journal_max_use }}
+    owner: root
+    group: root
+    mode: "0644"
+  when: lab_watchdog_persistent_journal | bool
+  notify:
+    - Restart journald
+    - Flush the journal to disk
+  tags: [journal]
+
+- name: Go back to the volatile system log when persistence is turned off
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d/90-lab-watchdog.conf
+    state: absent
+  when: not (lab_watchdog_persistent_journal | bool)
+  notify: Restart journald
+  tags: [journal]
 
 - name: Reload systemd after unit changes
   ansible.builtin.systemd:

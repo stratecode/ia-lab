@@ -54,6 +54,7 @@ DEFAULTS: Dict[str, Any] = {
         "boot_window_seconds": 240,  # time given to the lab to boot after each action
         "cooldown_seconds": 1200,   # extra wait when the lab was hot before it went down
         "remind_seconds": 3600,     # reminder period once the watchdog has given up
+        "retry_seconds": 0,         # after giving up, send another Wake-on-LAN this often (0 = never retry)
     },
     "thresholds": {"hot_celsius": 80, "hot_memory_seconds": 900},
     "limits": {"max_recoveries_per_hour": 2, "max_recoveries_per_day": 4, "flap_window_seconds": 1800},
@@ -69,7 +70,8 @@ DEFAULTS: Dict[str, Any] = {
     "indicator": {
         # Local alarm on the Pi (LEDs, buzzer, mute button). It works with the lab and the network down.
         "enabled": False,
-        "pins": {"buzzer": 17, "green": 27, "red": 22, "button": 23},  # BCM numbers
+        # BCM numbers. "ready" is optional (None = no LED): a blue LED that is lit only while the watchdog loop is alive.
+        "pins": {"buzzer": 17, "green": 27, "red": 22, "button": 23, "ready": None},
         "quiet_start": "23:00",  # no buzzer in this window, except when the watchdog has given up
         "quiet_end": "08:00",    # both empty = no quiet hours
         "reminder_seconds": 600,  # period of the "gave up" alarm until the button is pressed
@@ -116,9 +118,12 @@ def validate_config(cfg: Dict[str, Any]) -> List[str]:
         errors.append("gateway is not an IPv4 address")
     if not lab.get("ports") or not all(isinstance(p, int) and 0 < p < 65536 for p in lab["ports"]):
         errors.append("lab.ports must be a non-empty list of TCP ports")
-    for key in ("poll_seconds", "down_after_failures", "grace_seconds", "boot_window_seconds"):
+    for key in ("poll_seconds", "down_after_failures", "boot_window_seconds"):
         if not isinstance(cfg["intervals"].get(key), (int, float)) or cfg["intervals"][key] <= 0:
             errors.append("intervals.%s must be a positive number" % key)
+    for key in ("grace_seconds", "cooldown_seconds", "retry_seconds"):  # 0 is allowed: no wait / no retries
+        if not isinstance(cfg["intervals"].get(key), (int, float)) or cfg["intervals"][key] < 0:
+            errors.append("intervals.%s must be a number >= 0" % key)
     for key in ("max_recoveries_per_hour", "max_recoveries_per_day"):
         if not isinstance(cfg["limits"].get(key), int) or cfg["limits"][key] < 0:
             errors.append("limits.%s must be an integer >= 0" % key)
@@ -137,6 +142,8 @@ def validate_config(cfg: Dict[str, Any]) -> List[str]:
         errors.append("indicator.enabled must be true or false")
     elif ind["enabled"]:
         pins = [ind.get("pins", {}).get(name) for name in INDICATOR_PINS]
+        if ind.get("pins", {}).get("ready") is not None:
+            pins.append(ind["pins"]["ready"])
         if not all(isinstance(p, int) and 2 <= p <= 27 for p in pins) or len(set(pins)) != len(pins):
             errors.append("indicator.pins needs %d different BCM numbers (2-27): %s" % (len(INDICATOR_PINS), ", ".join(INDICATOR_PINS)))
         quiet = (str(ind.get("quiet_start", "")), str(ind.get("quiet_end", "")))
@@ -457,6 +464,8 @@ class Controller:
         if s["status"] != "DOWN":
             if s["fail_count"] >= self.iv["down_after_failures"]:
                 self._enter_down(now, maint)
+                if s["recovery"]["wait"] <= 0:  # no grace period configured: act in this very cycle
+                    self._down_tick(now, maint)
             else:
                 s["status"] = "SUSPECT"
             return
@@ -543,10 +552,16 @@ class Controller:
                 self._give_up(now, "Wake-on-LAN no lo ha encendido tras 2 intentos y no hay enchufe configurado.")
         elif ph == "WAIT3" and el >= self.iv["boot_window_seconds"]:
             self._give_up(now, "Tampoco ha arrancado tras ciclar el enchufe.")
-        elif ph == "GAVE_UP" and now - rec["last_reminder"] >= self.iv["remind_seconds"]:
-            rec["last_reminder"] = now
-            self._say(False, "crit", "El lab sigue caído desde las %s y el vigilante ya no actúa. Necesita intervención."
-                      % fmt_time(self.s["down_since"]))
+        elif ph == "GAVE_UP":
+            retry = self.iv.get("retry_seconds", 0)
+            if retry and now - rec.get("last_retry", rec["since"]) >= retry:
+                self._retry_wake(now)
+            if now - rec["last_reminder"] >= self.iv["remind_seconds"]:
+                rec["last_reminder"] = now
+                status = ("y sigo reintentando el Wake-on-LAN cada %d min." % (retry // 60)) if retry \
+                    else "y el vigilante ya no actúa."
+                self._say(False, "crit", "El lab sigue caído desde las %s %s Necesita intervención."
+                          % (fmt_time(self.s["down_since"]), status))
 
     def _start_sequence(self, now: float) -> None:
         s, lim = self.s, self.cfg["limits"]
@@ -569,6 +584,17 @@ class Controller:
                         % (n, self.iv["boot_window_seconds"] // 60))
         rec["actions"].append("wol%d" % n)
         rec["phase"], rec["since"] = "WAIT%d" % n, now
+
+    def _retry_wake(self, now: float) -> None:
+        """After giving up: keep trying, ignoring the attempt limits. A magic packet sent to a running lab does nothing."""
+        rec, lab = self.s["recovery"], self.cfg["lab"]
+        rec["last_retry"] = now
+        n = rec["retries"] = rec.get("retries", 0) + 1
+        if self.dry:
+            self.n.send("info", "[SIMULACIÓN] habría reintentado el Wake-on-LAN (reintento %d)." % n, True)
+        else:
+            self.waker.send(lab["mac"], lab["broadcast"])
+            self.n.send("warn", "Sigue caído: reintento %d del Wake-on-LAN." % n, True)
 
     def _cycle_plug(self, now: float) -> None:
         rec = self.s["recovery"]
@@ -665,10 +691,15 @@ class Indicator:
     STARTUP_SECONDS = 1.5
     RETRY_SECONDS = 300
     MAX_FAILURES = 3
+    READY_TIMEOUT = 90.0  # the "ready" LED goes dark if the main loop has not reported for this long
 
     def __init__(self, cfg: Dict[str, Any], backend_factory: Callable[[], Any] = PinctrlBackend):
         ind = cfg["indicator"]
         self.pins = {name: int(ind["pins"][name]) for name in INDICATOR_PINS}
+        if ind["pins"].get("ready") is not None:
+            self.pins["ready"] = int(ind["pins"]["ready"])
+        self._outputs = [name for name in ("buzzer", "green", "red", "ready") if name in self.pins]
+        self._last_update: Optional[float] = None
         self.reminder = float(ind["reminder_seconds"])
         self.startup_beep = bool(ind.get("startup_beep", True))
         start, end = parse_hhmm(ind.get("quiet_start", "")), parse_hhmm(ind.get("quiet_end", ""))
@@ -701,6 +732,7 @@ class Indicator:
             actions = len((state.get("recovery") or {}).get("actions") or [])
             status = state.get("status")
             with self._lock:
+                self._last_update = t
                 prev = self._prev
                 if mode == "GAVE_UP" and (prev is None or prev[2] != "GAVE_UP"):
                     self.acked, self._next_reminder = False, t
@@ -734,7 +766,10 @@ class Indicator:
                 if self._seg_on or self._beeps or self.mode == "GAVE_UP":
                     if not self.backend.read(self.pins["button"]):  # pull-up: low means pressed
                         self._pressed()
-                for name, level in (("green", green), ("red", red), ("buzzer", self._seg_on)):
+                wanted = {"green": green, "red": red, "buzzer": self._seg_on}
+                if "ready" in self.pins:
+                    wanted["ready"] = self._ready(t)
+                for name, level in wanted.items():
                     if self._last.get(name) != level:
                         self.backend.write(self.pins[name], level)
                         self._last[name] = level
@@ -758,7 +793,7 @@ class Indicator:
             self._retry_at, self._last = float("inf"), {}
             if backend is None:
                 return
-            for name in ("buzzer", "green", "red"):
+            for name in self._outputs:
                 try:
                     backend.write(self.pins[name], False)
                 except GPIO_ERRORS:
@@ -768,6 +803,7 @@ class Indicator:
         """Force a mode (hardware test, `test-indicator`); the beeps ignore quiet hours."""
         with self._lock:
             self.mode, self.acked, self._next_reminder = mode, False, t
+            self._last_update = t
             self._enqueue(beeps, long_beeps)
 
     # ---- internals (the lock is held)
@@ -778,7 +814,7 @@ class Indicator:
             return False
         try:
             backend = self._factory()
-            backend.setup([self.pins[n] for n in ("buzzer", "green", "red")], [self.pins["button"]])
+            backend.setup([self.pins[n] for n in self._outputs], [self.pins["button"]])
         except GPIO_ERRORS as exc:
             self._retry_at = t + self.RETRY_SECONDS
             logging.warning("indicator unavailable (%s); retrying in %d s", exc.__class__.__name__, self.RETRY_SECONDS)
@@ -793,7 +829,7 @@ class Indicator:
             backend, self.backend = self.backend, None
             self._retry_at, self._last = t + self.RETRY_SECONDS, {}
             try:
-                backend.cleanup([self.pins[n] for n in ("buzzer", "green", "red")])
+                backend.cleanup([self.pins[n] for n in self._outputs])
             except GPIO_ERRORS:
                 pass
 
@@ -818,6 +854,12 @@ class Indicator:
         for _ in range(count):
             self._beeps.append((LONG_BEEP if long_beeps else SHORT_BEEP, True))
             self._beeps.append((BEEP_GAP, False))
+
+    def _ready(self, t: float) -> bool:
+        """Blue LED: lit while the main loop is alive (it reports every cycle); dark if it stalls or the service stops."""
+        if t < self._startup_until:
+            return True
+        return self._last_update is not None and t - self._last_update < self.READY_TIMEOUT
 
     def _leds(self, t: float) -> Tuple[bool, bool]:
         blink = lambda half: int(t / half) % 2 == 0  # noqa: E731

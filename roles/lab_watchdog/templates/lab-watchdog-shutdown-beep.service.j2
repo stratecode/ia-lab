@@ -1,0 +1,24 @@
+# Managed by Ansible (role lab_watchdog)
+# Warns that the Pi is about to shut down or reboot: {{ lab_watchdog_shutdown_beep_count }} short beeps, whatever the cause
+# (power button, ssh, ansible). It stays "active" while the system runs and systemd stops it at shutdown, which is when
+# ExecStop plays the beeps. Restarting only lab-watchdog (a deployment) does not stop this unit, so it does not beep.
+# After=lab-watchdog.service makes it stop BEFORE the watchdog, whose own stop leaves all LEDs dark afterwards.
+# Runs as root (no gpio group needed). Failures are ignored: a missing buzzer must never hold the shutdown back.
+[Unit]
+Description=Warning beeps before the Pi shuts down or reboots
+After=lab-watchdog.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+{% for _ in range(lab_watchdog_shutdown_beep_count | int) %}
+ExecStop=-/usr/bin/pinctrl set {{ lab_watchdog_indicator_pin_buzzer }} op dh
+ExecStop=-/bin/sleep {{ lab_watchdog_shutdown_beep_seconds }}
+ExecStop=-/usr/bin/pinctrl set {{ lab_watchdog_indicator_pin_buzzer }} op dl
+ExecStop=-/bin/sleep {{ lab_watchdog_shutdown_beep_seconds }}
+{% endfor %}
+TimeoutStopSec={{ ((lab_watchdog_shutdown_beep_count | int) * (lab_watchdog_shutdown_beep_seconds | float) * 2 + 10) | round(0, 'ceil') | int }}
+
+[Install]
+WantedBy=multi-user.target

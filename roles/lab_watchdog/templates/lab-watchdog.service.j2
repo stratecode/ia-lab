@@ -17,7 +17,7 @@ ExecStart={{ lab_watchdog_bin }} -c {{ lab_watchdog_config_dir }}/config.json ru
 # GPIO for the local indicator: the gpio group owns /dev/gpiomem*, and only those devices are opened up.
 # ExecStopPost is a safety net: if the process is killed, the buzzer and LEDs are left low.
 SupplementaryGroups=gpio
-ExecStopPost=-/usr/bin/pinctrl set {{ lab_watchdog_indicator_pin_buzzer }},{{ lab_watchdog_indicator_pin_green }},{{ lab_watchdog_indicator_pin_red }} op dl
+ExecStopPost=-/usr/bin/pinctrl set {{ lab_watchdog_indicator_pin_buzzer }},{{ lab_watchdog_indicator_pin_green }},{{ lab_watchdog_indicator_pin_red }}{% if lab_watchdog_indicator_pin_ready | string | length > 0 %},{{ lab_watchdog_indicator_pin_ready }}{% endif %} op dl
 {% endif %}
 Restart=always
 RestartSec=10

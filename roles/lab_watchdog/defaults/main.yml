@@ -24,6 +24,7 @@ lab_watchdog_grace_seconds: 300              # wait before acting (planned reboo
 lab_watchdog_boot_window_seconds: 240
 lab_watchdog_cooldown_seconds: 1200          # extra wait when the lab was hot before it went down
 lab_watchdog_remind_seconds: 3600
+lab_watchdog_retry_seconds: 0                # after giving up, send another Wake-on-LAN this often (0 = never)
 lab_watchdog_hot_celsius: 80
 lab_watchdog_hot_memory_seconds: 900
 lab_watchdog_max_recoveries_per_hour: 2
@@ -43,8 +44,16 @@ lab_watchdog_plug_off_seconds: 10
 # Not named lab_watchdog_relay_enabled: group_vars/all.yml uses that name for the LAB side (nginx/Alertmanager route).
 lab_watchdog_notify_relay_enabled: true
 lab_watchdog_relay_path: /alertmanager/api/v2/alerts
-lab_watchdog_relay_verify_tls: true          # needs the right date: see lab_watchdog_ntp_server
-lab_watchdog_ntp_server: "{{ lab_watchdog_lab_ip }}"   # the Pi has no RTC nor Internet: it takes the time from the lab
+lab_watchdog_relay_verify_tls: true          # needs the right date: see lab_watchdog_ntp_servers
+# The Pi has no RTC: it boots with the time it had when it went off, so it needs a time source on the LAN.
+# The router goes FIRST: the Pi must be able to fix its clock exactly when the lab is down, so the lab cannot be the
+# primary source. The router answers NTP on the LAN (checked), which keeps the Pi off the Internet. systemd-timesyncd
+# moves to the next server when one does not answer, but backs off exponentially (it had reached 8 minutes), so the
+# poll interval is capped: a Pi that boots with an old clock is corrected within about a minute.
+lab_watchdog_ntp_servers:
+  - "{{ lab_watchdog_gateway }}"
+  - "{{ lab_watchdog_lab_ip }}"
+lab_watchdog_ntp_poll_max_seconds: 64
 
 # Optional, only for a Pi that DOES have Internet: direct Telegram with a separate bot (never Donna's).
 lab_watchdog_telegram_enabled: false
@@ -60,6 +69,9 @@ lab_watchdog_indicator_pin_buzzer: 17        # active 5 V buzzer through an NPN 
 lab_watchdog_indicator_pin_green: 27         # physical pin 13
 lab_watchdog_indicator_pin_red: 22           # physical pin 15
 lab_watchdog_indicator_pin_button: 23        # to GND, internal pull-up (physical pin 16)
+# Optional "Pi ready" LED (blue): lit only while the watchdog loop is alive, dark if it stalls or the service stops.
+# BCM number, "" = none. 24 (physical pin 18) is the status-LED pin: do not enable the kernel status LED on the same pin.
+lab_watchdog_indicator_pin_ready: ""
 lab_watchdog_indicator_quiet_start: "23:00"  # no buzzer in this window, except when the watchdog gave up
 lab_watchdog_indicator_quiet_end: "08:00"    # "" in both disables quiet hours
 lab_watchdog_indicator_reminder_seconds: 600 # repeat of the "gave up" alarm until the button is pressed
@@ -70,15 +82,22 @@ lab_watchdog_power_button_enabled: false     # button between GPIO3 (pin 5) and 
                                              # down cleanly (overlay gpio-shutdown; only GPIO3 can wake a halted Pi)
 lab_watchdog_status_led_enabled: false       # LED driven by the kernel from early boot (overlay gpio-led)
 lab_watchdog_status_led_pin: 24              # BCM number (physical pin 18); wiring: pin -> 330 ohm -> LED -> GND
-lab_watchdog_status_led_trigger: heartbeat   # heartbeat (alive, stops if the kernel hangs) | default-on (steady)
+lab_watchdog_status_led_trigger: default-on  # default-on (steady while Linux runs) | heartbeat (double flash, stops if the kernel hangs)
 lab_watchdog_boot_beep_enabled: false        # one short beep very early in the boot, on the indicator buzzer pin
 lab_watchdog_boot_beep_seconds: 0.15         # ignores quiet hours: the clock is not reliable that early
+lab_watchdog_shutdown_beep_enabled: false    # N short beeps before the Pi shuts down or reboots, whatever the cause
+lab_watchdog_shutdown_beep_count: 5          # (button, ssh, ansible); ignores quiet hours: it answers a deliberate action
+lab_watchdog_shutdown_beep_seconds: 0.25     # length of each beep and of each pause
 lab_watchdog_boot_config_path: /boot/firmware/config.txt
 # The service self-test beep would double the boot beep, so it is off when the boot beep exists.
 lab_watchdog_indicator_startup_beep: "{{ not (lab_watchdog_boot_beep_enabled | bool) }}"
 
 # --- Pi hardening ------------------------------------------------------------------------------
 lab_watchdog_enable_hw_watchdog: true        # the Pi's own hardware watchdog reboots it if it hangs
+# Keep the system log across reboots (it is volatile by default): without it nobody can tell afterwards why the Pi
+# rebooted or whether a shutdown was clean. Capped to spare the SD card.
+lab_watchdog_persistent_journal: true
+lab_watchdog_journal_max_use: 50M
 
 # --- Paths --------------------------------------------------------------------------------------
 lab_watchdog_user: labwatch

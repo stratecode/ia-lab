@@ -31,7 +31,7 @@ Una Raspberry Pi **sin Internet** (solo ve la LAN del lab) vigila el estado del 
 **Hardware y red**
 - Raspberry Pi con **Ethernet** en el **mismo segmento de red** que el lab (el paquete mágico es un broadcast de capa 2: no cruza VLAN ni red de invitados). Modelo exacto por confirmar.
 - Tarjeta microSD de calidad (≥ 8 GB) y fuente de 5 V adecuada. Conectada al **mismo SAI** que el lab (decidido). Si el router o el switch no están en el SAI, un corte los apaga y la Pi no ve nada.
-- **Sin Internet:** la Pi no instala paquetes (usa `python3` y `ping` que ya trae Raspberry Pi OS Lite) y toma la **hora del lab** (chrony en el lab).
+- **Sin Internet:** la Pi no instala paquetes (usa `python3` y `ping` que ya trae Raspberry Pi OS Lite). **La hora** la toma de la LAN con `systemd-timesyncd` (`lab_watchdog_ntp_servers`): primero **el router**, que contesta NTP en la propia LAN, y el lab de segundo. El lab no puede ser la fuente principal: la Pi tiene que poder corregir su reloj justo cuando el lab está caído. Se limita el intervalo de consulta (`lab_watchdog_ntp_poll_max_seconds`, 64 s) porque `timesyncd` lo aumenta hasta 8 min tras fallos y tardaría en recuperarse. La Pi no tiene reloj propio y, tras estar apagada, arranca con la hora que tenía al apagarse: sin esto los avisos salen con hora equivocada y falla el TLS.
 - En el router: **reserva DHCP** para el lab (MAC `c8:ff:bf:08:5e:db` → `192.168.0.85`) y para la Pi.
 - Enchufe inteligente: **no** hace falta por ahora (el rol lo soporta si algún día se quiere).
 
@@ -116,9 +116,14 @@ Tres piezas independientes, todas **desactivadas por defecto**. Las dos primeras
 | Pieza | Variable | Montaje | Qué hace |
 |---|---|---|---|
 | Botón de encendido | `lab_watchdog_power_button_enabled` | Pulsador entre **GPIO3 (pin 5)** y GND (pin 6) | Con la Pi apagada (`halt`) la enciende. Con la Pi en marcha pide un apagado ordenado (overlay `gpio-shutdown`). Solo GPIO3 puede despertar una Pi apagada |
-| LED de estado | `lab_watchdog_status_led_enabled`, `_pin` (24), `_trigger` | GPIO24 (pin 18) → 330 Ω → LED → GND | Lo gobierna el kernel desde el arranque (overlay `gpio-led`). `heartbeat`: late mientras el kernel está vivo y se para si se cuelga; `default-on`: fijo |
+| LED de estado | `lab_watchdog_status_led_enabled`, `_pin` (24), `_trigger` (`default-on`) | GPIO24 (pin 18) → resistencia → LED → GND | Lo gobierna el kernel desde el arranque (overlay `gpio-led`): **encendido fijo mientras Linux funciona** y apagado cuando la Pi está apagada. `heartbeat` lo cambia por un doble destello que se para si el kernel se cuelga |
+| LED azul "Pi lista" (alternativa al LED de estado del kernel) | `lab_watchdog_indicator_pin_ready` (p. ej. 24) | GPIO24 (pin 18) → resistencia → LED → GND | Lo gobierna **el propio vigilante**, no el kernel: se enciende cuando el servicio está ciclando de verdad y **se apaga si se queda parado** (más de 90 s sin informar) o al parar el servicio. Si se usa, desactiva `lab_watchdog_status_led_enabled` (es el mismo pin; el rol lo comprueba) |
+| Aviso de apagado | `lab_watchdog_shutdown_beep_enabled`, `_count` (5), `_seconds` (0,25) | El zumbador del indicador | 5 pitidos de 0,25 s **antes de apagar o reiniciar la Pi**, sea cual sea la causa (botón, SSH, Ansible). Es una unidad propia (`lab-watchdog-shutdown-beep.service`) que systemd detiene en el apagado; reiniciar solo el vigilante en un despliegue no la dispara. Ignora las horas de silencio: responde a una acción deliberada. Se detiene antes que el vigilante, así que después de los pitidos se apagan los LED |
+| LED testigo de corriente | (sin software) | Pin 1 (3,3 V) → resistencia → LED → GND | Encendido siempre que la placa tenga corriente, **también con la Pi apagada con el botón**. Distingue "apagada pero alimentada" de "sin corriente" |
 | Pitido de arranque | `lab_watchdog_boot_beep_enabled`, `_seconds` (0,15) | El zumbador del indicador (GPIO17) | Un pitido corto muy pronto en el arranque, como el del POST de un PC. El arranque completo tarda más de un minuto y el vigilante entra casi al final, así que va en su propia unidad (`lab-watchdog-boot-beep.service`) |
 
+- **Resistencia según el color del LED.** Un LED azul o blanco necesita unos 3 V, y con 3,3 V y 330 Ω pasa casi nada de corriente (~1 mA): se ve muy tenue. Para LED azules o blancos usa **100 Ω** (unos 3 mA, seguro para el pin); para rojo, verde o amarillo valen los 330 Ω. En el pin 1 y el pin 2, que están juntos, **el 1 es 3,3 V y el 2 es 5 V**: no los confundas.
+- **Registro del sistema persistente** (`lab_watchdog_persistent_journal`, activado, con tope `lab_watchdog_journal_max_use: 50M`). Por defecto el registro de systemd se pierde al reiniciar, y sin él no se puede saber después por qué se reinició la Pi ni si un apagado fue limpio. Se consulta con `journalctl -b -1` (arranque anterior).
 - **Apagar con el botón apaga también el vigilante.** Mientras la Pi esté apagada nadie vigila el lab. Para volver a la normalidad hay que pulsar el botón otra vez; el vigilante arranca solo con la Pi.
 - **El botón no despierta tras un corte de luz** (sin corriente no hay nada que despertar): en ese caso la Pi arranca sola al volver la corriente.
 - **El pitido de arranque ignora las horas de silencio**: a esas alturas del arranque el reloj no es fiable (la Pi no tiene reloj propio). Cuando está activado, el pitido de inicio del servicio se desactiva solo (`indicator.startup_beep: false`), para no oír dos seguidos; el test de LED del servicio se mantiene.
@@ -144,8 +149,10 @@ Tres piezas independientes, todas **desactivadas por defecto**. Las dos primeras
 | TH2 | En `test-indicator`, pulsar el botón durante el paso `GAVE_UP` | El zumbador se silencia y el paso termina con "botón: silenciado" |
 | TH3 | Con el servicio activo, quitar el cable de red de la Pi | LED alternando verde/rojo (`NETWORK_DOWN`), **ningún WoL** y sin pitidos |
 | TH4 | `sudo systemctl start lab-watchdog-boot-beep`; después un arranque real | Un pitido corto al iniciar la unidad y otro unos segundos después de dar corriente a la Pi |
-| TH5 | Tras el reinicio con el overlay `gpio-led` | El LED de estado se enciende en cuanto arranca el kernel y late (`heartbeat`) mientras la Pi funciona |
-| TH6 | Pulsar el botón con la Pi en marcha; esperar el apagado; pulsarlo otra vez | Apagado ordenado (`journalctl -b -1` lo confirma) y, al pulsar, la Pi arranca y el vigilante vuelve a estar activo |
+| TH5 | Tras el reinicio con el overlay `gpio-led` | El LED de estado se enciende en cuanto arranca el kernel y queda fijo mientras la Pi funciona; el LED testigo de 3,3 V está encendido siempre que hay corriente |
+| TH7 | Con el LED "Pi lista": reiniciar solo el servicio (`sudo systemctl restart lab-watchdog`) y, aparte, pararlo (`stop`) | Reiniciar: el LED se apaga un instante y vuelve (sin pitidos). Parar: el LED se apaga y no vuelve hasta arrancarlo |
+| TH8 | `sudo systemctl stop lab-watchdog-shutdown-beep`; después `start` para dejarla armada | 5 pitidos de 0,25 s al detenerla |
+| TH6 | Pulsar el botón con la Pi en marcha; esperar el apagado; pulsarlo otra vez | Apagado ordenado: el LED de estado se apaga, el testigo de 3,3 V sigue encendido y `journalctl -b -1` muestra el apagado (necesita el registro persistente). Al pulsar otra vez, la Pi arranca y el vigilante vuelve a estar activo |
 
 No se recomienda provocar un sobrecalentamiento real: el caso se cubre con la prueba de repetición del incidente.
 
