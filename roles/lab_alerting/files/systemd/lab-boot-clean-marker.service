@@ -1,0 +1,11 @@
+[Unit]
+Description=Marcar apagado limpio del lab para el siguiente arranque
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/true
+ExecStop=/usr/bin/touch /var/lib/lab-alerting/boot-state/clean-shutdown
+
+[Install]
+WantedBy=multi-user.target

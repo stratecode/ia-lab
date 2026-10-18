@@ -517,6 +517,11 @@
   notify: Reload nginx
   when: monitor_nginx_site.stat.exists
 
+- name: Validate nginx configuration, including the watchdog endpoint
+  ansible.builtin.command: nginx -t
+  changed_when: false
+  check_mode: false
+
 - name: Disable default nginx site
   ansible.builtin.file:
     path: /etc/nginx/sites-enabled/default

@@ -1,0 +1,8 @@
+[Unit]
+Description=Exportar el estado del apagado anterior del lab
+Requires=lab-boot-clean-marker.service
+After=lab-boot-clean-marker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lab-boot-state-exporter --collect

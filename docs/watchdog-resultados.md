@@ -8,7 +8,7 @@ Informe de la sesión que desplegó y probó el vigilante en la Raspberry Pi. Co
 - Probado con el lab apagado de verdad: la Pi detectó la caída, mandó el WoL y el lab volvió a responder en **~3 min** desde que se apagó.
 - El desarrollo encontró y corrigió **seis problemas** (apartado "Hallazgos"), entre ellos que la Pi tenía la hora 11 min atrasada y que el registro persistente no se guardaba.
 - El lab se cayó por su cuenta a las 20:31 sin dejar rastro en el registro, a 34 °C y con el SAI en línea. Apunta a la **alimentación aguas abajo del SAI**; la causa no está demostrada (apartado "Caída de las 20:31").
-- Pendientes: fuente de alimentación nueva y el lado del lab (relay de respaldo y métrica de apagado sucio, con Codex).
+- Pendientes: fuente de alimentación nueva y aplicar los cambios preparados del lado del lab (relay de respaldo y métrica de apagado sucio), sujeto a revisión del `--check --diff` y aprobación de Fran.
 
 ## Configuración desplegada
 
@@ -76,7 +76,7 @@ Analizada en solo lectura desde el lab.
 ## Pendientes, por prioridad
 
 1. **Fuente de alimentación nueva** para la Pi (la cambia Fran) y comprobar que `throttled` sigue en `0x0`. En el banco registraba bajo voltaje (`0x50005`); en el rack, 0 avisos en más de una hora.
-2. **Lado del lab** (Codex, con aprobación de Fran): aplicar el relay de Alertmanager como respaldo de Telegram y añadir una métrica de "último apagado sucio" con su alerta.
+2. **Lado del lab**: Codex preparó en `codex/lab-watchdog` el relay de Alertmanager como respaldo y la métrica de apagado no limpio. Falta revisar el `--check --diff` y recibir aprobación de Fran antes de aplicar.
 3. **Clave SSH propia para la Pi** (hoy acepta la misma que el lab) y unos pasos escritos para reconstruirla si falla la tarjeta.
 4. Pruebas T7, T8 y TH3 (con el punto de acceso), y el recorrido completo de `test-indicator`.
 

@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STATE_DIR="/var/lib/lab-alerting/boot-state"
+TEXTFILE_DIR="/var/lib/prometheus/node-exporter"
+MODE=""
+BOOT_ID=""
+NOW=""
+
+usage() {
+  echo "Usage: $0 --initialize|--collect [--state-dir DIR] [--textfile-dir DIR] [--boot-id ID] [--now EPOCH]" >&2
+  exit 2
+}
+
+while (($#)); do
+  case "$1" in
+    --initialize) MODE=initialize; shift ;;
+    --collect) MODE=collect; shift ;;
+    --state-dir) (($# >= 2)) || usage; STATE_DIR="$2"; shift 2 ;;
+    --textfile-dir) (($# >= 2)) || usage; TEXTFILE_DIR="$2"; shift 2 ;;
+    --boot-id) (($# >= 2)) || usage; BOOT_ID="$2"; shift 2 ;;
+    --now) (($# >= 2)) || usage; NOW="$2"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+
+[[ -n "$MODE" ]] || usage
+umask 027
+mkdir -p "$STATE_DIR"
+
+write_atomic() {
+  local destination="$1" value="$2" temporary
+  temporary="$(mktemp "${destination}.XXXXXX")"
+  printf '%s\n' "$value" > "$temporary"
+  chmod 0640 "$temporary"
+  mv -f "$temporary" "$destination"
+}
+
+if [[ "$MODE" == initialize ]]; then
+  if [[ ! -e "$STATE_DIR/initialized" ]]; then
+    write_atomic "$STATE_DIR/clean-shutdown" "initial-install"
+    write_atomic "$STATE_DIR/unclean-total" "0"
+    write_atomic "$STATE_DIR/unclean-last-timestamp" "0"
+    write_atomic "$STATE_DIR/initialized" "1"
+  fi
+  exit 0
+fi
+
+[[ -n "$BOOT_ID" ]] || BOOT_ID="$(cat /proc/sys/kernel/random/boot_id)"
+[[ -n "$NOW" ]] || NOW="$(date +%s)"
+[[ "$NOW" =~ ^[0-9]+$ ]] || { echo "invalid epoch timestamp" >&2; exit 2; }
+[[ "$BOOT_ID" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "invalid boot id" >&2; exit 2; }
+
+mkdir -p "$TEXTFILE_DIR"
+counter=0
+last_unclean=0
+previous_clean=1
+[[ -r "$STATE_DIR/unclean-total" ]] && counter="$(cat "$STATE_DIR/unclean-total")"
+[[ -r "$STATE_DIR/unclean-last-timestamp" ]] && last_unclean="$(cat "$STATE_DIR/unclean-last-timestamp")"
+[[ "$counter" =~ ^[0-9]+$ ]] || counter=0
+[[ "$last_unclean" =~ ^[0-9]+$ ]] || last_unclean=0
+
+processed_boot=""
+[[ -r "$STATE_DIR/last-boot-id" ]] && processed_boot="$(cat "$STATE_DIR/last-boot-id")"
+if [[ "$processed_boot" == "$BOOT_ID" ]]; then
+  [[ -r "$STATE_DIR/previous-clean" ]] && previous_clean="$(cat "$STATE_DIR/previous-clean")"
+else
+  if [[ -e "$STATE_DIR/clean-shutdown" ]]; then
+    rm -f "$STATE_DIR/clean-shutdown"
+    previous_clean=1
+  else
+    previous_clean=0
+    counter=$((counter + 1))
+    last_unclean="$NOW"
+  fi
+  write_atomic "$STATE_DIR/unclean-total" "$counter"
+  write_atomic "$STATE_DIR/unclean-last-timestamp" "$last_unclean"
+  write_atomic "$STATE_DIR/last-boot-id" "$BOOT_ID"
+  write_atomic "$STATE_DIR/previous-clean" "$previous_clean"
+fi
+
+temporary="$(mktemp "${TEXTFILE_DIR}/lab-boot.prom.XXXXXX")"
+trap 'rm -f "$temporary"' EXIT
+{
+  echo '# HELP lab_boot_previous_clean Whether the previous boot ended with a clean shutdown (1=yes, 0=no).'
+  echo '# TYPE lab_boot_previous_clean gauge'
+  echo "lab_boot_previous_clean ${previous_clean}"
+  echo '# HELP lab_boot_unclean_total Number of boots that followed an unclean shutdown.'
+  echo '# TYPE lab_boot_unclean_total counter'
+  echo "lab_boot_unclean_total ${counter}"
+  echo '# HELP lab_boot_unclean_last_timestamp_seconds Unix timestamp of the last unclean boot, or 0 if none.'
+  echo '# TYPE lab_boot_unclean_last_timestamp_seconds gauge'
+  echo "lab_boot_unclean_last_timestamp_seconds ${last_unclean}"
+} > "$temporary"
+chmod 0644 "$temporary"
+mv -f "$temporary" "${TEXTFILE_DIR}/lab-boot.prom"
+trap - EXIT

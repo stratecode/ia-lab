@@ -1,0 +1,10 @@
+[Unit]
+Description=Registrar el estado del apagado anterior al arrancar
+
+[Timer]
+OnBootSec=30s
+AccuracySec=1s
+Unit=lab-boot-state-exporter.service
+
+[Install]
+WantedBy=timers.target

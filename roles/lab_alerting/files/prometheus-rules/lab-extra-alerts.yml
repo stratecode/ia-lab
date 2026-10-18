@@ -89,3 +89,12 @@ groups:
         annotations:
           summary: "La sincronización de la clave llama.cpp no se ejecuta"
           description: "El timer no ha registrado un intento de sincronización durante más de diez minutos."
+  - name: lab-boot-health
+    rules:
+      - alert: LabApagadoSucio
+        expr: lab_boot_previous_clean == 0 and lab_boot_unclean_last_timestamp_seconds > time() - 3600
+        for: 1m
+        labels: {severity: warning, category: system}
+        annotations:
+          summary: "El lab arrancó tras un apagado no limpio"
+          description: "El lab detectó un apagado brusco durante la última hora. Revisa alimentación y registro del arranque anterior."

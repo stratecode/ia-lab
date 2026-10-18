@@ -4,7 +4,7 @@ Rol: `roles/lab_watchdog` · Playbook: `playbooks/lab-watchdog.yml` · Pruebas: 
 
 Resultados de las pruebas, hallazgos y pendientes: `docs/watchdog-resultados.md`.
 
-Una Raspberry Pi **sin Internet** (solo ve la LAN del lab) vigila el estado del lab desde fuera y, si el lab se apaga (por ejemplo por sobrecalentamiento), lo enciende con **Wake-on-LAN**, comprueba que arranca y, **cuando el lab vuelve, le entrega el aviso** (cuándo detectó la caída y que lo encendió) para que lo envíe él a Telegram. Requiere tres cambios en el lab: `docs/watchdog-lado-lab.md`. Todo corre **en la Raspberry, no en el lab**: si el lab cae, el vigilante sigue vivo.
+Una Raspberry Pi por Wi-Fi vigila el estado del lab desde fuera y, si el lab se apaga (por ejemplo por sobrecalentamiento), lo enciende con **Wake-on-LAN**, comprueba que arranca y envía el aviso directamente a Telegram. El relay del lab es un canal de respaldo opcional; chrony en el lab no es necesario porque la Pi usa el router como NTP principal. Ver `docs/watchdog-lado-lab.md`. Todo corre **en la Raspberry, no en el lab**: si el lab cae, el vigilante sigue vivo.
 
 ## Qué hace y qué no hace
 | Hace | No hace |

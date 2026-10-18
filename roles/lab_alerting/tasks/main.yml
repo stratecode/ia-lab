@@ -61,9 +61,11 @@
   when: lab_watchdog_relay_enabled | default(false) | bool
   tags: [watchdog-relay]
 
-- name: Configure lab services for the external watchdog
-  when: lab_watchdog_relay_enabled | default(false) | bool
-  tags: [watchdog-relay]
+- name: Configure chrony for the external watchdog
+  when:
+    - lab_watchdog_relay_enabled | default(false) | bool
+    - lab_watchdog_relay_chrony_enabled | default(false) | bool
+  tags: [watchdog-relay, watchdog-chrony]
   block:
     - name: Install chrony for the watchdog Pi time source
       ansible.builtin.apt:
@@ -230,6 +232,62 @@
         - cert-textfile-exporter.timer
       register: lab_alerting_cert_units
 
+- name: Boot state exporter
+  when: lab_alerting_enable_boot_exporter | bool
+  tags: [exporters, boot]
+  block:
+    - name: Create persistent boot state directory
+      ansible.builtin.file:
+        path: /var/lib/lab-alerting/boot-state
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Check whether boot state has been initialized
+      ansible.builtin.stat:
+        path: /var/lib/lab-alerting/boot-state/initialized
+      register: lab_alerting_boot_state_initialized
+
+    - name: Seed a clean marker on first installation
+      ansible.builtin.copy:
+        content: "initial-install\n"
+        dest: /var/lib/lab-alerting/boot-state/clean-shutdown
+        owner: root
+        group: root
+        mode: "0640"
+      when: not lab_alerting_boot_state_initialized.stat.exists
+
+    - name: Mark boot state initialization complete
+      ansible.builtin.copy:
+        content: "1\n"
+        dest: /var/lib/lab-alerting/boot-state/initialized
+        owner: root
+        group: root
+        mode: "0640"
+      when: not lab_alerting_boot_state_initialized.stat.exists
+
+    - name: Install boot state textfile exporter
+      ansible.builtin.copy:
+        src: bin/lab-boot-state-exporter
+        dest: /usr/local/bin/lab-boot-state-exporter
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install boot state exporter units
+      ansible.builtin.copy:
+        src: "systemd/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - lab-boot-clean-marker.service
+        - lab-boot-state-exporter.service
+        - lab-boot-state-exporter.timer
+      register: lab_alerting_boot_units
+
 # ---------------------------------------------------------------- Rotación de clave de llama.cpp
 - name: Install and schedule llama.cpp key synchronization
   ansible.builtin.import_tasks: llama_key_sync.yml
@@ -243,6 +301,7 @@
   when: >-
     (lab_alerting_nut_units is changed) or (lab_alerting_docker_units is changed)
     or (lab_alerting_cert_units is changed)
+    or (lab_alerting_boot_units is defined and lab_alerting_boot_units is changed)
   tags: [always]
 
 - name: Enable and start timers and path units
@@ -258,8 +317,23 @@
       - {name: nut-textfile-exporter.timer, when: "{{ lab_alerting_enable_ups }}"}
       - {name: docker-textfile-exporter.timer, when: "{{ lab_alerting_enable_docker_exporter }}"}
       - {name: cert-textfile-exporter.timer, when: "{{ lab_alerting_enable_cert_exporter }}"}
+      - {name: lab-boot-state-exporter.timer, when: "{{ lab_alerting_enable_boot_exporter }}"}
   when: item.when | bool
   tags: [exporters, ups, llama-key]
+
+- name: Enable clean shutdown marker service
+  ansible.builtin.systemd:
+    name: lab-boot-clean-marker.service
+    enabled: true
+    state: started
+  when: lab_alerting_enable_boot_exporter | bool
+  tags: [exporters, boot]
+
+- name: Establish boot state baseline and publish initial metrics
+  ansible.builtin.command: /usr/local/bin/lab-boot-state-exporter --collect
+  changed_when: false
+  when: lab_alerting_enable_boot_exporter | bool
+  tags: [exporters, boot]
 
 # ---------------------------------------------------------------- Grafana
 - name: Install UPS Grafana dashboard
