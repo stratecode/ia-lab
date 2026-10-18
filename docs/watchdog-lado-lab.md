@@ -73,4 +73,6 @@ Prueba reproducible sin tocar el host: `bash tests/lab_alerting/test_boot_state_
 Con la Pi en simulación: `sudo poweroff` en el lab, esperar ~6 min y encenderlo a mano; deben llegar a Telegram los mensajes de caída y de recuperación con la hora real de la caída. Un fallo de este tramo no pone en riesgo el WoL: este solo depende de la LAN.
 
 ## Verificado y no verificado
-Verificado (solo lectura): Alertmanager escucha en `127.0.0.1:9093` y **no** está expuesto por nginx; chrony está activo y **no** sirve a la LAN. Sin verificar: que el cortafuegos permita UDP 123, y todo lo anterior hasta que se aplique.
+Verificado tras el despliegue del 19-oct-2026: `nginx -t` pasa; Nginx, Alertmanager, Prometheus, el timer de `lab-boot-state-exporter` y el servicio `lab-boot-clean-marker` están activos. La métrica inicial indica `lab_boot_previous_clean=1` y `lab_boot_unclean_total=0`, y Prometheus tiene cargada `LabApagadoSucio`. Un GET al endpoint desde loopback devuelve 403 por la restricción de método (no redirige a Grafana). Pendiente: confirmación desde la Pi de que el endpoint ya no redirige; no se ha enviado un POST de prueba porque generaría una notificación real.
+
+Chrony sigue sin habilitarse y UFW no se modificó. La prueba de POST desde la IP de la Pi y el aviso de Telegram quedan sin verificar hasta que Fran autorice enviar una notificación de prueba.
