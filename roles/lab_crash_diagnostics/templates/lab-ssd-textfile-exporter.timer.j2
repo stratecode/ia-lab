@@ -1,0 +1,11 @@
+# Managed by Ansible (role lab_crash_diagnostics)
+[Unit]
+Description=Export SMART counters of the system SSD every {{ lab_crash_diag_ssd_interval_seconds }} s
+
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec={{ lab_crash_diag_ssd_interval_seconds }}s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

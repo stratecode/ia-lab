@@ -1,0 +1,5 @@
+---
+- name: Reload kdump
+  ansible.builtin.systemd:
+    name: kdump-tools
+    state: restarted

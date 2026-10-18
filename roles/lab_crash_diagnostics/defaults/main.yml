@@ -1,0 +1,18 @@
+---
+# Role lab_crash_diagnostics: OBSERVATIONAL tools for the lab's unexplained stops (docs/lab-reinicios-investigacion.md).
+# Observation tools: they keep evidence the next time it happens. The only behaviour change is that, with kdump on,
+# a kernel panic saves a dump and reboots by itself instead of freezing (kernel.panic is 0 on this host).
+# Off by default; the playbook is run with -e lab_crash_diag_enabled=true after --check --diff and Fran's approval.
+lab_crash_diag_enabled: false
+
+# Arm kdump. Memory for the crash kernel is already reserved on the kernel command line; this only turns it on.
+# A kernel panic then leaves a dump in /var/crash and the machine reboots by itself. Hardware resets and power losses
+# leave nothing: so a dump means a software crash, and no dump after a stop points to hardware or power.
+lab_crash_diag_kdump: true
+
+# Export SMART counters of the system SSD every minute (power cycles and unexpected power-offs).
+lab_crash_diag_ssd_exporter: true
+lab_crash_diag_ssd_device: auto             # /dev/sdX or auto (first real disk)
+lab_crash_diag_ssd_attributes: "9,12,192"   # Power_On_Hours, Power_Cycle_Count, Power-Off_Retract_Count on this SSD
+lab_crash_diag_ssd_interval_seconds: 60
+lab_crash_diag_textfile_dir: "{{ lab_alerting_textfile_dir | default('/var/lib/prometheus/node-exporter') }}"

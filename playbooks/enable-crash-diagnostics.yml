@@ -1,0 +1,13 @@
+---
+# Observational diagnostics for the lab's unexplained stops: arms kdump and exports SMART counters of the SSD.
+# See docs/lab-reinicios-investigacion.md. It changes the LAB HOST, so:
+#   1. preview:  ansible-playbook playbooks/enable-crash-diagnostics.yml -e lab_crash_diag_enabled=true --check --diff
+#   2. apply it only after Fran's direct approval (same command without --check --diff)
+# Uses inventory.yml (the lab). NEVER run it with inventory-watchdog.yml: that one is the Raspberry Pi.
+- name: Crash diagnostics for the lab
+  hosts: all
+  become: true
+
+  roles:
+    - role: lab_crash_diagnostics
+      when: lab_crash_diag_enabled | bool

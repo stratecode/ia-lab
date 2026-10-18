@@ -1,0 +1,106 @@
+---
+# Observational only. See defaults/main.yml and docs/lab-reinicios-investigacion.md.
+
+# ---- kdump
+- name: Read the memory reserved for the crash kernel
+  ansible.builtin.slurp:
+    src: /sys/kernel/kexec_crash_size
+  register: lab_crash_diag_reserved
+  when: lab_crash_diag_kdump | bool
+  tags: [kdump]
+
+- name: List the installed packages (read only)
+  ansible.builtin.package_facts:
+    manager: auto
+  when: lab_crash_diag_kdump | bool
+  tags: [kdump]
+
+- name: Check that memory is reserved and kdump-tools is installed (this role installs nothing)
+  ansible.builtin.assert:
+    that:
+      - (lab_crash_diag_reserved.content | b64decode | trim | int) > 0
+      - "'kdump-tools' in ansible_facts.packages"
+    fail_msg: >-
+      Arming kdump needs a crashkernel= reservation on the kernel command line and the kdump-tools package; this role
+      does not change the boot parameters nor install packages.
+  when: lab_crash_diag_kdump | bool
+  tags: [kdump]
+
+- name: Turn kdump on
+  ansible.builtin.lineinfile:
+    path: /etc/default/kdump-tools
+    regexp: '^USE_KDUMP='
+    line: USE_KDUMP=1
+  notify: Reload kdump
+  when: lab_crash_diag_kdump | bool
+  tags: [kdump]
+
+- name: Apply the kdump change now so the check below sees it
+  ansible.builtin.meta: flush_handlers
+  tags: [kdump]
+
+- name: Ask kdump whether it is ready
+  ansible.builtin.command: kdump-config status
+  register: lab_crash_diag_kdump_status
+  changed_when: false
+  check_mode: false
+  when: lab_crash_diag_kdump | bool
+  tags: [kdump]
+
+- name: Check that kdump is ready to catch a crash
+  ansible.builtin.assert:
+    that:
+      - "'ready to kdump' in (lab_crash_diag_kdump_status.stdout | lower)"
+      - "'not ready' not in (lab_crash_diag_kdump_status.stdout | lower)"
+    fail_msg: "kdump is not ready: {{ lab_crash_diag_kdump_status.stdout }}"
+  when: (lab_crash_diag_kdump | bool) and not ansible_check_mode
+  tags: [kdump]
+
+# ---- SSD SMART exporter
+- name: Look for smartctl (this role installs nothing)
+  ansible.builtin.stat:
+    path: /usr/sbin/smartctl
+  register: lab_crash_diag_smartctl
+  when: lab_crash_diag_ssd_exporter | bool
+  tags: [ssd]
+
+- name: Check that smartctl exists
+  ansible.builtin.assert:
+    that: lab_crash_diag_smartctl.stat.exists
+    fail_msg: smartctl is not installed (package smartmontools); this role does not install packages.
+  when: lab_crash_diag_ssd_exporter | bool
+  tags: [ssd]
+
+- name: Install the SSD SMART exporter
+  ansible.builtin.copy:
+    src: lab-ssd-textfile-exporter
+    dest: /usr/local/bin/lab-ssd-textfile-exporter
+    owner: root
+    group: root
+    mode: "0755"
+  when: lab_crash_diag_ssd_exporter | bool
+  tags: [ssd]
+
+- name: Install the SSD SMART exporter units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - lab-ssd-textfile-exporter.service
+    - lab-ssd-textfile-exporter.timer
+  register: lab_crash_diag_units
+  when: lab_crash_diag_ssd_exporter | bool
+  tags: [ssd]
+
+- name: Enable the SSD SMART exporter timer
+  ansible.builtin.systemd:
+    name: lab-ssd-textfile-exporter.timer
+    enabled: true
+    state: started
+    daemon_reload: "{{ lab_crash_diag_units is changed }}"
+  when: lab_crash_diag_ssd_exporter | bool
+  ignore_errors: "{{ ansible_check_mode }}"  # the unit does not exist yet while previewing
+  tags: [ssd]
