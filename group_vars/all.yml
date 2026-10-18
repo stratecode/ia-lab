@@ -282,6 +282,7 @@ llm_telemetry_port: 8081
 llm_telemetry_model_label: LFM2.5-1.2B-Instruct-Q4_0
 lab_secretary_enabled: true
 lab_secretary_port: 8082
+lab_secretary_transcription_enabled: false
 lab_secretary_voice_enabled: false
 lab_secretary_voice_max_duration_seconds: 120
 lab_secretary_progress_delay_seconds: 30

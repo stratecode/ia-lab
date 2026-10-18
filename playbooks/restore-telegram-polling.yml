@@ -8,6 +8,8 @@
 
   vars:
     lab_secretary_telegram_mode: polling
+    lab_secretary_transcription_enabled: true
+    lab_secretary_voice_enabled: false
 
   tasks:
     - name: Remove Telegram webhook without dropping pending updates

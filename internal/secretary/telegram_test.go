@@ -323,7 +323,7 @@ func newVoiceTestBot(t *testing.T, cfg voiceTestConfig) (*Bot, *voiceTestSpeech,
 	}))
 	t.Cleanup(api.Close)
 	service := New(model.URL, "model-key", "instructions", t.TempDir(), map[int64]bool{7: true})
-	bot := &Bot{Base: api.URL, Token: "secret-token", Client: api.Client(), Service: service, Speech: speech, Audio: audio, VoiceEnabled: cfg.voiceEnabled}
+	bot := &Bot{Base: api.URL, Token: "secret-token", Client: api.Client(), Service: service, Speech: speech, Audio: audio, TranscriptionEnabled: cfg.voiceEnabled}
 	return bot, speech, audio, state
 }
 

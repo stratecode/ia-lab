@@ -1,23 +1,35 @@
 ---
-- name: Inspect existing speech service units for rollback
+- name: Inspect existing Whisper service unit for rollback
   ansible.builtin.stat:
-    path: "/etc/systemd/system/{{ item }}.service"
-  loop:
-    - lab-whisper
-    - lab-piper
-  register: lab_speech_unit_files
-  when: not (lab_secretary_voice_enabled | bool)
+    path: /etc/systemd/system/lab-whisper.service
+  register: lab_whisper_unit_file
+  when: not (lab_secretary_transcription_enabled | bool)
 
-- name: Stop and disable speech services when voice is disabled
+- name: Stop and disable Whisper when transcription is disabled
   ansible.builtin.systemd:
-    name: "{{ item.item }}"
+    name: lab-whisper
     daemon_reload: true
     enabled: false
     state: stopped
-  loop: "{{ lab_speech_unit_files.results | default([]) }}"
+  when:
+    - not (lab_secretary_transcription_enabled | bool)
+    - lab_whisper_unit_file.stat.exists | default(false)
+
+- name: Inspect existing Piper service unit for rollback
+  ansible.builtin.stat:
+    path: /etc/systemd/system/lab-piper.service
+  register: lab_piper_unit_file
+  when: not (lab_secretary_voice_enabled | bool)
+
+- name: Stop and disable Piper when spoken replies are disabled
+  ansible.builtin.systemd:
+    name: lab-piper
+    daemon_reload: true
+    enabled: false
+    state: stopped
   when:
     - not (lab_secretary_voice_enabled | bool)
-    - item.stat.exists
+    - lab_piper_unit_file.stat.exists | default(false)
 
 - name: Install local speech runtime dependencies
   ansible.builtin.apt:
@@ -34,7 +46,7 @@
     state: present
     update_cache: true
     cache_valid_time: 3600
-  when: lab_secretary_voice_enabled | bool
+  when: (lab_secretary_transcription_enabled | bool) or (lab_secretary_voice_enabled | bool)
 
 - name: Create dedicated speech users
   ansible.builtin.user:
@@ -45,7 +57,15 @@
     state: present
   loop:
     - "{{ lab_whisper_user }}"
-    - "{{ lab_piper_user }}"
+  when: lab_secretary_transcription_enabled | bool
+
+- name: Create dedicated Piper user
+  ansible.builtin.user:
+    name: "{{ lab_piper_user }}"
+    system: true
+    create_home: false
+    shell: /usr/sbin/nologin
+    state: present
   when: lab_secretary_voice_enabled | bool
 
 - name: Create speech directories
@@ -59,7 +79,15 @@
     - { path: /opt/lab-speech, mode: "0755" }
     - { path: "{{ lab_speech_root }}", mode: "0755" }
     - { path: "{{ lab_speech_model_dir }}", mode: "0755" }
-    - { path: "{{ lab_piper_state_dir }}", owner: "{{ lab_piper_user }}", group: "{{ lab_piper_user }}", mode: "0750" }
+  when: (lab_secretary_transcription_enabled | bool) or (lab_secretary_voice_enabled | bool)
+
+- name: Create Piper state directory
+  ansible.builtin.file:
+    path: "{{ lab_piper_state_dir }}"
+    state: directory
+    owner: "{{ lab_piper_user }}"
+    group: "{{ lab_piper_user }}"
+    mode: "0750"
   when: lab_secretary_voice_enabled | bool
 
 - name: Check out pinned whisper.cpp source
@@ -70,7 +98,7 @@
     update: true
     force: false
   register: lab_whisper_checkout
-  when: lab_secretary_voice_enabled | bool
+  when: lab_secretary_transcription_enabled | bool
 
 - name: Download pinned Whisper model
   ansible.builtin.get_url:
@@ -82,7 +110,7 @@
     mode: "0644"
     timeout: 600
   notify: Restart lab whisper
-  when: lab_secretary_voice_enabled | bool
+  when: lab_secretary_transcription_enabled | bool
 
 - name: Download pinned Piper voice model
   ansible.builtin.get_url:
@@ -112,7 +140,7 @@
   ansible.builtin.stat:
     path: "{{ lab_speech_whisper_build }}/bin/whisper-server"
   register: lab_whisper_binary
-  when: lab_secretary_voice_enabled | bool
+  when: lab_secretary_transcription_enabled | bool
 
 - name: Configure CPU-only Whisper server build
   ansible.builtin.command:
@@ -130,7 +158,7 @@
       - -DGGML_CUDA=OFF
       - -DGGML_METAL=OFF
   when:
-    - lab_secretary_voice_enabled | bool
+    - lab_secretary_transcription_enabled | bool
     - lab_whisper_checkout.changed or not lab_whisper_binary.stat.exists
 
 - name: Build only the Whisper server target
@@ -144,7 +172,7 @@
       - --parallel
       - "{{ lab_whisper_build_jobs | string }}"
   when:
-    - lab_secretary_voice_enabled | bool
+    - lab_secretary_transcription_enabled | bool
     - lab_whisper_checkout.changed or not lab_whisper_binary.stat.exists
   notify: Restart lab whisper
 
@@ -205,7 +233,7 @@
       [Install]
       WantedBy=multi-user.target
   notify: Restart lab whisper
-  when: lab_secretary_voice_enabled | bool
+  when: lab_secretary_transcription_enabled | bool
 
 - name: Install Piper systemd unit
   ansible.builtin.copy:
@@ -253,7 +281,7 @@
 
 - name: Apply speech service changes
   ansible.builtin.meta: flush_handlers
-  when: lab_secretary_voice_enabled | bool
+  when: (lab_secretary_transcription_enabled | bool) or (lab_secretary_voice_enabled | bool)
 
 - name: Enable Whisper service
   ansible.builtin.systemd:
@@ -261,7 +289,7 @@
     daemon_reload: true
     enabled: true
     state: started
-  when: lab_secretary_voice_enabled | bool
+  when: lab_secretary_transcription_enabled | bool
 
 - name: Enable Piper service
   ansible.builtin.systemd:
@@ -280,7 +308,7 @@
   until: lab_whisper_health.status == 200
   retries: 30
   delay: 2
-  when: lab_secretary_voice_enabled | bool
+  when: lab_secretary_transcription_enabled | bool
 
 - name: Verify Piper local health endpoint
   ansible.builtin.uri:

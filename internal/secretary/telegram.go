@@ -56,7 +56,7 @@ type Bot struct {
 	Speech           SpeechProcessor
 	Audio            AudioConverter
 	Metrics          *VoiceMetrics
-	VoiceEnabled     bool
+	TranscriptionEnabled bool
 	VoiceMaxDuration time.Duration
 	ProgressDelay    time.Duration
 	acknowledgements atomic.Uint64
@@ -361,7 +361,7 @@ func (b *Bot) processVoiceWithProgress(ctx context.Context, message *Message, tr
 	if message == nil || message.Voice == nil || !b.Service.Permitted(*message) {
 		return errors.New("unauthorized voice message")
 	}
-	if !b.VoiceEnabled {
+	if !b.TranscriptionEnabled {
 		requestResult = VoiceResultError
 		return errors.New("voice handling is disabled")
 	}

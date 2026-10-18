@@ -28,6 +28,25 @@ func TestParseTelegramMode(t *testing.T) {
 	}
 }
 
+func TestParseTranscriptionEnabledIsIndependentFromLegacyVoiceFlag(t *testing.T) {
+	cases := []struct {
+		name, transcription, legacy string
+		want                        bool
+	}{
+		{name: "input remains enabled when spoken replies are disabled", transcription: "true", legacy: "false", want: true},
+		{name: "explicit input disable wins", transcription: "false", legacy: "true", want: false},
+		{name: "legacy setting remains a fallback", legacy: "true", want: true},
+		{name: "unset settings stay disabled", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseTranscriptionEnabled(tc.transcription, tc.legacy); got != tc.want {
+				t.Fatalf("parseTranscriptionEnabled(%q, %q) = %t, want %t", tc.transcription, tc.legacy, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseProgressDelay(t *testing.T) {
 	for input, want := range map[string]time.Duration{
 		"":   30 * time.Second,
@@ -62,6 +81,35 @@ func TestParseLearningRetentionDefaultsAndBounds(t *testing.T) {
 		if _, err := parseLearningRetention("90", invalid); err == nil {
 			t.Errorf("parseLearningRetention(candidate=%q) accepted invalid retention", invalid)
 		}
+	}
+}
+
+func TestConfigureVoiceInputWorksWithoutPiper(t *testing.T) {
+	whisper := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/inference" {
+			t.Errorf("Whisper path = %q, want /inference", r.URL.Path)
+		}
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("parse transcription request: %v", err)
+		}
+		if got := r.FormValue("language"); got != "es" {
+			t.Errorf("language = %q, want es", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"text":"transcripción correcta","language":"es"}`))
+	}))
+	defer whisper.Close()
+
+	bot := &secretary.Bot{}
+	if !configureVoiceInput(bot, true, whisper.URL, "", "/usr/bin/ffmpeg") {
+		t.Fatal("voice input was not enabled with a Whisper endpoint and no Piper endpoint")
+	}
+	if !bot.TranscriptionEnabled || bot.Speech == nil || bot.Audio == nil {
+		t.Fatalf("voice input dependencies were not configured: %+v", bot)
+	}
+	transcript, err := bot.Speech.Transcribe(context.Background(), []byte("wav"))
+	if err != nil || transcript != "transcripción correcta" {
+		t.Fatalf("transcription = %q, %v; want successful Whisper result", transcript, err)
 	}
 }
 
