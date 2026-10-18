@@ -44,6 +44,18 @@
     "heartbeat_url": lab_watchdog_heartbeat_url,
     "daily_summary_hour": lab_watchdog_daily_summary_hour
   },
+  "indicator": {
+    "enabled": lab_watchdog_indicator_enabled,
+    "pins": {
+      "buzzer": lab_watchdog_indicator_pin_buzzer,
+      "green": lab_watchdog_indicator_pin_green,
+      "red": lab_watchdog_indicator_pin_red,
+      "button": lab_watchdog_indicator_pin_button
+    },
+    "quiet_start": lab_watchdog_indicator_quiet_start,
+    "quiet_end": lab_watchdog_indicator_quiet_end,
+    "reminder_seconds": lab_watchdog_indicator_reminder_seconds
+  },
   "mode": {"dry_run": lab_watchdog_dry_run},
   "paths": {
     "state": lab_watchdog_state_dir ~ "/state.json",

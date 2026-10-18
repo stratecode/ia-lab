@@ -51,6 +51,18 @@ lab_watchdog_telegram_token: "{{ vault_lab_watchdog_telegram_token | default(loo
 lab_watchdog_telegram_chat_id: "{{ (lookup('env', 'LAB_TELEGRAM_ALLOWED_USERS') | default('', true)).split(',') | first | trim }}"
 lab_watchdog_heartbeat_url: ""               # optional external dead-man's switch (healthchecks.io, ntfy...)
 
+# --- Local indicator: LEDs + buzzer + mute button on the Pi's GPIO (docs/watchdog.md, "Indicador local") ---
+# Off by default. It alarms in the room even when the lab, the router or Telegram are all gone.
+# Pins are BCM numbers; they match the wiring in docs/watchdog-contexto-sesion-pi.md.
+lab_watchdog_indicator_enabled: false
+lab_watchdog_indicator_pin_buzzer: 17        # active 5 V buzzer through an NPN transistor (physical pin 11)
+lab_watchdog_indicator_pin_green: 27         # physical pin 13
+lab_watchdog_indicator_pin_red: 22           # physical pin 15
+lab_watchdog_indicator_pin_button: 23        # to GND, internal pull-up (physical pin 16)
+lab_watchdog_indicator_quiet_start: "23:00"  # no buzzer in this window, except when the watchdog gave up
+lab_watchdog_indicator_quiet_end: "08:00"    # "" in both disables quiet hours
+lab_watchdog_indicator_reminder_seconds: 600 # repeat of the "gave up" alarm until the button is pressed
+
 # --- Pi hardening ------------------------------------------------------------------------------
 lab_watchdog_enable_hw_watchdog: true        # the Pi's own hardware watchdog reboots it if it hangs
 

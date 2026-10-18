@@ -87,8 +87,31 @@ journalctl -u lab-watchdog -f                                                 # 
 ```
 **Antes de reiniciar o parar el lab a propósito**, ejecuta `maintenance 30`; si no, el vigilante lo tratará como una caída.
 
+## Indicador local (LED, zumbador y botón)
+Avisa **en la propia Pi**, sin depender del lab, del router ni de Telegram: es la única vía cuando el lab no arranca y el aviso diferido no puede salir. Está **desactivado por defecto** (`lab_watchdog_indicator_enabled: false`). Lo maneja un hilo propio del vigilante y **nunca lo tumba**: sin GPIO, o si falla, se desactiva y reintenta cada 5 min.
+
+Montaje (numeración BCM, ajustable con `lab_watchdog_indicator_pin_*`): zumbador activo de 5 V por un transistor NPN en GPIO17 (pin 11), LED verde en GPIO27 (pin 13), LED rojo en GPIO22 (pin 15), pulsador a GND en GPIO23 (pin 16). Esquema y lista de piezas: `docs/watchdog-contexto-sesion-pi.md`, sección 4.
+
+| Estado del vigilante | Verde | Rojo | Zumbador |
+|---|---|---|---|
+| Lab UP | fijo | apagado | silencio |
+| SUSPECT / DEGRADED | parpadeo lento | apagado | silencio |
+| DOWN (espera de gracia) | apagado | parpadeo lento | silencio |
+| WoL enviado (esperando arranque) | apagado | fijo | 1 pitido corto por cada WoL o ciclo de enchufe |
+| Recuperado | fijo | apagado | 2 pitidos cortos |
+| GAVE_UP (rendido) | apagado | parpadeo rápido | 3 pitidos largos, **repetidos cada 10 min hasta pulsar el botón** |
+| NETWORK_DOWN (sin red local) | alterna con rojo | alterna | silencio |
+| Mantenimiento | parpadeo muy lento, ambos a la vez | | silencio |
+| Arranque del servicio | ambos LED 1,5 s | | 1 pitido |
+
+- **Horas de silencio:** de 23:00 a 08:00 no suenan los pitidos de WoL ni de "recuperado". `GAVE_UP` suena siempre. Se cambian con `lab_watchdog_indicator_quiet_start/_end` (`""` en ambos las desactiva).
+- **Botón:** silencia el pitido en curso y, en `GAVE_UP`, las repeticiones. El LED rojo sigue parpadeando; si el lab vuelve a caer y se rinde otra vez, suena de nuevo. El botón solo se consulta mientras algo suena.
+- **Salidas seguras:** al parar el servicio (`systemctl stop`) y, si lo matan, con `ExecStopPost`, el zumbador y los LED quedan apagados.
+- **Requisitos en la Pi:** `pinctrl` (viene con Raspberry Pi OS) y el grupo `gpio`. El rol añade al usuario del servicio a ese grupo y abre en el unit solo `/dev/gpiomem*` y `/dev/gpiochip0`; con el indicador desactivado el unit queda como antes.
+- **Prueba de hardware (TH1/TH2):** con el servicio parado, `sudo -u labwatch lab-watchdog -c /etc/lab-watchdog/config.json test-indicator [--seconds 5]` recorre cada fila de la tabla y termina esperando el botón.
+
 ## Plan de pruebas
-**Automáticas (sin hardware):** `python3 -m unittest discover -s tests/lab_watchdog -v` → 31 pruebas con reloj, red, entrega al lab, Telegram, Wake-on-LAN y enchufe simulados; ningún socket real. Incluye la **repetición del incidente del 16-oct**. Las pruebas detectan 5 averías introducidas a propósito (límite horario, modo simulación, comprobación de red, espera por calor, formato del paquete).
+**Automáticas (sin hardware):** `python3 -m unittest discover -s tests/lab_watchdog -v` → 56 pruebas con reloj, red, entrega al lab, Telegram, Wake-on-LAN, enchufe y GPIO simulados; ningún socket real. Incluyen la **repetición del incidente del 16-oct** (también con el indicador: qué se ve y se oye en cada fase). Las pruebas detectan averías introducidas a propósito (límite horario, modo simulación, comprobación de red, espera por calor, formato del paquete, silencio nocturno, botón, apagado de salidas, fallo de backend).
 
 **Con hardware** (en este orden; pararse ante el primer fallo):
 | # | Prueba | Esperado |
@@ -103,6 +126,9 @@ journalctl -u lab-watchdog -f                                                 # 
 | T7 | Reiniciar brevemente el router con el lab encendido | "Sin red local" y "Red local recuperada"; **ningún WoL** |
 | T8 | Quitar y devolver la corriente a la Pi | Servicio activo al arrancar; estado conservado |
 | T9 | Con la Pi en simulación: `sudo poweroff` en el lab, esperar ~6 min, encenderlo a mano | Al volver el lab llegan a Telegram la caída (con su hora real) y la recuperación |
+| TH1 | `test-indicator` con el hardware montado | Cada fila de la tabla del indicador se ve y se oye como se describe |
+| TH2 | En `test-indicator`, pulsar el botón durante el paso `GAVE_UP` | El zumbador se silencia y el paso termina con "botón: silenciado" |
+| TH3 | Con el servicio activo, quitar el cable de red de la Pi | LED alternando verde/rojo (`NETWORK_DOWN`), **ningún WoL** y sin pitidos |
 
 No se recomienda provocar un sobrecalentamiento real: el caso se cubre con la prueba de repetición del incidente.
 
@@ -115,7 +141,7 @@ No se recomienda provocar un sobrecalentamiento real: el caso se cubre con la pr
 ## Limitaciones conocidas
 - **Wake-on-LAN no revive un equipo colgado**; para eso hace falta el enchufe inteligente.
 - Si el router o el switch caen y no están en el SAI, la Pi no puede ver ni avisar. La prueba T7 verifica que, en ese caso, no actúa.
-- **Aviso diferido:** si el lab no arranca, el aviso no sale nunca (la Pi no tiene otra vía). Un `GAVE_UP` queda solo en la cola y en `journalctl`. Alternativas futuras: un zumbador/LED en la Pi, o un canal por Internet por otra red.
+- **Aviso diferido:** si el lab no arranca, el aviso no sale nunca (la Pi no tiene otra vía). Un `GAVE_UP` queda solo en la cola y en `journalctl`. En local lo cubre el **indicador** (LED y zumbador, con repetición cada 10 min hasta pulsar el botón). Alternativas futuras para avisar fuera de casa: un módem SMS o un canal por Internet por otra red.
 - Si el lab sigue en el mismo estado tras 2 Wake-on-LAN (y un ciclo, si hay enchufe), el vigilante **se rinde** y avisa: necesita una persona.
 - El nombre `monitor.stratecode.com` no resuelve en la LAN (el router no lo conoce): la Pi se conecta por IP y presenta el nombre para validar el certificado.
 - La Pi no tiene reloj propio y toma la hora del lab. Si arranca con el lab caído, la fecha puede ser antigua: la telemetría TLS y la entrega fallan hasta resincronizar, pero la vigilancia por ping/TCP y el Wake-on-LAN **siguen funcionando**.

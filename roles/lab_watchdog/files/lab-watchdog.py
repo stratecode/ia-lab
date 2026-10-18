@@ -15,21 +15,25 @@ import logging
 import os
 import re
 import shutil
+import signal
 import socket
 import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 TOKEN_ENV = "LAB_WATCHDOG_TELEGRAM_TOKEN"
 MAC_RE = re.compile(r"^([0-9a-f]{2}:){5}[0-9a-f]{2}$")
 PLUG_TYPES = ("none", "shelly_gen1", "shelly_gen2", "tasmota")
+INDICATOR_PINS = ("buzzer", "green", "red", "button")
+HHMM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 ICON = {"ok": "✅", "info": "ℹ️", "warn": "⚠️", "crit": "\U0001f6a8"}
 
 DEFAULTS: Dict[str, Any] = {
@@ -61,6 +65,14 @@ DEFAULTS: Dict[str, Any] = {
         "relay_verify_tls": True,
         "telegram_enabled": False,  # only for a Pi that does have Internet
         "chat_id": "", "heartbeat_url": "", "daily_summary_hour": 9,
+    },
+    "indicator": {
+        # Local alarm on the Pi (LEDs, buzzer, mute button). It works with the lab and the network down.
+        "enabled": False,
+        "pins": {"buzzer": 17, "green": 27, "red": 22, "button": 23},  # BCM numbers
+        "quiet_start": "23:00",  # no buzzer in this window, except when the watchdog has given up
+        "quiet_end": "08:00",    # both empty = no quiet hours
+        "reminder_seconds": 600,  # period of the "gave up" alarm until the button is pressed
     },
     "mode": {"dry_run": True},
     "paths": {
@@ -119,6 +131,18 @@ def validate_config(cfg: Dict[str, Any]) -> List[str]:
         errors.append("notify.chat_id must be a numeric Telegram chat id")
     if not isinstance(cfg["mode"].get("dry_run"), bool):
         errors.append("mode.dry_run must be true or false")
+    ind = cfg["indicator"]
+    if not isinstance(ind.get("enabled"), bool):
+        errors.append("indicator.enabled must be true or false")
+    elif ind["enabled"]:
+        pins = [ind.get("pins", {}).get(name) for name in INDICATOR_PINS]
+        if not all(isinstance(p, int) and 2 <= p <= 27 for p in pins) or len(set(pins)) != len(pins):
+            errors.append("indicator.pins needs %d different BCM numbers (2-27): %s" % (len(INDICATOR_PINS), ", ".join(INDICATOR_PINS)))
+        quiet = (str(ind.get("quiet_start", "")), str(ind.get("quiet_end", "")))
+        if any(quiet) and (parse_hhmm(quiet[0]) is None or parse_hhmm(quiet[1]) is None):
+            errors.append("indicator.quiet_start and quiet_end must both be HH:MM (or both empty)")
+        if not isinstance(ind.get("reminder_seconds"), (int, float)) or ind["reminder_seconds"] <= 0:
+            errors.append("indicator.reminder_seconds must be a positive number")
     return errors
 
 
@@ -563,6 +587,286 @@ class Controller:
         self.n.send("crit", "%s\nEl lab sigue caído desde las %s. %s" % (why, fmt_time(self.s["down_since"]), self._known()))
 
 
+# --------------------------------------------------------------------------- local indicator
+
+SHORT_BEEP, LONG_BEEP, BEEP_GAP = 0.15, 0.6, 0.2
+GPIO_ERRORS = (OSError, subprocess.SubprocessError, ValueError)
+
+
+def parse_hhmm(text: str) -> Optional[int]:
+    """'23:30' -> minutes since midnight, or None when it is not a valid HH:MM."""
+    match = HHMM_RE.match(str(text).strip())
+    return int(match.group(1)) * 60 + int(match.group(2)) if match else None
+
+
+def indicator_mode(state: Dict[str, Any], maint: bool) -> Optional[str]:
+    """Translate the controller state into what the LEDs and buzzer must show (None = nothing yet)."""
+    if maint:
+        return "MAINTENANCE"
+    if state.get("net_down"):
+        return "NETWORK_DOWN"
+    status = state.get("status")
+    if status == "DOWN":
+        phase = str((state.get("recovery") or {}).get("phase", "GRACE"))
+        if phase == "GAVE_UP":
+            return "GAVE_UP"
+        return "WOL_SENT" if phase.startswith("WAIT") else "DOWN"
+    if status in ("SUSPECT", "DEGRADED"):
+        return "SUSPECT"
+    return "UP" if status == "UP" else None
+
+
+class PinctrlBackend:
+    """GPIO through `pinctrl`, which ships with Raspberry Pi OS (no pip, no extra packages).
+
+    Any object with setup/write/read/cleanup can replace it (tests use a fake)."""
+
+    def __init__(self, binary: Optional[str] = None, timeout: float = 2.0):
+        self.binary = binary or shutil.which("pinctrl")
+        self.timeout = timeout
+        if not self.binary:
+            raise OSError("pinctrl not found")
+
+    def _run(self, *args: str) -> str:
+        done = subprocess.run([str(self.binary), *args], capture_output=True, text=True,
+                              timeout=self.timeout, check=True)
+        return done.stdout
+
+    def setup(self, outputs: List[int], inputs: List[int]) -> None:
+        for pin in outputs:
+            self._run("set", str(pin), "op", "dl")
+        for pin in inputs:
+            self._run("set", str(pin), "ip", "pu")
+
+    def write(self, pin: int, level: bool) -> None:
+        self._run("set", str(pin), "op", "dh" if level else "dl")
+
+    def read(self, pin: int) -> bool:
+        match = re.search(r"\|\s*(hi|lo)\b", self._run("get", str(pin)))
+        if not match:
+            raise OSError("unexpected pinctrl output")
+        return match.group(1) == "hi"
+
+    def cleanup(self, outputs: List[int]) -> None:
+        for pin in outputs:
+            self._run("set", str(pin), "op", "dl")
+
+
+class Indicator:
+    """LEDs, buzzer and mute button on the Pi: tells a person in the room what the watchdog is doing.
+
+    It is fed the controller state (`update`) and drives the pins from its own thread (`run`/`tick`) so
+    that blinking is faster than the 30 s poll. It never raises: with no GPIO hardware, or if the
+    backend fails, it degrades to doing nothing and retries later, so the watchdog keeps watching."""
+
+    STARTUP_SECONDS = 1.5
+    RETRY_SECONDS = 300
+    MAX_FAILURES = 3
+
+    def __init__(self, cfg: Dict[str, Any], backend_factory: Callable[[], Any] = PinctrlBackend):
+        ind = cfg["indicator"]
+        self.pins = {name: int(ind["pins"][name]) for name in INDICATOR_PINS}
+        self.reminder = float(ind["reminder_seconds"])
+        start, end = parse_hhmm(ind.get("quiet_start", "")), parse_hhmm(ind.get("quiet_end", ""))
+        self._quiet = (start, end) if start is not None and end is not None and start != end else None
+        self._factory = backend_factory
+        self._lock = threading.Lock()
+        self.backend: Any = None
+        self.mode: Optional[str] = None
+        self.acked = False  # the button silenced the "gave up" alarm
+        self._prev: Optional[Tuple[Any, int, Optional[str]]] = None
+        self._retry_at = 0.0
+        self._failures = 0
+        self._next_reminder = 0.0
+        self._beeps: List[Tuple[float, bool]] = []
+        self._seg_on, self._seg_end = False, 0.0
+        self._startup_until = 0.0
+        self._last: Dict[str, bool] = {}
+
+    # ---- fed by the main loop
+    def start(self, t: float, wall: float) -> None:
+        """Boot self-test: both LEDs and one short beep (the beep respects quiet hours)."""
+        with self._lock:
+            self._startup_until = t + self.STARTUP_SECONDS
+            self._beep(1, False, wall)
+
+    def update(self, state: Dict[str, Any], maint: bool, wall: float, t: float) -> None:
+        try:
+            mode = indicator_mode(state, maint)
+            actions = len((state.get("recovery") or {}).get("actions") or [])
+            status = state.get("status")
+            with self._lock:
+                prev = self._prev
+                if mode == "GAVE_UP" and (prev is None or prev[2] != "GAVE_UP"):
+                    self.acked, self._next_reminder = False, t
+                elif mode != "GAVE_UP":
+                    self.acked = False
+                if prev is not None and mode not in (None, "MAINTENANCE"):
+                    if mode == "WOL_SENT" and actions > prev[1]:
+                        self._beep(1, False, wall)
+                    if prev[0] == "DOWN" and status in ("UP", "DEGRADED"):
+                        self._beep(2, False, wall)
+                self._prev, self.mode = (status, actions, mode), mode
+        except Exception:  # the indicator must never take the watchdog down
+            logging.exception("indicator update failed")
+
+    # ---- driven from its own thread
+    def tick(self, t: float) -> None:
+        with self._lock:
+            if not self._ensure_backend(t):
+                return
+            if self.mode == "GAVE_UP" and not self.acked and t >= self._next_reminder:
+                self._enqueue(3, True)
+                self._next_reminder = t + self.reminder
+            if t >= self._seg_end:
+                if self._beeps:
+                    duration, on = self._beeps.pop(0)
+                    self._seg_on, self._seg_end = on, t + duration
+                else:
+                    self._seg_on = False
+            green, red = self._leds(t)
+            try:
+                if self._seg_on or self._beeps or self.mode == "GAVE_UP":
+                    if not self.backend.read(self.pins["button"]):  # pull-up: low means pressed
+                        self._pressed()
+                for name, level in (("green", green), ("red", red), ("buzzer", self._seg_on)):
+                    if self._last.get(name) != level:
+                        self.backend.write(self.pins[name], level)
+                        self._last[name] = level
+                self._failures = 0
+            except GPIO_ERRORS as exc:
+                self._fail(t, exc)
+
+    def run(self, stop: threading.Event, clock: Callable[[], float] = time.monotonic, period: float = 0.1) -> None:
+        while not stop.is_set():
+            try:
+                self.tick(clock())
+            except Exception:
+                logging.exception("indicator tick failed")
+            stop.wait(period)
+        self.shutdown()
+
+    def shutdown(self) -> None:
+        """Leave every output low (a buzzer left on would sound until the next boot)."""
+        with self._lock:
+            backend, self.backend = self.backend, None
+            self._retry_at, self._last = float("inf"), {}
+            if backend is None:
+                return
+            for name in ("buzzer", "green", "red"):
+                try:
+                    backend.write(self.pins[name], False)
+                except GPIO_ERRORS:
+                    pass
+
+    def demo(self, mode: str, t: float, beeps: int = 0, long_beeps: bool = False) -> None:
+        """Force a mode (hardware test, `test-indicator`); the beeps ignore quiet hours."""
+        with self._lock:
+            self.mode, self.acked, self._next_reminder = mode, False, t
+            self._enqueue(beeps, long_beeps)
+
+    # ---- internals (the lock is held)
+    def _ensure_backend(self, t: float) -> bool:
+        if self.backend is not None:
+            return True
+        if t < self._retry_at:
+            return False
+        try:
+            backend = self._factory()
+            backend.setup([self.pins[n] for n in ("buzzer", "green", "red")], [self.pins["button"]])
+        except GPIO_ERRORS as exc:
+            self._retry_at = t + self.RETRY_SECONDS
+            logging.warning("indicator unavailable (%s); retrying in %d s", exc.__class__.__name__, self.RETRY_SECONDS)
+            return False
+        self.backend, self._failures, self._last = backend, 0, {}
+        return True
+
+    def _fail(self, t: float, exc: Exception) -> None:
+        self._failures += 1
+        logging.warning("indicator GPIO error (%s)", exc.__class__.__name__)
+        if self._failures >= self.MAX_FAILURES:
+            backend, self.backend = self.backend, None
+            self._retry_at, self._last = t + self.RETRY_SECONDS, {}
+            try:
+                backend.cleanup([self.pins[n] for n in ("buzzer", "green", "red")])
+            except GPIO_ERRORS:
+                pass
+
+    def _pressed(self) -> None:
+        self._beeps.clear()
+        self._seg_on, self._seg_end = False, 0.0
+        if self.mode == "GAVE_UP":
+            self.acked = True
+
+    def _in_quiet_hours(self, wall: float) -> bool:
+        if self._quiet is None:
+            return False
+        tm = time.localtime(wall)
+        minute, (start, end) = tm.tm_hour * 60 + tm.tm_min, self._quiet
+        return start <= minute < end if start < end else (minute >= start or minute < end)
+
+    def _beep(self, count: int, long_beeps: bool, wall: float) -> None:
+        if not self._in_quiet_hours(wall):
+            self._enqueue(count, long_beeps)
+
+    def _enqueue(self, count: int, long_beeps: bool) -> None:
+        for _ in range(count):
+            self._beeps.append((LONG_BEEP if long_beeps else SHORT_BEEP, True))
+            self._beeps.append((BEEP_GAP, False))
+
+    def _leds(self, t: float) -> Tuple[bool, bool]:
+        blink = lambda half: int(t / half) % 2 == 0  # noqa: E731
+        if t < self._startup_until:
+            return True, True
+        mode = self.mode
+        if mode == "UP":
+            return True, False
+        if mode == "SUSPECT":
+            return blink(1.0), False
+        if mode == "DOWN":
+            return False, blink(1.0)
+        if mode == "WOL_SENT":
+            return False, True
+        if mode == "GAVE_UP":
+            return False, blink(0.25)
+        if mode == "NETWORK_DOWN":
+            return blink(0.5), not blink(0.5)
+        if mode == "MAINTENANCE":
+            return blink(2.0), blink(2.0)
+        return False, False
+
+
+DEMO_STEPS = [
+    ("UP: verde fijo", "UP", 0, False),
+    ("SUSPECT: verde parpadeo lento", "SUSPECT", 0, False),
+    ("DOWN en espera: rojo parpadeo lento", "DOWN", 0, False),
+    ("WoL enviado: rojo fijo y 1 pitido", "WOL_SENT", 1, False),
+    ("Recuperado: verde fijo y 2 pitidos", "UP", 2, False),
+    ("NETWORK_DOWN: verde y rojo alternan", "NETWORK_DOWN", 0, False),
+    ("Mantenimiento: verde y rojo parpadeo muy lento", "MAINTENANCE", 0, False),
+]
+
+
+def run_demo(ind: Indicator, hold: float, clock: Callable[[], float], sleep: Callable[[float], None],
+             out: Callable[[str], None]) -> bool:
+    """Show every state for `hold` seconds, then the "gave up" alarm until the button is pressed."""
+    def wait(seconds: float, stop_when_acked: bool = False) -> None:
+        end = clock() + seconds
+        while clock() < end and not (stop_when_acked and ind.acked):
+            ind.tick(clock())
+            sleep(0.1)
+
+    for label, mode, beeps, long_beeps in DEMO_STEPS:
+        out(label)
+        ind.demo(mode, clock(), beeps, long_beeps)
+        wait(hold)
+    out("GAVE_UP: rojo parpadeo rápido y 3 pitidos largos. PULSA EL BOTÓN para silenciar")
+    ind.demo("GAVE_UP", clock())
+    wait(max(hold, 20.0), stop_when_acked=True)
+    out("botón: silenciado" if ind.acked else "botón: no se pulsó (tiempo agotado)")
+    return ind.acked
+
+
 # --------------------------------------------------------------------------- persistence and CLI
 
 def load_state(path: str) -> Dict[str, Any]:
@@ -639,23 +943,40 @@ def heartbeat(cfg: Dict[str, Any]) -> None:
 def cmd_run(cfg: Dict[str, Any], once: bool) -> int:
     state, notifier, ctl = build(cfg)
     probe = NetProbe(cfg)
+    indicator, stop, thread = None, threading.Event(), None
+    if cfg["indicator"]["enabled"] and not once:
+        indicator = Indicator(cfg)
+        indicator.start(time.monotonic(), time.time())
+        thread = threading.Thread(target=indicator.run, args=(stop,), name="indicator", daemon=True)
+        thread.start()
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # let `finally` silence the buzzer on `systemctl stop`
     notifier.send("info", "Vigilante del lab arrancado (v%s, %s)." % (VERSION, "SIMULACIÓN: no actuaré" if cfg["mode"]["dry_run"] else "modo real"), silent=True)
-    while True:
-        try:
-            reading = probe.read()
-            ctl.step(reading, time.time())
-            notifier.flush()
-            save_state(cfg["paths"]["state"], state)
-            heartbeat(cfg)
-            sd_notify("WATCHDOG=1")
-            if once:
-                print(json.dumps({"reading": {"gateway_ok": reading.gateway_ok, "ping_ok": reading.ping_ok,
-                                               "tcp_ok": reading.tcp_ok, "prom": reading.prom},
-                                  "status": state["status"], "phase": state["recovery"]["phase"]}, indent=2))
-                return 0
-        except Exception:  # keep watching no matter what
-            logging.exception("cycle failed")
-        time.sleep(cfg["intervals"]["poll_seconds"])
+    try:
+        while True:
+            try:
+                reading = probe.read()
+                now = time.time()
+                ctl.step(reading, now)
+                if indicator:
+                    indicator.update(state, ctl.maint(now), now, time.monotonic())
+                notifier.flush()
+                save_state(cfg["paths"]["state"], state)
+                heartbeat(cfg)
+                sd_notify("WATCHDOG=1")
+                if once:
+                    print(json.dumps({"reading": {"gateway_ok": reading.gateway_ok, "ping_ok": reading.ping_ok,
+                                                   "tcp_ok": reading.tcp_ok, "prom": reading.prom},
+                                      "status": state["status"], "phase": state["recovery"]["phase"]}, indent=2))
+                    return 0
+            except Exception:  # keep watching no matter what
+                logging.exception("cycle failed")
+            time.sleep(cfg["intervals"]["poll_seconds"])
+    finally:
+        stop.set()
+        if thread:
+            thread.join(timeout=3)
+        if indicator:
+            indicator.shutdown()
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -672,6 +993,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     plug = sub.add_parser("test-plug", help="check that the smart plug answers (does not switch it)")
     plug.add_argument("--cycle", action="store_true", help="also power-cycle the plug (CUTS POWER TO THE LAB)")
     plug.add_argument("--really", action="store_true", help="required together with --cycle")
+    demo = sub.add_parser("test-indicator", help="show every LED/buzzer state, then wait for the button (stop the service first)")
+    demo.add_argument("--seconds", type=float, default=5.0, help="how long to hold each state")
     maint = sub.add_parser("maintenance", help="pause the watchdog for N minutes (0 = resume)")
     maint.add_argument("minutes", type=int)
     sub.add_parser("reset", help="clear the recovery state and the attempt history")
@@ -720,6 +1043,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         except OSError as exc:
             print("plug unreachable (%s)" % exc.__class__.__name__, file=sys.stderr)
             return 1
+    elif args.cmd == "test-indicator":
+        ind = Indicator(cfg)
+        ind.start(time.monotonic(), time.time())
+        try:
+            ind.tick(time.monotonic())
+            if ind.backend is None:
+                print("no GPIO available: is `pinctrl` installed and is the user in the gpio group?", file=sys.stderr)
+                return 1
+            run_demo(ind, args.seconds, time.monotonic, time.sleep, print)
+        finally:
+            ind.shutdown()
     elif args.cmd == "maintenance":
         path = cfg["paths"]["maintenance"]
         os.makedirs(os.path.dirname(path), exist_ok=True)

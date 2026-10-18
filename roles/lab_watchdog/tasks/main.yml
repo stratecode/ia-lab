@@ -21,6 +21,12 @@
   changed_when: false
   tags: [packages]
 
+- name: Check that pinctrl and the gpio group exist (the indicator cannot download them)
+  ansible.builtin.shell: "command -v pinctrl && getent group gpio"
+  changed_when: false
+  when: lab_watchdog_indicator_enabled | bool
+  tags: [packages]
+
 - name: Take the time from the lab (no RTC, no Internet; TLS needs the date)
   ansible.builtin.copy:
     dest: /etc/systemd/timesyncd.conf.d/10-lab-watchdog.conf
@@ -51,6 +57,8 @@
   ansible.builtin.user:
     name: "{{ lab_watchdog_user }}"
     group: "{{ lab_watchdog_group }}"
+    groups: "{{ ['gpio'] if lab_watchdog_indicator_enabled | bool else omit }}"
+    append: true
     system: true
     shell: /usr/sbin/nologin
     create_home: false

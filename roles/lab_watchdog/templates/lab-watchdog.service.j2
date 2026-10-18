@@ -13,6 +13,12 @@ Group={{ lab_watchdog_group }}
 EnvironmentFile={{ lab_watchdog_config_dir }}/secrets.env
 {% endif %}
 ExecStart={{ lab_watchdog_bin }} -c {{ lab_watchdog_config_dir }}/config.json run
+{% if lab_watchdog_indicator_enabled %}
+# GPIO for the local indicator: the gpio group owns /dev/gpiomem*, and only those devices are opened up.
+# ExecStopPost is a safety net: if the process is killed, the buzzer and LEDs are left low.
+SupplementaryGroups=gpio
+ExecStopPost=-/usr/bin/pinctrl set {{ lab_watchdog_indicator_pin_buzzer }},{{ lab_watchdog_indicator_pin_green }},{{ lab_watchdog_indicator_pin_red }} op dl
+{% endif %}
 Restart=always
 RestartSec=10
 # The script pings systemd every cycle (30 s); if it stalls for 3 minutes systemd restarts it.
@@ -29,7 +35,15 @@ AmbientCapabilities=CAP_NET_RAW
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+{% if lab_watchdog_indicator_enabled %}
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=/dev/gpiomem rw
+DeviceAllow=/dev/gpiomem0 rw
+DeviceAllow=/dev/gpiochip0 rw
+{% else %}
 PrivateDevices=yes
+{% endif %}
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes

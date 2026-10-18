@@ -10,8 +10,10 @@ import os
 import socket
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPT = os.path.join(HERE, "..", "..", "roles", "lab_watchdog", "files", "lab-watchdog.py")
@@ -416,6 +418,410 @@ class IncidentReplay(Base):
         self.assertEqual(self.plug.cycles, 1)
         self.assertEqual(self.state["recovery"]["phase"], "GAVE_UP")
         self.assertEqual(len(self.state["history"]), 1)
+
+
+class FakeGpio:
+    """Stands in for PinctrlBackend: records levels, a settable button, and failures on demand."""
+
+    def __init__(self):
+        self.fail, self.levels, self.pressed = False, {}, False
+        self.setups = self.reads = self.cleanups = 0
+
+    def _check(self):
+        if self.fail:
+            raise OSError("gpio unavailable")
+
+    def setup(self, outputs, inputs):
+        self._check()
+        self.setups += 1
+        self.levels.update({pin: False for pin in outputs})
+
+    def write(self, pin, level):
+        self._check()
+        self.levels[pin] = level
+
+    def read(self, pin):
+        self._check()
+        self.reads += 1
+        return not self.pressed  # pull-up: low means pressed
+
+    def cleanup(self, outputs):
+        self.cleanups += 1
+
+
+class IndicatorTests(Base):
+    GREEN, RED, BUZZER, STEP = 27, 22, 17, 0.1
+
+    def setUp(self):
+        super().setUp()
+        self.cfg = make_cfg(indicator={"enabled": True})
+        self.noon = time.mktime((2026, 10, 18, 12, 0, 0, 0, 0, -1))
+        self.night = time.mktime((2026, 10, 18, 23, 30, 0, 0, 0, -1))
+        self.new_indicator()
+
+    def new_indicator(self):
+        self.gpio, self.t, self.samples, self.attempts = FakeGpio(), 1000.0, [], 0
+
+        def factory():
+            self.attempts += 1
+            return self.gpio
+        self.ind = lw.Indicator(self.cfg, backend_factory=factory)
+
+    def run_for(self, seconds):
+        end = self.t + seconds
+        while self.t < end - 1e-9:
+            self.ind.tick(self.t)
+            lv = self.gpio.levels
+            self.samples.append((self.t, lv.get(self.GREEN, False), lv.get(self.RED, False), lv.get(self.BUZZER, False)))
+            self.t += self.STEP
+
+    def feed(self, status, phase="IDLE", actions=(), net_down=False, maint=False, wall=None):
+        state = {"status": status, "net_down": net_down, "recovery": {"phase": phase, "actions": list(actions)}}
+        self.ind.update(state, maint, wall or self.noon, self.t)
+
+    def column(self, idx, since=0):
+        return [s[idx] for s in self.samples if s[0] >= since]
+
+    def pulses(self):
+        """Lengths (s) of every buzzer-on stretch."""
+        out, run = [], 0
+        for _, _, _, buzzer in self.samples:
+            if buzzer:
+                run += 1
+            elif run:
+                out.append(run * self.STEP)
+                run = 0
+        return out + ([run * self.STEP] if run else [])
+
+    @staticmethod
+    def edges(values):
+        return sum(1 for a, b in zip(values, values[1:]) if a != b)
+
+    # ---- state -> mode
+    def test_mode_table(self):
+        rec = lambda phase: {"phase": phase}  # noqa: E731
+        cases = [
+            ({"status": "UP"}, False, "UP"),
+            ({"status": "DEGRADED"}, False, "SUSPECT"),
+            ({"status": "SUSPECT"}, False, "SUSPECT"),
+            ({"status": "DOWN", "recovery": rec("GRACE")}, False, "DOWN"),
+            ({"status": "DOWN", "recovery": rec("WAIT1")}, False, "WOL_SENT"),
+            ({"status": "DOWN", "recovery": rec("WAIT2")}, False, "WOL_SENT"),
+            ({"status": "DOWN", "recovery": rec("WAIT3")}, False, "WOL_SENT"),
+            ({"status": "DOWN", "recovery": rec("GAVE_UP")}, False, "GAVE_UP"),
+            ({"status": "DOWN", "recovery": rec("GAVE_UP"), "net_down": True}, False, "NETWORK_DOWN"),
+            ({"status": "UP", "net_down": True}, True, "MAINTENANCE"),
+            ({"status": "UNKNOWN"}, False, None),
+            ({}, False, None),
+        ]
+        for state, maint, expected in cases:
+            self.assertEqual(lw.indicator_mode(state, maint), expected, state)
+
+    # ---- one test per row of the signal table
+    def test_up_is_steady_green_and_silent(self):
+        self.feed("UP")
+        self.run_for(5)
+        self.assertTrue(all(self.column(1)))
+        self.assertFalse(any(self.column(2)))
+        self.assertEqual(self.pulses(), [])
+        self.assertEqual(self.gpio.reads, 0)  # the button is not polled while nothing sounds
+
+    def test_suspect_blinks_green_slowly(self):
+        self.feed("SUSPECT")
+        self.run_for(8)
+        green = self.column(1)
+        self.assertTrue(any(green) and not all(green))
+        self.assertIn(self.edges(green), range(6, 10))  # 1 s on / 1 s off
+        self.assertFalse(any(self.column(2)))
+
+    def test_down_in_grace_blinks_red_slowly_and_is_silent(self):
+        self.feed("UP")
+        self.feed("DOWN", "GRACE")
+        self.run_for(8)
+        red = self.column(2)
+        self.assertTrue(any(red) and not all(red))
+        self.assertIn(self.edges(red), range(6, 10))
+        self.assertFalse(any(self.column(1)))
+        self.assertEqual(self.pulses(), [])
+
+    def test_wol_sent_is_solid_red_with_one_short_beep(self):
+        self.feed("UP")
+        self.feed("DOWN", "WAIT1", ["wol1"])
+        self.run_for(3)
+        self.assertTrue(all(self.column(2)))
+        self.assertFalse(any(self.column(1)))
+        pulses = self.pulses()
+        self.assertEqual(len(pulses), 1)
+        self.assertLessEqual(pulses[0], 0.3)
+
+    def test_second_wol_beeps_again(self):
+        self.feed("UP")
+        self.feed("DOWN", "WAIT1", ["wol1"])
+        self.run_for(3)
+        self.feed("DOWN", "WAIT2", ["wol1", "wol2"])
+        self.run_for(3)
+        self.assertEqual(len(self.pulses()), 2)
+
+    def test_recovered_is_green_with_two_short_beeps(self):
+        self.feed("UP")
+        self.feed("DOWN", "WAIT1", ["wol1"])
+        self.run_for(2)
+        self.feed("UP")
+        self.run_for(3)
+        self.assertTrue(all(self.column(1, since=self.t - 3)))
+        self.assertFalse(any(self.column(2, since=self.t - 3)))
+        self.assertEqual(len(self.pulses()), 1 + 2)  # the WoL beep, then the two of "recovered"
+
+    def test_gave_up_blinks_red_fast_and_repeats_three_long_beeps(self):
+        self.feed("UP")
+        self.feed("DOWN", "GAVE_UP")
+        self.run_for(5)
+        red = self.column(2)
+        self.assertGreaterEqual(self.edges(red), 15)  # 0.25 s half period
+        self.assertFalse(any(self.column(1)))
+        first = self.pulses()
+        self.assertEqual(len(first), 3)
+        self.assertTrue(all(p >= 0.5 for p in first))
+        self.run_for(600)
+        self.assertEqual(len(self.pulses()), 6)  # reminder after 10 minutes
+
+    def test_network_down_alternates_leds(self):
+        self.feed("UP", net_down=True)
+        self.run_for(4)
+        green, red = self.column(1), self.column(2)
+        self.assertTrue(all(g != r for g, r in zip(green, red)))
+        self.assertTrue(any(green) and any(red))
+        self.assertEqual(self.pulses(), [])
+
+    def test_maintenance_blinks_both_together_without_beeps(self):
+        self.feed("UP")
+        self.feed("DOWN", "WAIT1", ["wol1"], maint=True)
+        self.run_for(10)
+        green, red = self.column(1), self.column(2)
+        self.assertEqual(green, red)
+        self.assertTrue(any(green) and not all(green))
+        self.assertEqual(self.pulses(), [])
+
+    def test_startup_self_test(self):
+        start = self.t
+        self.ind.start(self.t, self.noon)
+        self.run_for(4)
+        during = [s for s in self.samples if s[0] > start and s[0] < start + 1.3]
+        after = [s for s in self.samples if s[0] > start + 1.8]
+        self.assertTrue(all(g and r for _, g, r, _ in during))
+        self.assertFalse(any(g or r for _, g, r, _ in after))  # no state yet: dark
+        self.assertEqual(len(self.pulses()), 1)
+
+    # ---- quiet hours and the button
+    def test_quiet_hours_silence_the_buzzer_but_not_gave_up(self):
+        self.feed("UP", wall=self.night)
+        self.feed("DOWN", "WAIT1", ["wol1"], wall=self.night)
+        self.run_for(3)
+        self.feed("UP", wall=self.night)  # "recovered" is also quiet at night
+        self.run_for(3)
+        self.assertEqual(self.pulses(), [])
+        self.assertTrue(all(self.column(1, since=self.t - 3)))  # the LEDs still tell the truth
+        self.feed("DOWN", "GAVE_UP", wall=self.night)
+        self.run_for(4)
+        self.assertEqual(len(self.pulses()), 3)
+
+    def test_beeps_sound_in_the_daytime(self):
+        self.feed("UP", wall=self.noon)
+        self.feed("DOWN", "WAIT1", ["wol1"], wall=self.noon)
+        self.run_for(3)
+        self.assertEqual(len(self.pulses()), 1)
+
+    def test_quiet_hours_can_be_disabled(self):
+        self.cfg = make_cfg(indicator={"enabled": True, "quiet_start": "", "quiet_end": ""})
+        self.new_indicator()
+        self.feed("UP", wall=self.night)
+        self.feed("DOWN", "WAIT1", ["wol1"], wall=self.night)
+        self.run_for(3)
+        self.assertEqual(len(self.pulses()), 1)
+
+    def test_button_silences_gave_up_until_the_state_changes(self):
+        self.feed("UP")
+        self.feed("DOWN", "GAVE_UP")
+        self.run_for(0.3)
+        self.assertTrue(self.samples[-1][3])  # the buzzer is sounding
+        self.gpio.pressed = True
+        self.run_for(0.3)
+        self.gpio.pressed = False
+        self.assertFalse(self.samples[-1][3])
+        self.assertTrue(self.ind.acked)
+        self.run_for(700)  # past the 10-minute reminder: stays quiet
+        self.assertEqual(len(self.pulses()), 1)  # only the interrupted first beep
+        recent_red = self.column(2)[-60:]
+        self.assertTrue(any(recent_red) and not all(recent_red))  # the red LED keeps blinking
+        self.feed("UP")  # recovered: two short beeps
+        self.assertFalse(self.ind.acked)
+        self.feed("DOWN", "GAVE_UP")  # a new "gave up" sounds again
+        self.run_for(6)
+        self.assertEqual(len(self.pulses()), 1 + 2 + 3)
+
+    # ---- failures never reach the watchdog
+    def test_missing_hardware_is_ignored_and_retried_later(self):
+        self.gpio.fail = True
+        self.feed("DOWN", "GAVE_UP")
+        self.run_for(10)  # must not raise
+        self.assertEqual(self.attempts, 1)  # does not hammer a missing device every tick
+        self.assertEqual(self.gpio.setups, 0)
+        self.gpio.fail = False
+        self.run_for(310)
+        self.assertEqual(self.gpio.setups, 1)
+        self.assertGreater(self.edges(self.column(2)), 0)
+
+    def test_write_failures_drop_the_backend_and_it_recovers(self):
+        self.feed("SUSPECT")  # blinking, so every tick touches the pins
+        self.run_for(1)
+        self.assertIn(self.GREEN, self.gpio.levels)
+        self.gpio.fail = True
+        self.run_for(3)  # several failing ticks: no exception
+        self.assertIsNone(self.ind.backend)
+        self.assertGreaterEqual(self.gpio.cleanups, 1)  # it tried to leave the outputs low
+        self.gpio.fail, self.gpio.levels = False, {}
+        self.run_for(310)
+        self.assertIsNotNone(self.ind.backend)
+        self.assertIn(self.GREEN, self.gpio.levels)  # levels are rewritten after the retry
+
+    def test_update_never_raises(self):
+        with self.assertLogs(level="ERROR"):
+            self.ind.update({"status": "DOWN", "recovery": 5}, False, self.noon, self.t)
+        self.ind.update({}, False, self.noon, self.t)
+
+    def test_shutdown_leaves_every_output_low_and_stays_off(self):
+        self.feed("UP")
+        self.feed("DOWN", "GAVE_UP")
+        self.run_for(0.3)
+        self.assertTrue(self.gpio.levels[self.BUZZER])
+        self.ind.shutdown()
+        self.assertFalse(any(self.gpio.levels[p] for p in (self.GREEN, self.RED, self.BUZZER)))
+        self.run_for(2)
+        self.assertEqual(self.gpio.setups, 1)  # it does not come back to life
+
+    def test_run_loop_stops_when_asked(self):
+        stop = threading.Event()
+        self.feed("UP")
+        self.ind.tick(self.t)
+        stop.set()
+        self.ind.run(stop, clock=lambda: self.t, period=0)
+        self.assertIsNone(self.ind.backend)
+
+    # ---- the real backend, with the process calls replaced
+    def test_pinctrl_backend_commands_and_parsing(self):
+        calls = []
+        answers = {"get": "23: ip    -- | hi // GPIO23 = input\n"}
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd[1:])
+            return mock.Mock(stdout=answers.get(cmd[1], ""))
+        backend = lw.PinctrlBackend(binary="/usr/bin/pinctrl")
+        with mock.patch.object(lw.subprocess, "run", fake_run):
+            backend.setup([17, 27, 22], [23])
+            backend.write(27, True)
+            backend.write(27, False)
+            self.assertTrue(backend.read(23))
+            answers["get"] = "23: ip    -- | lo // GPIO23 = input\n"
+            self.assertFalse(backend.read(23))
+            answers["get"] = "nonsense"
+            with self.assertRaises(OSError):
+                backend.read(23)
+        self.assertEqual(calls[:3], [["set", "17", "op", "dl"], ["set", "27", "op", "dl"], ["set", "22", "op", "dl"]])
+        self.assertIn(["set", "23", "ip", "pu"], calls)
+        self.assertIn(["set", "27", "op", "dh"], calls)
+        self.assertIn(["set", "27", "op", "dl"], calls)
+
+    def test_pinctrl_missing_means_no_indicator_not_a_crash(self):
+        with mock.patch.object(lw.shutil, "which", lambda name: None):
+            with self.assertRaises(OSError):
+                lw.PinctrlBackend()
+            ind = lw.Indicator(self.cfg)
+            ind.update({"status": "UP"}, False, self.noon, 0.0)
+            ind.tick(0.0)  # must not raise
+            self.assertIsNone(ind.backend)
+
+    # ---- configuration and hardware test
+    def test_config_validation(self):
+        def errors(**indicator):
+            cfg = lw.deep_merge(make_cfg(), {"indicator": indicator})
+            return [e for e in lw.validate_config(cfg) if "indicator" in e]
+        self.assertEqual(errors(enabled=True), [])
+        self.assertEqual(errors(enabled=True, quiet_start="", quiet_end=""), [])
+        self.assertEqual(errors(enabled=False, pins={"green": 17}), [])  # disabled: not checked
+        self.assertTrue(errors(enabled=True, pins={"green": 17}))  # same pin as the buzzer
+        self.assertTrue(errors(enabled=True, pins={"red": 1}))  # not a usable BCM pin
+        self.assertTrue(errors(enabled=True, quiet_start="25:00"))
+        self.assertTrue(errors(enabled=True, quiet_start="22:00", quiet_end=""))
+        self.assertTrue(errors(enabled=True, reminder_seconds=0))
+        self.assertTrue(errors(enabled="false"))  # a string would be truthy: it must be a real boolean
+
+    def test_demo_walks_every_state_and_waits_for_the_button(self):
+        labels = []
+
+        def sleep(seconds):
+            self.t += seconds
+
+        def out(text):
+            labels.append(text)
+            if text.startswith("GAVE_UP"):
+                self.gpio.pressed = True  # the person presses the button
+        pressed = lw.run_demo(self.ind, 1.0, lambda: self.t, sleep, out)
+        self.assertTrue(pressed)
+        self.assertEqual(len(labels), len(lw.DEMO_STEPS) + 2)
+        self.assertIn("silenciado", labels[-1])
+        self.ind.shutdown()
+
+
+class IndicatorWithController(Base):
+    """The incident replay again, this time watching what a person in the room would see and hear."""
+
+    def test_replay_drives_leds_and_buzzer(self):
+        gpio = FakeGpio()
+        cfg = make_cfg(indicator={"enabled": True})
+        ind = lw.Indicator(cfg, backend_factory=lambda: gpio)
+        ctl = self.controller(cfg)
+        noon = time.mktime((2026, 10, 18, 12, 0, 0, 0, 0, -1))
+        t, beeps, last_buzzer = [1000.0], [0], [False]
+        seen = {}
+
+        def cycle(reading):
+            ctl.step(reading, self.now)
+            ind.update(self.state, False, noon, t[0])
+            seen.setdefault(ind.mode, 0)
+            seen[ind.mode] += 1
+            for _ in range(300):  # the 30 s until the next controller cycle, in 0.1 s ticks
+                ind.tick(t[0])
+                buzzer = gpio.levels.get(17, False)
+                if buzzer and not last_buzzer[0]:
+                    beeps[0] += 1
+                last_buzzer[0] = buzzer
+                t[0] += 0.1
+            self.now += POLL
+
+        for _ in range(10):
+            cycle(UP(prom={"temp_c": 50.0, "on_battery": False, "uptime_s": 1000.0}))
+        self.assertTrue(gpio.levels[27] and not gpio.levels[22])  # all well: steady green
+        for _ in range(3 + 9):  # three failed cycles, then the grace period: red blinking, silent
+            cycle(DOWN)
+        self.assertEqual(beeps[0], 0)
+        self.assertEqual(self.state["status"], "DOWN")
+        for _ in range(8):  # grace over -> WoL nº 1, boot window
+            cycle(DOWN)
+        self.assertEqual(len(self.w.calls), 1)
+        self.assertEqual(beeps[0], 1)
+        self.assertTrue(gpio.levels[22])  # solid red while waiting for the boot
+        for _ in range(8):
+            cycle(DOWN)
+        self.assertEqual(len(self.w.calls), 2)
+        self.assertEqual(beeps[0], 2)
+        for _ in range(8):  # no plug: it gives up and raises the alarm
+            cycle(DOWN)
+        self.assertEqual(self.state["recovery"]["phase"], "GAVE_UP")
+        self.assertEqual(beeps[0], 2 + 3)
+        cycle(UP())  # the lab comes back
+        self.assertEqual(beeps[0], 2 + 3 + 2)
+        self.assertTrue(gpio.levels[27] and not gpio.levels[22])
+        self.assertEqual({"UP", "DOWN", "WOL_SENT", "GAVE_UP"} - set(seen), set())
 
 
 if __name__ == "__main__":
