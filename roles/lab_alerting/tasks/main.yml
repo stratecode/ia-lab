@@ -49,6 +49,50 @@
         validate: amtool check-config %s
       notify: lab_alerting restart alertmanager
 
+- name: Validate watchdog relay requirements
+  ansible.builtin.assert:
+    that:
+      - lab_watchdog_pi_ip is defined
+      - lab_watchdog_pi_ip is match('^(?:(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})\\.){3}(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})$')
+      - lab_alerting_enable_alertmanager_telegram | bool
+    fail_msg: >-
+      The watchdog relay needs the Pi's reserved IP and the existing Alertmanager
+      Telegram receiver enabled.
+  when: lab_watchdog_relay_enabled | default(false) | bool
+  tags: [watchdog-relay]
+
+- name: Configure lab services for the external watchdog
+  when: lab_watchdog_relay_enabled | default(false) | bool
+  tags: [watchdog-relay]
+  block:
+    - name: Install chrony for the watchdog Pi time source
+      ansible.builtin.apt:
+        name: chrony
+        state: present
+
+    - name: Allow only the watchdog Pi to query lab time
+      ansible.builtin.template:
+        src: lab-watchdog-chrony.conf.j2
+        dest: /etc/chrony/conf.d/lab-watchdog.conf
+        owner: root
+        group: root
+        mode: "0644"
+      notify: lab_alerting restart chrony
+
+    - name: Ensure chrony is running
+      ansible.builtin.systemd:
+        name: chrony
+        state: started
+        enabled: true
+
+    - name: Allow NTP from the watchdog Pi when explicitly requested
+      community.general.ufw:
+        rule: allow
+        from_ip: "{{ lab_watchdog_pi_ip }}"
+        port: "123"
+        proto: udp
+      when: lab_watchdog_manage_ufw | default(false) | bool
+
 # ---------------------------------------------------------------- Reglas de Prometheus
 - name: Install Prometheus alert rules
   ansible.builtin.copy:

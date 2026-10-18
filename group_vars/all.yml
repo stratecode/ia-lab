@@ -49,6 +49,11 @@ monitor_tls_mode: "{{ lookup('env', 'LAB_TLS_MODE') | default('selfsigned', true
 monitor_letsencrypt_email: "{{ lookup('env', 'LAB_LETSENCRYPT_EMAIL') | default('', true) }}"
 monitor_letsencrypt_challenge: "{{ lookup('env', 'LAB_LETSENCRYPT_CHALLENGE') | default('dns-route53', true) }}"
 monitor_letsencrypt_aws_profile: "{{ lookup('env', 'LAB_LETSENCRYPT_AWS_PROFILE') | default('route53-dns', true) }}"
+# Optional LAN-only relay for the external Raspberry Pi watchdog. Enable only after
+# reserving its DHCP address and reviewing the check-mode diff.
+lab_watchdog_relay_enabled: false
+lab_watchdog_pi_ip: ""
+lab_watchdog_manage_ufw: false
 monitor_absent_packages:
   - openipmi
 monitor_pcp_services:

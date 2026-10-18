@@ -1,6 +1,18 @@
 # Lado del lab para el vigilante de la Raspberry
 
-La Raspberry **no tiene Internet**: solo ve el lab. Por eso el lab hace tres cosas por ella. Son cambios **en el host**, así que van por playbook de Codex, con una línea previa en el buzón y la aprobación de Fran. Este documento es la propuesta; nada de esto está aplicado.
+La Raspberry **no tiene Internet**: solo ve el lab. Por eso el lab hace tres cosas por ella. La configuración está versionada y desactivada por defecto (`lab_watchdog_relay_enabled: false`); habilitarla cambia el host. Codex debe ejecutar el playbook con `--check --diff`, compartir el diff y esperar la aprobación directa de Fran antes de aplicar.
+
+Playbook: `playbooks/deploy-watchdog-relay.yml`. El relay expone solo el POST de Alertmanager a la IP de la Pi, enruta `LabWatchdogEvento` al bot Telegram existente y permite que la Pi use el lab como NTP. Por defecto no toca nada.
+
+Variables necesarias para preparar la revisión:
+
+```yaml
+lab_watchdog_relay_enabled: true
+lab_watchdog_pi_ip: "192.168.0.PP"  # reserva DHCP de la Pi; sustituir antes del --check
+lab_watchdog_manage_ufw: false       # activar solo si UFW está gestionado y necesita UDP/123
+```
+
+No actives estas variables en `group_vars/all.yml` para un despliegue real sin la aprobación de Fran. La revisión debe usar `ansible-playbook playbooks/deploy-watchdog-relay.yml --check --diff` con la IP real; la misma orden sin `--check --diff` solo se ejecuta después de aprobación explícita.
 
 Sea `PI_IP` la IP reservada de la Pi (192.168.0.PP).
 

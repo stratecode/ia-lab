@@ -12,6 +12,13 @@ route:
   group_interval: 5m
   repeat_interval: 6h
   routes:
+{% if lab_watchdog_relay_enabled | default(false) | bool %}
+    - matchers: [alertname="LabWatchdogEvento"]
+      receiver: telegram-watchdog
+      group_by: [event_id]
+      group_wait: 0s
+      repeat_interval: 24h
+{% endif %}
     - matchers: [alertname="Watchdog"]
       receiver: telegram-heartbeat
       group_wait: 30s
@@ -43,6 +50,14 @@ receivers:
         send_resolved: true
         message: '{% raw %}{{ template "telegram.es" . }}{% endraw %}'
         disable_notifications: false
+{% if lab_watchdog_relay_enabled | default(false) | bool %}
+  - name: telegram-watchdog
+    telegram_configs:
+      - bot_token_file: /etc/prometheus/telegram_bot_token
+        chat_id: {{ lab_alerting_telegram_chat_id }}
+        send_resolved: false
+        message: '{% raw %}{{ (index .Alerts 0).Annotations.description }}{% endraw %}'
+{% endif %}
 
 inhibit_rules:
   # Si el servidor está en SAI con batería baja, no repetir avisos menores de energía

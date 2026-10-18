@@ -35,3 +35,10 @@
     - nut-server
     - nut-monitor
   listen: lab_alerting restart nut
+
+- name: Restart chrony (lab_alerting)
+  ansible.builtin.systemd:
+    name: chrony
+    state: restarted
+    enabled: true
+  listen: lab_alerting restart chrony

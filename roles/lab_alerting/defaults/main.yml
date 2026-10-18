@@ -20,6 +20,11 @@ lab_alerting_enable_ups: true
 lab_alerting_enable_llama_key_sync: true
 lab_alerting_enable_grafana_dashboard: "{{ grafana_enabled | default(true) }}"
 
+# Optional event relay from the external Raspberry Pi. The route is off by default.
+lab_watchdog_relay_enabled: false
+lab_watchdog_pi_ip: ""
+lab_watchdog_manage_ufw: false
+
 # --- SAI (NUT, USB, modo standalone) ---
 lab_alerting_ups_name: cyberpower
 lab_alerting_ups_vendorid: "0764"

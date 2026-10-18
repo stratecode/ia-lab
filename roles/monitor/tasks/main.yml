@@ -230,6 +230,14 @@
       log_format callback '$request_method $uri $status';
   notify: Reload nginx
 
+- name: Validate watchdog relay address when enabled
+  ansible.builtin.assert:
+    that:
+      - lab_watchdog_pi_ip is defined
+      - lab_watchdog_pi_ip is match('^(?:(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})\\.){3}(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})$')
+    fail_msg: Set lab_watchdog_pi_ip to the Raspberry Pi's reserved IPv4 address.
+  when: lab_watchdog_relay_enabled | default(false) | bool
+
 - name: Publish Atlassian domain verification file
   ansible.builtin.copy:
     src: atlassian-domain-verification-c6745070-eb80-4e07-981f-901946f6c29c.html
@@ -366,6 +374,17 @@
           allow {{ wireguard_subnet }};
       {% endif %}
           deny all;
+
+          {% if lab_watchdog_relay_enabled | default(false) | bool %}
+          location = /alertmanager/api/v2/alerts {
+              allow {{ lab_watchdog_pi_ip }};
+              allow 127.0.0.1;
+              deny all;
+              limit_except POST { deny all; }
+              client_max_body_size 16k;
+              proxy_pass http://127.0.0.1:9093/api/v2/alerts;
+          }
+          {% endif %}
 
           location /prometheus/ {
               proxy_pass http://127.0.0.1:9090/prometheus/;
