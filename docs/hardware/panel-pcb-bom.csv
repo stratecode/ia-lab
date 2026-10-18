@@ -1,0 +1,17 @@
+Referencia,Valor,Cantidad,Footprint KiCad (verificar en tu biblioteca),Descripción y notas
+J1,Socket 2x20 hembra 2.54 mm,1,Connector_PinSocket_2.54mm:PinSocket_2x20_P2.54mm_Vertical,Va en la cara INFERIOR y enchufa en la cabecera de la Pi
+R1 R2,330 Ω,2,Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal,Limitan el LED verde y el rojo (1/4 W 1 %)
+R3 R4,100 Ω,2,Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal,LED azules (Vf ≈ 3 V): con 330 Ω apenas brillan. Si D4 no es azul o blanco usar 330 Ω
+R5,1 kΩ,1,Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal,Base del transistor del zumbador
+R6,10 kΩ,1,Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal,Mantiene el zumbador apagado mientras la Pi arranca
+R7,4.7 kΩ,1,Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal,Pull-up del bus 1-Wire. NO soldar si los módulos de sensor ya traen el suyo
+C1,100 nF cerámico,1,Capacitor_THT:C_Disc_D5.0mm_W2.5mm_P5.00mm,Desacoplo del 5 V junto al zumbador
+D1,LED verde 5 mm,1,LED_THT:LED_D5.0mm,Monitorización del lab. Ánodo hacia la resistencia
+D2,LED rojo 5 mm,1,LED_THT:LED_D5.0mm,Algo falla
+D3,LED azul 5 mm,1,LED_THT:LED_D5.0mm,Pi lista y funcionando
+D4,LED azul 5 mm,1,LED_THT:LED_D5.0mm,Testigo de corriente (siempre encendido con alimentación)
+Q1,S8050 NPN TO-92,1,Package_TO_SOT_THT:TO-92_Inline,Orden de patas E-B-C (cara plana hacia ti). Un BC337 tiene C-B-E: NO es intercambiable sin cambiar el footprint
+LS1,Zumbador activo 5 V,1,Buzzer_Beeper:Buzzer_12x9.5RM7.6,MEDIR el tuyo: diámetro y separación entre patas deben coincidir con el footprint. Polaridad marcada con +
+SW1 SW2,Pulsador táctil 6x6 mm 4 patas,2,Button_Switch_THT:SW_PUSH_6mm,Usar un terminal por cada par de patas (las del mismo lado ya están unidas por dentro)
+J2,Bornera 3 posiciones 5.08 mm,1,TerminalBlock:TerminalBlock_bornier-3_P5.08mm,"1-Wire: 1 +3V3, 2 DATA, 3 GND. Si los sensores llevan Dupont, usar cabecera 1x3 de 2.54 mm"
+J3,Cabecera 1x6 2.54 mm,1,Connector_PinHeader_2.54mm:PinHeader_1x06_P2.54mm_Vertical,"RESERVADA para la SIM: 1 GND, 2 TXD, 3 RXD, 4 PWRKEY, 5 +3V3 (referencia de nivel), 6 libre. No soldar hasta elegir módulo"
