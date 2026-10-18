@@ -102,13 +102,27 @@ Montaje (numeración BCM, ajustable con `lab_watchdog_indicator_pin_*`): zumbado
 | GAVE_UP (rendido) | apagado | parpadeo rápido | 3 pitidos largos, **repetidos cada 10 min hasta pulsar el botón** |
 | NETWORK_DOWN (sin red local) | alterna con rojo | alterna | silencio |
 | Mantenimiento | parpadeo muy lento, ambos a la vez | | silencio |
-| Arranque del servicio | ambos LED 1,5 s | | 1 pitido |
+| Arranque del servicio | ambos LED 1,5 s | | 1 pitido (solo si no hay pitido de arranque, ver "Panel de la Pi") |
 
 - **Horas de silencio:** de 23:00 a 08:00 no suenan los pitidos de WoL ni de "recuperado". `GAVE_UP` suena siempre. Se cambian con `lab_watchdog_indicator_quiet_start/_end` (`""` en ambos las desactiva).
 - **Botón:** silencia el pitido en curso y, en `GAVE_UP`, las repeticiones. El LED rojo sigue parpadeando; si el lab vuelve a caer y se rinde otra vez, suena de nuevo. El botón solo se consulta mientras algo suena.
 - **Salidas seguras:** al parar el servicio (`systemctl stop`) y, si lo matan, con `ExecStopPost`, el zumbador y los LED quedan apagados.
 - **Requisitos en la Pi:** `pinctrl` (viene con Raspberry Pi OS) y el grupo `gpio`. El rol añade al usuario del servicio a ese grupo y abre en el unit solo `/dev/gpiomem*` y `/dev/gpiochip0`; con el indicador desactivado el unit queda como antes.
 - **Prueba de hardware (TH1/TH2):** con el servicio parado, `sudo -u labwatch lab-watchdog -c /etc/lab-watchdog/config.json test-indicator [--seconds 5]` recorre cada fila de la tabla y termina esperando el botón.
+
+## Panel de la Pi (botón de encendido, LED de estado y pitido de arranque)
+Tres piezas independientes, todas **desactivadas por defecto**. Las dos primeras son overlays del kernel que el rol declara en un bloque gestionado al final de `/boot/firmware/config.txt` (con copia de seguridad) y necesitan **un reinicio de la Pi**; la tercera es una unidad de systemd.
+
+| Pieza | Variable | Montaje | Qué hace |
+|---|---|---|---|
+| Botón de encendido | `lab_watchdog_power_button_enabled` | Pulsador entre **GPIO3 (pin 5)** y GND (pin 6) | Con la Pi apagada (`halt`) la enciende. Con la Pi en marcha pide un apagado ordenado (overlay `gpio-shutdown`). Solo GPIO3 puede despertar una Pi apagada |
+| LED de estado | `lab_watchdog_status_led_enabled`, `_pin` (24), `_trigger` | GPIO24 (pin 18) → 330 Ω → LED → GND | Lo gobierna el kernel desde el arranque (overlay `gpio-led`). `heartbeat`: late mientras el kernel está vivo y se para si se cuelga; `default-on`: fijo |
+| Pitido de arranque | `lab_watchdog_boot_beep_enabled`, `_seconds` (0,15) | El zumbador del indicador (GPIO17) | Un pitido corto muy pronto en el arranque, como el del POST de un PC. El arranque completo tarda más de un minuto y el vigilante entra casi al final, así que va en su propia unidad (`lab-watchdog-boot-beep.service`) |
+
+- **Apagar con el botón apaga también el vigilante.** Mientras la Pi esté apagada nadie vigila el lab. Para volver a la normalidad hay que pulsar el botón otra vez; el vigilante arranca solo con la Pi.
+- **El botón no despierta tras un corte de luz** (sin corriente no hay nada que despertar): en ese caso la Pi arranca sola al volver la corriente.
+- **El pitido de arranque ignora las horas de silencio**: a esas alturas del arranque el reloj no es fiable (la Pi no tiene reloj propio). Cuando está activado, el pitido de inicio del servicio se desactiva solo (`indicator.startup_beep: false`), para no oír dos seguidos; el test de LED del servicio se mantiene.
+- Tras aplicar el rol con alguna de las dos primeras piezas, la Pi pide **un reinicio** (`sudo reboot`). Si se desactivan las dos, el bloque se elimina del fichero.
 
 ## Plan de pruebas
 **Automáticas (sin hardware):** `python3 -m unittest discover -s tests/lab_watchdog -v` → 56 pruebas con reloj, red, entrega al lab, Telegram, Wake-on-LAN, enchufe y GPIO simulados; ningún socket real. Incluyen la **repetición del incidente del 16-oct** (también con el indicador: qué se ve y se oye en cada fase). Las pruebas detectan averías introducidas a propósito (límite horario, modo simulación, comprobación de red, espera por calor, formato del paquete, silencio nocturno, botón, apagado de salidas, fallo de backend).
@@ -129,6 +143,9 @@ Montaje (numeración BCM, ajustable con `lab_watchdog_indicator_pin_*`): zumbado
 | TH1 | `test-indicator` con el hardware montado | Cada fila de la tabla del indicador se ve y se oye como se describe |
 | TH2 | En `test-indicator`, pulsar el botón durante el paso `GAVE_UP` | El zumbador se silencia y el paso termina con "botón: silenciado" |
 | TH3 | Con el servicio activo, quitar el cable de red de la Pi | LED alternando verde/rojo (`NETWORK_DOWN`), **ningún WoL** y sin pitidos |
+| TH4 | `sudo systemctl start lab-watchdog-boot-beep`; después un arranque real | Un pitido corto al iniciar la unidad y otro unos segundos después de dar corriente a la Pi |
+| TH5 | Tras el reinicio con el overlay `gpio-led` | El LED de estado se enciende en cuanto arranca el kernel y late (`heartbeat`) mientras la Pi funciona |
+| TH6 | Pulsar el botón con la Pi en marcha; esperar el apagado; pulsarlo otra vez | Apagado ordenado (`journalctl -b -1` lo confirma) y, al pulsar, la Pi arranca y el vigilante vuelve a estar activo |
 
 No se recomienda provocar un sobrecalentamiento real: el caso se cubre con la prueba de repetición del incidente.
 

@@ -1,0 +1,19 @@
+# Managed by Ansible (role lab_watchdog)
+# One short beep as soon as the system starts, like the POST beep of a PC: "the Pi is alive".
+# It runs long before lab-watchdog (the whole boot takes more than a minute) and as root, so it needs
+# no gpio group. Failures are ignored: a missing buzzer must never hold the boot back.
+[Unit]
+Description=Short beep at boot: the Pi is alive
+DefaultDependencies=no
+After=local-fs.target
+Before=sysinit.target
+
+[Service]
+Type=oneshot
+ExecStart=-/usr/bin/pinctrl set {{ lab_watchdog_indicator_pin_buzzer }} op dh
+ExecStart=-/bin/sleep {{ lab_watchdog_boot_beep_seconds }}
+ExecStart=-/usr/bin/pinctrl set {{ lab_watchdog_indicator_pin_buzzer }} op dl
+ExecStopPost=-/usr/bin/pinctrl set {{ lab_watchdog_indicator_pin_buzzer }} op dl
+
+[Install]
+WantedBy=sysinit.target

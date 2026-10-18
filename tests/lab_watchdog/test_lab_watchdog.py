@@ -612,6 +612,16 @@ class IndicatorTests(Base):
         self.assertFalse(any(g or r for _, g, r, _ in after))  # no state yet: dark
         self.assertEqual(len(self.pulses()), 1)
 
+    def test_startup_beep_can_be_turned_off_but_the_led_test_stays(self):
+        self.cfg = make_cfg(indicator={"enabled": True, "startup_beep": False})
+        self.new_indicator()
+        start = self.t
+        self.ind.start(self.t, self.noon)
+        self.run_for(4)
+        during = [s for s in self.samples if s[0] > start and s[0] < start + 1.3]
+        self.assertTrue(all(g and r for _, g, r, _ in during))
+        self.assertEqual(self.pulses(), [])
+
     # ---- quiet hours and the button
     def test_quiet_hours_silence_the_buzzer_but_not_gave_up(self):
         self.feed("UP", wall=self.night)
@@ -754,6 +764,7 @@ class IndicatorTests(Base):
         self.assertTrue(errors(enabled=True, quiet_start="22:00", quiet_end=""))
         self.assertTrue(errors(enabled=True, reminder_seconds=0))
         self.assertTrue(errors(enabled="false"))  # a string would be truthy: it must be a real boolean
+        self.assertTrue(errors(enabled=True, startup_beep="no"))
 
     def test_demo_walks_every_state_and_waits_for_the_button(self):
         labels = []

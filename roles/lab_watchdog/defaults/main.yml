@@ -64,6 +64,19 @@ lab_watchdog_indicator_quiet_start: "23:00"  # no buzzer in this window, except 
 lab_watchdog_indicator_quiet_end: "08:00"    # "" in both disables quiet hours
 lab_watchdog_indicator_reminder_seconds: 600 # repeat of the "gave up" alarm until the button is pressed
 
+# --- Pi front panel: power button, status LED and boot beep (docs/watchdog.md, "Panel de la Pi") ------
+# All off by default. The two overlays go into the boot configuration and need ONE reboot of the Pi.
+lab_watchdog_power_button_enabled: false     # button between GPIO3 (pin 5) and GND: wakes the Pi from halt AND shuts it
+                                             # down cleanly (overlay gpio-shutdown; only GPIO3 can wake a halted Pi)
+lab_watchdog_status_led_enabled: false       # LED driven by the kernel from early boot (overlay gpio-led)
+lab_watchdog_status_led_pin: 24              # BCM number (physical pin 18); wiring: pin -> 330 ohm -> LED -> GND
+lab_watchdog_status_led_trigger: heartbeat   # heartbeat (alive, stops if the kernel hangs) | default-on (steady)
+lab_watchdog_boot_beep_enabled: false        # one short beep very early in the boot, on the indicator buzzer pin
+lab_watchdog_boot_beep_seconds: 0.15         # ignores quiet hours: the clock is not reliable that early
+lab_watchdog_boot_config_path: /boot/firmware/config.txt
+# The service self-test beep would double the boot beep, so it is off when the boot beep exists.
+lab_watchdog_indicator_startup_beep: "{{ not (lab_watchdog_boot_beep_enabled | bool) }}"
+
 # --- Pi hardening ------------------------------------------------------------------------------
 lab_watchdog_enable_hw_watchdog: true        # the Pi's own hardware watchdog reboots it if it hangs
 

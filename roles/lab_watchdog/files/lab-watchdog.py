@@ -73,6 +73,7 @@ DEFAULTS: Dict[str, Any] = {
         "quiet_start": "23:00",  # no buzzer in this window, except when the watchdog has given up
         "quiet_end": "08:00",    # both empty = no quiet hours
         "reminder_seconds": 600,  # period of the "gave up" alarm until the button is pressed
+        "startup_beep": True,     # one beep when the service starts (off when an early boot beep exists)
     },
     "mode": {"dry_run": True},
     "paths": {
@@ -143,6 +144,8 @@ def validate_config(cfg: Dict[str, Any]) -> List[str]:
             errors.append("indicator.quiet_start and quiet_end must both be HH:MM (or both empty)")
         if not isinstance(ind.get("reminder_seconds"), (int, float)) or ind["reminder_seconds"] <= 0:
             errors.append("indicator.reminder_seconds must be a positive number")
+        if not isinstance(ind.get("startup_beep"), bool):
+            errors.append("indicator.startup_beep must be true or false")
     return errors
 
 
@@ -667,6 +670,7 @@ class Indicator:
         ind = cfg["indicator"]
         self.pins = {name: int(ind["pins"][name]) for name in INDICATOR_PINS}
         self.reminder = float(ind["reminder_seconds"])
+        self.startup_beep = bool(ind.get("startup_beep", True))
         start, end = parse_hhmm(ind.get("quiet_start", "")), parse_hhmm(ind.get("quiet_end", ""))
         self._quiet = (start, end) if start is not None and end is not None and start != end else None
         self._factory = backend_factory
@@ -685,10 +689,11 @@ class Indicator:
 
     # ---- fed by the main loop
     def start(self, t: float, wall: float) -> None:
-        """Boot self-test: both LEDs and one short beep (the beep respects quiet hours)."""
+        """Service self-test: both LEDs and, unless an early boot beep covers it, one short beep (quiet hours apply)."""
         with self._lock:
             self._startup_until = t + self.STARTUP_SECONDS
-            self._beep(1, False, wall)
+            if self.startup_beep:
+                self._beep(1, False, wall)
 
     def update(self, state: Dict[str, Any], maint: bool, wall: float, t: float) -> None:
         try:
