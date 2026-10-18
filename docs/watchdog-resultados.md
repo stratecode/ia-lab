@@ -9,7 +9,8 @@ Informe de la sesión que desplegó y probó el vigilante en la Raspberry Pi. Co
 - Se pueden dar órdenes a la Pi desde Telegram (`/estado`, `/encender`, `/mantenimiento`, `/reanudar`, `/silenciar`, `/ayuda`), solo desde el chat autorizado y sin abrir ningún puerto. Verificado por Fran.
 - El desarrollo encontró y corrigió **seis problemas** (apartado "Hallazgos"), entre ellos que la Pi tenía la hora 11 min atrasada y que el registro persistente no se guardaba.
 - El lab se cayó por su cuenta a las 20:31 sin dejar rastro en el registro, a 34 °C y con el SAI en línea. Apunta a la **alimentación aguas abajo del SAI**; la causa no está demostrada (apartado "Caída de las 20:31").
-- Pendientes: fuente de alimentación nueva y aplicar los cambios preparados del lado del lab (relay de respaldo y métrica de apagado sucio), sujeto a revisión del `--check --diff` y aprobación de Fran.
+- El relay de respaldo y la alerta de apagado sucio ya están aplicados en el lab y verificados desde la Pi. La alerta detectó dos reinicios en seco más (22:37 y 00:05).
+- Pendientes: fuente de alimentación nueva y decidir si se investiga el patrón de reinicios en seco del lab.
 
 ## Configuración desplegada
 
@@ -23,7 +24,7 @@ Valores del despliegue actual (el inventario `inventory-watchdog.yml` está fuer
 | Ventana de arranque | 60 s | WoL nº 2 al minuto |
 | Rendición | En el 2.º WoL (sin enchufe) | Alarma local y aviso crítico |
 | Reintentos | Un WoL por minuto, sin límite | Hasta que el lab responda |
-| Avisos | Telegram directo, relay de respaldo | Relay del lab aplicado el 19-oct; pendiente validar desde la Pi sin enviar una alerta de prueba |
+| Avisos | Telegram directo, relay de respaldo | Relay del lab aplicado el 19-oct y verificado desde la Pi |
 | Órdenes por Telegram | Activas (`/estado`, `/encender`, `/mantenimiento N`, `/reanudar`, `/silenciar`, `/ayuda`) | Un solo chat privado, órdenes de más de 5 min ignoradas, sin comando que toque el lab |
 | Caducidad de la cola de avisos | 6 h | Evita ráfagas de noticias viejas |
 | Hora | `systemd-timesyncd`: router, luego lab; intervalo máximo 64 s | La Pi no tiene reloj propio |
@@ -51,6 +52,7 @@ Valores del despliegue actual (el inventario `inventory-watchdog.yml` está fuer
 | **TH6** Botón: apagar y encender | OK | Verificado por Fran en el rack: apagado ordenado con los 5 pitidos y arranque al volver a pulsar |
 | **TH8** 5 pitidos antes de apagar | OK | Probado parando su unidad; el apagado real quedó sin registro por el fallo del journal (ya corregido) |
 | Telegram directo | OK | El aviso en cola salió tras pulsar Start en el bot; la cola quedó en 0 |
+| Relay de respaldo (Pi → Alertmanager → Telegram) | OK | `GET`, `HEAD` y `OPTIONS` a la ruta: 403 (ya no 302 al login de Grafana); TLS válido; `POST` con lista vacía desde la Pi: 200, o sea que su IP está admitida; entrega real de un mensaje: el contador de notificaciones de Telegram de Alertmanager pasó de 2 a 3 con 0 fallidas y Fran lo recibió |
 | Órdenes por Telegram | OK | Fran probó todas desde su Telegram; `/estado` respondió con el estado real. El registro de la Pi muestra cada orden recibida y ningún error |
 | Pruebas automáticas | OK | 118 pruebas con reloj, red, GPIO, Telegram y relay simulados; ningún socket real. Incluyen la seguridad de las órdenes (chat ajeno, grupo, órdenes caducadas, reinicio sin repetir órdenes) y la coherencia del diseño de la placa |
 
@@ -76,10 +78,24 @@ Analizada en solo lectura desde el lab.
 - **Consecuencia:** ante un corte total de alimentación al lab el WoL no puede ayudar, y un enchufe inteligente tampoco si el fallo está aguas abajo de él.
 - **Decisión de Fran: no se investiga más.** La causa queda sin determinar; la métrica de apagado sucio (ver pendientes) dejaría constancia si se repite.
 
+## Apagados sucios detectados (19-oct)
+
+El exportador que desplegó Codex (`lab_boot_previous_clean`, `lab_boot_unclean_total`) marcó dos apagados sucios más, que se suman al de las 20:31:
+
+| Hora del corte | Reinicio | Qué se ve |
+|---|---|---|
+| 22:37:57 | 22:38:35 (~40 s) | El registro termina de golpe, sin errores del kernel; `last -x` marca `crash` |
+| 00:05:37 | 00:06:11 (~34 s) | Igual. En ese momento corría el Ansible de Codex instalando las unidades del propio exportador |
+
+- El lab **vuelve a arrancar solo** en ~35 s. El 20:31 se quedó apagado 8 minutos: la diferencia es el ajuste de BIOS de Fran de las 21:10.
+- Datos del SAI de las últimas 5 h: 239 a 245 V de entrada, 0 pasos a batería, carga del 4 al 19 %. Los toma el propio lab, que estaba apagado esos segundos, así que no prueban que el SAI no viera nada.
+- **La Pi no avisó** porque 35 s es menos de lo que necesita para confirmar una caída (2 comprobaciones de 15 s más el ciclo). Es el reparto previsto: la Pi cubre las caídas largas y el exportador deja constancia de las cortas.
+- **Causa sin determinar.** Tres cortes en cuatro horas con la misma firma (parada en seco, sin rastro) siguen apuntando a la alimentación, pero el de las 00:05 coincidió con actividad de Ansible. Codex tiene la pregunta pendiente en el buzón. Fran decidió no investigar la causa del primer corte; queda por decidir si se retoma ahora que hay un patrón.
+
 ## Pendientes, por prioridad
 
 1. **Fuente de alimentación nueva** para la Pi (la cambia Fran) y comprobar que `throttled` sigue en `0x0`. En el banco registraba bajo voltaje (`0x50005`); en el rack, 0 avisos en más de una hora.
-2. **Lado del lab**: relay de Alertmanager y métrica de apagado no limpio aplicados el 19-oct. Nginx, Alertmanager, Prometheus, timer y exportador están activos; falta que la Pi confirme el acceso al endpoint. No se ha enviado una alerta artificial a Telegram.
+2. **Lado del lab:** el relay de Alertmanager y la métrica de apagado sucio con su alerta (`LabApagadoSucio`) están aplicados y verificados. Queda la respuesta de Codex sobre qué ejecutaba a las 00:05 y decidir si se investiga el patrón de reinicios.
 3. **Clave SSH propia para la Pi** (hoy acepta la misma que el lab) y unos pasos escritos para reconstruirla si falla la tarjeta.
 4. Pruebas T7, T8 y TH3 (con el punto de acceso), y el recorrido completo de `test-indicator`.
 5. **Placa a medida del panel** (`docs/hardware/panel-pcb.md`): el circuito está listo, pero falta dibujarla en un programa de PCB, medir zumbador, LED y pulsadores y pedirla. No se ha pasado ERC ni DRC.
@@ -90,7 +106,7 @@ Analizada en solo lectura desde el lab.
 - **WoL solo enciende un equipo apagado y alimentado:** no revive un lab colgado ni uno sin corriente.
 - **La Pi depende del Wi-Fi y del router.** Si el router cae y no está en el SAI, la Pi no ve ni avisa; con la Pi apagada, nadie vigila.
 - **Apagar la Pi con el botón apaga también el vigilante** hasta que se vuelva a pulsar.
-- **Un solo canal directo:** si falla Internet, el aviso espera en la cola (caduca a las 6 h) y sale por el relay del lab si estuviera aplicado.
+- **Un solo canal directo:** si Internet cae, ni Telegram directo ni el relay pueden entregar (el Alertmanager del lab también sale por Internet): el aviso espera en la cola (caduca a las 6 h). El relay solo ayuda cuando falla el camino de la Pi y no el del lab, por ejemplo un problema propio de la Pi con Telegram.
 - La tarjeta microSD es el punto débil de una Pi encendida durante meses; conviene tener otra grabada de repuesto.
 
 ## Operación rápida
