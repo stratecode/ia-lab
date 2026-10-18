@@ -47,6 +47,20 @@ class WatchdogRelayConfigTests(unittest.TestCase):
         self.assertIn("ansible.builtin.command: nginx -t", validation)
         self.assertIn("check_mode: false", validation)
 
+    def test_first_check_run_skips_activation_of_not_yet_installed_boot_units(self):
+        tasks = (ROOT / "roles/lab_alerting/tasks/main.yml").read_text()
+        timer_start = tasks.index("- name: Enable and start timers and path units")
+        marker_start = tasks.index("- name: Enable clean shutdown marker service")
+        baseline_start = tasks.index("- name: Establish boot state baseline and publish initial metrics")
+        grafana_start = tasks.index("# ---------------------------------------------------------------- Grafana")
+        timer_task = tasks[timer_start:marker_start]
+        marker_task = tasks[marker_start:baseline_start]
+        baseline_task = tasks[baseline_start:grafana_start]
+
+        self.assertIn("ansible_check_mode", timer_task)
+        self.assertIn("ansible_check_mode", marker_task)
+        self.assertIn("ansible_check_mode", baseline_task)
+
 
 if __name__ == "__main__":
     unittest.main()
