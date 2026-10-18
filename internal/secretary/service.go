@@ -57,6 +57,7 @@ type Service struct {
 	ModelLabel                            string
 	Models                                map[string]ModelTarget
 	Client                                *http.Client
+	webClient                             *http.Client
 	mu                                    sync.Mutex
 	timerMu                               sync.Mutex
 	history                               map[string][]Turn
@@ -66,7 +67,7 @@ type Service struct {
 
 func New(upstream, key, instructions, stateDir string, allowed map[int64]bool) *Service {
 	main := ModelTarget{Name: "main", Upstream: strings.TrimRight(upstream, "/"), Key: key}
-	return &Service{Upstream: main.Upstream, Key: key, Instructions: instructions, StateDir: stateDir, Allowed: allowed, Models: map[string]ModelTarget{"main": main}, Client: &http.Client{Timeout: 120 * time.Second}, history: map[string][]Turn{}, Learning: NewJSONLLearningStore(stateDir), Retention: LearningRetention{TraceDays: 90, CandidateDays: 30}}
+	return &Service{Upstream: main.Upstream, Key: key, Instructions: instructions, StateDir: stateDir, Allowed: allowed, Models: map[string]ModelTarget{"main": main}, Client: &http.Client{Timeout: 120 * time.Second}, webClient: newSafeWebHTTPClient(), history: map[string][]Turn{}, Learning: NewJSONLLearningStore(stateDir), Retention: LearningRetention{TraceDays: 90, CandidateDays: 30}}
 }
 
 // RegisterModel adds a selectable inference backend. Names are restricted to
@@ -390,7 +391,7 @@ func (s *Service) reply(ctx context.Context, user int64, channel, conversation, 
 		} else {
 			intent = classified
 			if intent == intentCapability && !capabilityMatched {
-				available := s.capabilities()
+				available := nonWebCapabilities(s.capabilities())
 				if len(available) == 1 && available[0].Read != nil {
 					capabilities, capabilityMatched = available, true
 				} else {
@@ -559,43 +560,47 @@ func (s *Service) classifyIntent(ctx context.Context, text string) (secretaryInt
 }
 
 func (s *Service) capabilities() []ReadCapability {
-	if len(s.Capabilities) > 0 {
-		return s.Capabilities
-	}
-	if s.Sources == nil {
-		return nil
-	}
-	capabilities := []ReadCapability{{
-		Name: "Granola", Description: "notas recientes de reuniones",
-		Match: func(query string) bool {
-			return localIntent(query) == intentCapability && containsAny(normalizedIntentText(query), "reunion", "reuniones", "granola")
-		},
-		Read: func(ctx context.Context, query string) (CapabilityResult, error) {
-			if queryReader, ok := s.Sources.(GranolaQueryReader); ok {
-				return queryReader.GranolaQueryResult(ctx, query)
-			}
-			if structured, ok := s.Sources.(StructuredSourceReader); ok {
-				return structured.GranolaResult(ctx)
-			}
-			text, err := s.Sources.Granola(ctx)
-			return capabilityResultFromText(text), err
-		},
-	}}
-	if rovo, ok := s.Sources.(interface {
-		Rovo(context.Context, string) (string, error)
-	}); ok {
+	capabilities := append([]ReadCapability(nil), s.Capabilities...)
+	if len(capabilities) == 0 && s.Sources != nil {
 		capabilities = append(capabilities, ReadCapability{
-			Name:        "Rovo",
-			Description: "búsqueda semántica de planes, tareas y actividades pendientes en Jira y Confluence",
-			Match:       rovoTaskIntent,
+			Name: "Granola", Description: "notas recientes de reuniones",
+			Match: func(query string) bool {
+				return localIntent(query) == intentCapability && containsAny(normalizedIntentText(query), "reunion", "reuniones", "granola")
+			},
 			Read: func(ctx context.Context, query string) (CapabilityResult, error) {
-				if structured, ok := s.Sources.(StructuredSourceReader); ok {
-					return structured.RovoResult(ctx, query)
+				if queryReader, ok := s.Sources.(GranolaQueryReader); ok {
+					return queryReader.GranolaQueryResult(ctx, query)
 				}
-				text, err := rovo.Rovo(ctx, query)
+				if structured, ok := s.Sources.(StructuredSourceReader); ok {
+					return structured.GranolaResult(ctx)
+				}
+				text, err := s.Sources.Granola(ctx)
 				return capabilityResultFromText(text), err
 			},
 		})
+		if rovo, ok := s.Sources.(interface {
+			Rovo(context.Context, string) (string, error)
+		}); ok {
+			capabilities = append(capabilities, ReadCapability{
+				Name:        "Rovo",
+				Description: "búsqueda semántica de planes, tareas y actividades pendientes en Jira y Confluence",
+				Match:       rovoTaskIntent,
+				Read: func(ctx context.Context, query string) (CapabilityResult, error) {
+					if structured, ok := s.Sources.(StructuredSourceReader); ok {
+						return structured.RovoResult(ctx, query)
+					}
+					text, err := rovo.Rovo(ctx, query)
+					return capabilityResultFromText(text), err
+				},
+			})
+		}
+	}
+	webClient := s.webClient
+	if webClient == nil {
+		webClient = newSafeWebHTTPClient()
+	}
+	if len(nonWebCapabilities(capabilities)) == len(capabilities) {
+		capabilities = append(capabilities, webCapability(webClient))
 	}
 	return capabilities
 }
@@ -606,10 +611,27 @@ func meetingAnchorFromQuery(query string) string {
 	return strings.TrimSpace(meetingAnchorPattern.FindString(query))
 }
 
+func nonWebCapabilities(capabilities []ReadCapability) []ReadCapability {
+	filtered := make([]ReadCapability, 0, len(capabilities))
+	for _, capability := range capabilities {
+		if capability.Name != sharedWebCapabilityName {
+			filtered = append(filtered, capability)
+		}
+	}
+	return filtered
+}
+
 func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapability, bool, string) {
 	registered := s.capabilities()
 	if len(registered) == 0 {
 		return nil, false, query
+	}
+	if sharedURLFromText(query) != "" && localIntent(query) != intentMemory {
+		for _, capability := range registered {
+			if capability.Name == sharedWebCapabilityName && capability.Read != nil && capability.Match(query) {
+				return []ReadCapability{capability}, true, query
+			}
+		}
 	}
 
 	meetingIntent := localIntent(query) == intentCapability && containsAny(normalizedIntentText(query), "reunion", "reuniones", "granola")
@@ -660,8 +682,9 @@ func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapabilit
 	if len(matched) > 1 {
 		return nil, false, query
 	}
-	if len(registered) == 1 && localIntent(query) == intentCapability && registered[0].Read != nil && registered[0].Name != "" {
-		return registered, true, readQuery
+	fallback := nonWebCapabilities(registered)
+	if len(fallback) == 1 && localIntent(query) == intentCapability && fallback[0].Read != nil && fallback[0].Name != "" {
+		return fallback, true, readQuery
 	}
 	return nil, false, query
 }

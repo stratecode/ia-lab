@@ -20,11 +20,20 @@ Este documento describe el estado deseado versionado. El host tuvo drift en la c
 | Variable | Origen | Descripción |
 |---|---|---|
 | `LAB_TELEGRAM_BOT_TOKEN` | entorno (`.env`) | Mismo token que usa `lab-secretary` |
+| `LAB_WATCHDOG_TELEGRAM_TOKEN` | entorno (`.env`) | Token del bot Watchdog; se instala para Alertmanager en `/etc/prometheus/watchdog_telegram_bot_token` con modo `0640` y `no_log` |
 | `LAB_TELEGRAM_ALLOWED_USERS` | entorno | Se usa el primer id como `chat_id` |
 | `vault_nut_upsmon_password` | `group_vars/vault.yml` | Contraseña del usuario `upsmon` de NUT (generar con `openssl rand -hex 16`) |
 | `lab_alerting_enable_*` | defaults | Permiten apagar cada pieza |
 
 Ningún secreto está en el repositorio.
+
+Alertmanager envía por defecto las alertas técnicas al bot Watchdog. Donna solo recibe las alertas que incluyan explícitamente la etiqueta `notify_donna="true"`; en ese caso recibe un aviso resumido y Watchdog mantiene el detalle técnico.
+
+Para configurar el token, añade esta línea al `.env` de la raíz del checkout local (ese archivo está ignorado por Git) y sustituye el marcador por el token del bot Watchdog:
+
+```dotenv
+LAB_WATCHDOG_TELEGRAM_TOKEN=replace-with-watchdog-bot-token
+```
 
 ## Aplicar
 

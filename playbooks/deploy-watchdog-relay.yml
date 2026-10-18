@@ -1,6 +1,7 @@
 ---
 # Enables only the lab-side relay required by the external Raspberry Pi watchdog.
 # Keep lab_watchdog_relay_enabled=false in group_vars/all.yml.
+# Set LAB_WATCHDOG_TELEGRAM_TOKEN in the ignored repo-root .env; never commit its value.
 # Prepare with: -e lab_watchdog_relay_enabled=true -e lab_watchdog_pi_ip=192.168.0.200
 # For the combined relay + dirty-shutdown check, also pass -e lab_alerting_enable_boot_exporter=true.
 # Run --check --diff first; apply only after explicit approval.

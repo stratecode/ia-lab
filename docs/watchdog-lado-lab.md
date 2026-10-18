@@ -2,6 +2,8 @@
 
 La Raspberry tiene conectividad Wi-Fi y envía sus avisos directamente a Telegram; el relay del lab es solo un respaldo. La configuración del relay está versionada y desactivada por defecto (`lab_watchdog_relay_enabled: false`); habilitarla cambia el host. Codex debe ejecutar el playbook con `--check --diff`, compartir el diff y esperar la aprobación directa de Fran antes de aplicar.
 
+El relay y las alertas de infraestructura usan el bot propio del Watchdog (`LAB_WATCHDOG_TELEGRAM_TOKEN` en el `.env` local ignorado por Git). Alertmanager manda los avisos técnicos a ese bot; Donna solo recibe avisos si una alerta lleva explícitamente `notify_donna="true"`.
+
 Playbook: `playbooks/deploy-watchdog-relay.yml`. El relay expone solo el POST de Alertmanager a la IP de la Pi y enruta `LabWatchdogEvento` al bot Telegram existente. Chrony queda separado y desactivado: la Pi usa el router como fuente principal de NTP. Por defecto el rol no toca nada.
 
 Variables necesarias para preparar la revisión:
