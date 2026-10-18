@@ -271,6 +271,13 @@ disables Whisper. The runtime prefers `LAB_SECRETARY_TRANSCRIPTION_ENABLED` and
 falls back to the legacy `LAB_SECRETARY_VOICE_ENABLED` setting when the new
 variable is absent.
 
+Build the secretary before using `playbooks/deploy-secretary-voice.yml`. Review
+its `--check --diff` preview before applying it. This focused playbook manages
+Whisper/Piper, updates only the three audio-mode variables in `secretary.env`
+without rewriting connector credentials, deploys the binary, and checks
+`/health`; on failure it restores the previous environment and binary when
+backups exist.
+
 Whisper runs CPU-only from `whisper.cpp` v1.9.5 using the multilingual
 `ggml-small-q5_1.bin` model with four threads by default. Piper is optional and
 uses the Spanish `es_ES-sharvard-medium` voice, female speaker 1, at length

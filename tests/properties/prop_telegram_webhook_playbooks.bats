@@ -71,6 +71,16 @@ if "LAB_SECRETARY_TRANSCRIPTION_ENABLED={{ 'true' if lab_secretary_transcription
 if "LAB_PIPER_URL={{ lab_piper_url if lab_secretary_voice_enabled | bool else '' }}" not in secretary_role:
     raise SystemExit("Piper endpoint must remain optional when spoken replies are disabled")
 
+voice_deploy = Path("playbooks/deploy-secretary-voice.yml").read_text()
+for expected in (
+    "LAB_SECRETARY_TRANSCRIPTION_ENABLED=true",
+    "LAB_SECRETARY_VOICE_ENABLED=false",
+    "src: \"{{ playbook_dir }}/../dist/lab-secretary-linux-amd64\"",
+    "url: http://127.0.0.1:8082/health",
+):
+    if expected not in voice_deploy:
+        raise SystemExit(f"voice deployment is missing {expected!r}")
+
 for deployment in ("playbooks/deploy-lab-surface.yml", "playbooks/deploy-principal-model.yml"):
     play = yaml.safe_load(Path(deployment).read_text())[0]
     if play.get("vars", {}).get("lab_secretary_transcription_enabled") is not True:
