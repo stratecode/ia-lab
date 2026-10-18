@@ -8,7 +8,7 @@ Informe de la sesión que desplegó y probó el vigilante en la Raspberry Pi. Co
 - Probado con el lab apagado de verdad: la Pi detectó la caída, mandó el WoL y el lab volvió a responder en **~3 min** desde que se apagó.
 - El desarrollo encontró y corrigió **seis problemas** (apartado "Hallazgos"), entre ellos que la Pi tenía la hora 11 min atrasada y que el registro persistente no se guardaba.
 - El lab se cayó por su cuenta a las 20:31 sin dejar rastro en el registro, a 34 °C y con el SAI en línea. Apunta a la **alimentación aguas abajo del SAI**; la causa no está demostrada (apartado "Caída de las 20:31").
-- Pendientes: fuente de alimentación nueva, prueba completa del botón en el rack, y la causa de la caída del lab.
+- Pendientes: fuente de alimentación nueva y el lado del lab (relay de respaldo y métrica de apagado sucio, con Codex).
 
 ## Configuración desplegada
 
@@ -32,7 +32,7 @@ Valores del despliegue actual (el inventario `inventory-watchdog.yml` está fuer
 
 | Prueba | Resultado | Evidencia |
 |---|---|---|
-| **T0** BIOS y requisitos | Parcial | BIOS revisada por Fran (WoL activo). Reserva DHCP del lab y de la Pi **sin confirmar** |
+| **T0** BIOS y requisitos | OK | BIOS revisada por Fran (WoL activo); reservas DHCP del lab y de la Pi hechas por Fran |
 | **T1** WoL manual desde otro equipo | OK | Desde el Mac, tras corregir el BIOS |
 | WoL desde la Pi por Wi-Fi | OK | Arrancó el lab a los 62 s y en la prueba real (T5). No arrancó la primera vez, antes de revisar el BIOS, ni con el primer paquete de la caída de las 20:35 (el lab probablemente estaba sin corriente) |
 | **T3** Simulación 24-48 h | **No hecha** | Se pasó a modo real tras la prueba T4 |
@@ -46,7 +46,7 @@ Valores del despliegue actual (el inventario `inventory-watchdog.yml` está fuer
 | **TH3** Quitar la red de la Pi | No aplica | La Pi va por Wi-Fi; habría que probar con el punto de acceso |
 | **TH4** Pitido de arranque | OK | La unidad corre a los ~24 s del arranque; Fran lo oyó |
 | **TH5** LED de estado y LED "listo" | OK | GPIO24 en alto mientras el servicio cicla; se apaga al parar el servicio |
-| **TH6** Botón: apagar y encender | OK | Fran confirmó que el apagado funciona; la comprobación con registro persistente, ya en el rack, sigue pendiente |
+| **TH6** Botón: apagar y encender | OK | Verificado por Fran en el rack: apagado ordenado con los 5 pitidos y arranque al volver a pulsar |
 | **TH8** 5 pitidos antes de apagar | OK | Probado parando su unidad; el apagado real quedó sin registro por el fallo del journal (ya corregido) |
 | Telegram directo | OK | El aviso en cola salió tras pulsar Start en el bot; la cola quedó en 0 |
 | Pruebas automáticas | OK | 86 pruebas con reloj, red, GPIO, Telegram y relay simulados; ningún socket real |
@@ -71,16 +71,14 @@ Analizada en solo lectura desde el lab.
 - El WoL nº 1 (~20:35) no arrancó nada. El nº 2 (~20:39) arrancó el lab, que **murió de nuevo a los 7 s**, otra vez sin mensajes; volvió a arrancar a las 20:40:27.
 - Misma firma que el incidente del 16-oct (parada en seco con el SAI en línea). **Hipótesis, sin demostrar:** interrupción de la alimentación entre el SAI y el equipo (cable, fuente o contacto). Explicaría que el WoL no funcionara (sin corriente en reposo la tarjeta de red no escucha) y el arranque de 7 s.
 - **Consecuencia:** ante un corte total de alimentación al lab el WoL no puede ayudar, y un enchufe inteligente tampoco si el fallo está aguas abajo de él.
+- **Decisión de Fran: no se investiga más.** La causa queda sin determinar; la métrica de apagado sucio (ver pendientes) dejaría constancia si se repite.
 
 ## Pendientes, por prioridad
 
-1. **Fuente de alimentación nueva** para la Pi. En el banco registraba bajo voltaje (`0x50005`); en el rack, 0 avisos en más de una hora.
-2. **Prueba completa del botón en el rack** (5 pitidos, LED azul apagado, testigo de 3,3 V encendido, arranque) y comprobar el apagado en `journalctl -b -1`, ya con registro persistente.
-3. **Causa de la caída del lab:** revisión física de la cadena SAI → fuente → equipo; si se repite, enchufe con medidor entre el SAI y el lab.
-4. **Reservas DHCP** del lab y de la Pi (la Pi por Wi-Fi; el relay del lab, si se aplica, solo admite su IP).
-5. **Lado del lab** (Codex, con aprobación de Fran): relay de Alertmanager como respaldo, y una métrica de "último apagado sucio" con su alerta.
-6. **Clave SSH propia para la Pi** (hoy acepta la misma que el lab) y unos pasos escritos para reconstruirla si falla la tarjeta.
-7. Pruebas T7, T8 y TH3 (con el punto de acceso), y el recorrido completo de `test-indicator`.
+1. **Fuente de alimentación nueva** para la Pi (la cambia Fran) y comprobar que `throttled` sigue en `0x0`. En el banco registraba bajo voltaje (`0x50005`); en el rack, 0 avisos en más de una hora.
+2. **Lado del lab** (Codex, con aprobación de Fran): aplicar el relay de Alertmanager como respaldo de Telegram y añadir una métrica de "último apagado sucio" con su alerta.
+3. **Clave SSH propia para la Pi** (hoy acepta la misma que el lab) y unos pasos escritos para reconstruirla si falla la tarjeta.
+4. Pruebas T7, T8 y TH3 (con el punto de acceso), y el recorrido completo de `test-indicator`.
 
 ## Limitaciones conocidas
 
