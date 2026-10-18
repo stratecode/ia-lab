@@ -63,6 +63,11 @@ lab_watchdog_ntp_poll_max_seconds: 64
 lab_watchdog_telegram_enabled: false
 lab_watchdog_telegram_token: "{{ vault_lab_watchdog_telegram_token | default(lookup('env', 'LAB_WATCHDOG_TELEGRAM_TOKEN') | default('', true), true) }}"
 lab_watchdog_telegram_chat_id: "{{ (lookup('env', 'LAB_TELEGRAM_ALLOWED_USERS') | default('', true)).split(',') | first | trim }}"
+# Telegram commands (/estado, /encender, /mantenimiento N, /reanudar, /silenciar) from the one authorised private chat.
+# Needs lab_watchdog_telegram_enabled. Long polling: nothing listens on the Pi. Off by default.
+lab_watchdog_telegram_commands_enabled: false
+lab_watchdog_telegram_commands_max_age_seconds: 300    # ignore commands older than this (a restart never replays old ones)
+lab_watchdog_telegram_commands_wake_cooldown_seconds: 30
 lab_watchdog_heartbeat_url: ""               # optional external dead-man's switch (healthchecks.io, ntfy...)
 
 # --- Local indicator: LEDs + buzzer + mute button on the Pi's GPIO (docs/watchdog.md, "Indicador local") ---

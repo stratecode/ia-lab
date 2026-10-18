@@ -61,6 +61,11 @@
     "reminder_seconds": lab_watchdog_indicator_reminder_seconds,
     "startup_beep": lab_watchdog_indicator_startup_beep | bool
   },
+  "commands": {
+    "enabled": lab_watchdog_telegram_commands_enabled | bool,
+    "max_age_seconds": lab_watchdog_telegram_commands_max_age_seconds,
+    "wake_cooldown_seconds": lab_watchdog_telegram_commands_wake_cooldown_seconds
+  },
   "mode": {"dry_run": lab_watchdog_dry_run},
   "paths": {
     "state": lab_watchdog_state_dir ~ "/state.json",

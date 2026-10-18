@@ -646,6 +646,241 @@ class ChannelAndExpiryTests(Base):
         self.assertEqual([e for e in lw.validate_config(cfg) if "outbox_max_age_seconds" in e], [])
 
 
+class FakeTelegramApi:
+    """The Bot API: a list of updates to hand out and a record of what the bot answered."""
+
+    def __init__(self):
+        self.updates, self.sent, self.calls, self.fail, self.next_id = [], [], [], None, 1
+
+    def add(self, text, chat=42, kind="private", date=1_800_000_000.0):
+        self.updates.append({"update_id": self.next_id, "message": {
+            "text": text, "date": date, "chat": {"id": chat, "type": kind}}})
+        self.next_id += 1
+
+    def __call__(self, token, method, payload, timeout):
+        self.calls.append((method, dict(payload)))
+        if self.fail:
+            raise RuntimeError(self.fail)
+        if method == "getUpdates":
+            if payload.get("offset") == -1:
+                return {"ok": True, "result": self.updates[-1:]}
+            return {"ok": True, "result": [u for u in self.updates if u["update_id"] >= payload.get("offset", 0)]}
+        if method == "sendMessage":
+            self.sent.append(payload["text"])
+            return {"ok": True, "result": {}}
+        raise AssertionError("unexpected method %s" % method)
+
+
+class FakeIndicator:
+    def __init__(self, sounding=True):
+        self.sounding, self.silenced = sounding, 0
+
+    def silence(self):
+        self.silenced += 1
+        return self.sounding
+
+
+class CommandBotTests(Base):
+    NOW = 1_800_000_000.0 + 10
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.maint = os.path.join(self.tmp.name, "maintenance_until")
+        self.api, self.waker, self.state = FakeTelegramApi(), FakeWaker(), lw.new_state()
+        self.make_bot()
+
+    def make_bot(self, dry_run=False, indicator=None, **commands):
+        cfg = make_cfg(notify={"chat_id": "42", "telegram_enabled": True}, mode={"dry_run": dry_run},
+                       commands=dict({"enabled": True}, **commands), paths={"maintenance": self.maint})
+        self.bot = lw.CommandBot(cfg, self.state, "T0KEN", api=self.api, waker=self.waker, indicator=indicator)
+
+    def ask(self, text, **kw):
+        """Send one command through a real poll and return the answer (None = no answer)."""
+        self.api.sent.clear()
+        self.api.add(text, **kw)
+        self.bot.state["tg_offset"] = self.bot.state.get("tg_offset") or 0
+        self.bot.poll_once(self.NOW)
+        return self.api.sent[-1] if self.api.sent else None
+
+    def test_commands_that_were_queued_before_the_start_are_never_run(self):
+        self.api.add("/encender")
+        self.api.add("/encender")
+        self.assertEqual(self.bot.poll_once(self.NOW), 0)  # first poll after a fresh start: drop the backlog
+        self.assertEqual(self.bot.poll_once(self.NOW), 0)
+        self.assertEqual(self.waker.calls, [])
+        self.assertEqual(self.api.sent, [])
+
+    def test_estado_when_the_lab_is_up(self):
+        self.state.update(status="UP", last_known={"temp_c": 35.4, "on_battery": False, "at": self.NOW})
+        reply = self.ask("/estado")
+        self.assertIn("responde", reply)
+        self.assertIn("35 °C", reply)
+        self.assertIn("SAI en red", reply)
+        self.assertIn("modo real", reply)
+
+    def test_estado_when_the_lab_is_down_and_the_watchdog_keeps_retrying(self):
+        self.state.update(status="DOWN", down_since=self.NOW - 600, recovery={"phase": "GAVE_UP"})
+        self.bot.cfg["intervals"]["retry_seconds"] = 60
+        reply = self.ask("/estado")
+        self.assertIn("CAÍDO", reply)
+        self.assertIn("10 min", reply)
+        self.assertIn("reintentando el Wake-on-LAN cada 1 min", reply)
+
+    def test_estado_mentions_maintenance_and_the_queue(self):
+        self.state.update(status="UP", outbox=[{}, {}])
+        self.ask("/mantenimiento 30")
+        reply = self.ask("/estado")
+        self.assertIn("mantenimiento", reply.lower())
+        self.assertIn("pendientes de enviar: 2", reply)
+
+    def test_encender_sends_a_wake_on_lan_when_the_lab_is_down(self):
+        self.state.update(status="DOWN")
+        reply = self.ask("/encender")
+        self.assertEqual(self.waker.calls, [("c8:ff:bf:08:5e:db", "192.168.0.255")])
+        self.assertIn("enviado", reply)
+
+    def test_encender_does_nothing_when_the_lab_answers_unless_forced(self):
+        self.state.update(status="UP")
+        self.assertIn("responde ahora mismo", self.ask("/encender"))
+        self.assertEqual(self.waker.calls, [])
+        self.ask("/encender forzar")
+        self.assertEqual(len(self.waker.calls), 1)
+
+    def test_encender_has_a_cooldown(self):
+        self.state.update(status="DOWN")
+        self.ask("/encender")
+        self.assertIn("espera", self.ask("/encender"))
+        self.assertEqual(len(self.waker.calls), 1)
+
+    def test_encender_sends_nothing_in_simulation_mode(self):
+        self.make_bot(dry_run=True)
+        self.state.update(status="DOWN")
+        self.assertIn("SIMULACIÓN", self.ask("/encender forzar"))
+        self.assertEqual(self.waker.calls, [])
+
+    def test_mantenimiento_pauses_and_reanudar_resumes(self):
+        reply = self.ask("/mantenimiento 30")
+        self.assertIn("Mantenimiento hasta", reply)
+        self.assertTrue(lw.maintenance_checker(self.maint)(self.NOW + 60))
+        self.assertFalse(lw.maintenance_checker(self.maint)(self.NOW + 31 * 60))
+        self.assertIn("terminado", self.ask("/reanudar"))
+        self.assertFalse(os.path.exists(self.maint))
+
+    def test_mantenimiento_rejects_nonsense(self):
+        for arg in ("", "abc", "0", "-5", "721", "99999"):
+            self.assertIn("Uso:", self.ask("/mantenimiento " + arg), arg)
+        self.assertFalse(os.path.exists(self.maint))
+
+    def test_silenciar_with_and_without_an_indicator(self):
+        self.assertIn("no está activado", self.ask("/silenciar"))
+        quiet = FakeIndicator(sounding=False)
+        self.make_bot(indicator=quiet)
+        self.assertIn("nada sonando", self.ask("/silenciar"))
+        loud = FakeIndicator(sounding=True)
+        self.make_bot(indicator=loud)
+        self.assertEqual(self.ask("/silenciar"), "Zumbador silenciado.")
+        self.assertEqual(loud.silenced, 1)
+
+    def test_other_chats_get_no_answer_and_cannot_do_anything(self):
+        self.state.update(status="DOWN")
+        self.assertIsNone(self.ask("/encender", chat=999))
+        self.assertIsNone(self.ask("/mantenimiento 30", chat=999))
+        self.assertIsNone(self.ask("/estado", chat=999))
+        self.assertEqual(self.waker.calls, [])
+        self.assertFalse(os.path.exists(self.maint))
+
+    def test_a_group_with_the_same_id_is_not_accepted(self):
+        self.state.update(status="DOWN")
+        self.assertIsNone(self.ask("/encender", chat=42, kind="group"))
+        self.assertEqual(self.waker.calls, [])
+
+    def test_old_commands_are_ignored(self):
+        self.state.update(status="DOWN")
+        self.assertIsNone(self.ask("/encender", date=self.NOW - 301))
+        self.assertEqual(self.waker.calls, [])
+
+    def test_each_command_runs_once_even_if_polled_again(self):
+        self.state.update(status="DOWN")
+        self.ask("/encender")
+        self.bot.cooldown = 0
+        self.bot.poll_once(self.NOW + 1)
+        self.bot.poll_once(self.NOW + 2)
+        self.assertEqual(len(self.waker.calls), 1)  # the offset moved past it before it ran
+
+    def test_plain_text_is_ignored_and_unknown_commands_get_the_help(self):
+        self.assertIsNone(self.ask("hola"))
+        reply = self.ask("/borrarlotodo")
+        self.assertIn("No conozco esa orden", reply)
+        self.assertIn("/estado", reply)
+        self.assertIn("/ayuda", self.ask("/ayuda"))
+
+    def test_the_bot_name_suffix_and_capitals_are_accepted(self):
+        self.state.update(status="UP")
+        self.assertIn("responde", self.ask("/Estado@StrateCodeWatchdogBot"))
+
+    def test_there_is_no_command_that_could_shut_the_lab_down(self):
+        for name in ("/apagar", "/reiniciar", "/ssh", "/shell", "/ejecutar"):
+            self.assertIn("No conozco", self.ask(name))
+
+    def test_a_failing_api_never_stops_the_loop_nor_leaks_the_token(self):
+        stop = threading.Event()
+        calls = []
+
+        def failing(token, method, payload, timeout):
+            calls.append(method)
+            stop.set()  # one failed attempt is enough for the test
+            raise RuntimeError("telegram getUpdates failed (URLError)")
+        self.bot.api = failing
+        self.state["tg_offset"] = 0
+        with self.assertLogs(level="WARNING") as logs:
+            self.bot.run(stop)
+        self.assertEqual(calls, ["getUpdates"])
+        self.assertNotIn("T0KEN", " ".join(logs.output))
+
+    def test_a_failed_answer_does_not_raise(self):
+        self.state.update(status="UP")
+        self.api.add("/estado")
+        self.state["tg_offset"] = 0
+        original = self.api.__call__
+
+        def broken_send(token, method, payload, timeout):
+            if method == "sendMessage":
+                raise RuntimeError("telegram sendMessage failed (URLError)")
+            return original(token, method, payload, timeout)
+        self.bot.api = broken_send
+        with self.assertLogs(level="WARNING") as logs:
+            self.bot.poll_once(self.NOW)  # must not raise
+        self.assertIn("could not answer", " ".join(logs.output))
+        self.assertEqual(self.state["tg_offset"], 2)  # the command was still consumed: it will not run twice
+
+    def test_config_validation(self):
+        def errors(telegram=True, **commands):
+            cfg = lw.deep_merge(make_cfg(), {"commands": commands, "notify": {"telegram_enabled": telegram}})
+            return [e for e in lw.validate_config(cfg) if "commands" in e]
+        self.assertEqual(errors(enabled=True), [])
+        self.assertTrue(errors(telegram=False, enabled=True))  # commands need the Telegram bot
+        self.assertTrue(errors(enabled=True, poll_timeout_seconds=0))
+        self.assertTrue(errors(enabled=True, poll_timeout_seconds=99))
+        self.assertTrue(errors(enabled=True, max_age_seconds=-1))
+        self.assertTrue(errors(enabled="yes"))
+
+    def test_the_real_api_call_hides_the_token_in_errors(self):
+        original = lw.urllib.request.urlopen
+
+        def refused(req, timeout=0):
+            raise lw.urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, None)
+        lw.urllib.request.urlopen = refused
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                lw.telegram_api("123456:SUPERSECRETTOKEN", "getUpdates", {}, 5)
+        finally:
+            lw.urllib.request.urlopen = original
+        self.assertEqual(str(ctx.exception), "telegram getUpdates HTTP 401")
+        self.assertNotIn("SUPERSECRET", repr(ctx.exception.__cause__))
+
+
 class FakeGpio:
     """Stands in for PinctrlBackend: records levels, a settable button, and failures on demand."""
 
@@ -925,6 +1160,19 @@ class IndicatorTests(Base):
         self.feed("UP", wall=self.night)
         self.feed("DOWN", "WAIT1", ["wol1"], wall=self.night)
         self.run_for(3)
+        self.assertEqual(len(self.pulses()), 1)
+
+    def test_silence_does_what_the_button_does(self):
+        self.assertFalse(self.ind.silence())  # nothing was sounding
+        self.feed("UP")
+        self.feed("DOWN", "GAVE_UP")
+        self.run_for(0.3)
+        self.assertTrue(self.samples[-1][3])
+        self.assertTrue(self.ind.silence())  # an alarm was sounding
+        self.run_for(0.3)
+        self.assertFalse(self.samples[-1][3])
+        self.assertTrue(self.ind.acked)
+        self.run_for(700)  # past the reminder: the "gave up" alarm stays quiet
         self.assertEqual(len(self.pulses()), 1)
 
     def test_button_silences_gave_up_until_the_state_changes(self):

@@ -80,6 +80,13 @@ DEFAULTS: Dict[str, Any] = {
         "reminder_seconds": 600,  # period of the "gave up" alarm until the button is pressed
         "startup_beep": True,     # one beep when the service starts (off when an early boot beep exists)
     },
+    "commands": {
+        # Telegram commands from the one authorised private chat. Long polling: nothing listens on the Pi.
+        "enabled": False,
+        "max_age_seconds": 300,       # ignore commands older than this: a restart must never replay old ones
+        "wake_cooldown_seconds": 30,  # minimum time between two manual wake-ups
+        "poll_timeout_seconds": 25,   # long-poll wait of getUpdates
+    },
     "mode": {"dry_run": True},
     "paths": {
         "state": "/var/lib/lab-watchdog/state.json",
@@ -144,6 +151,17 @@ def validate_config(cfg: Dict[str, Any]) -> List[str]:
         errors.append("notify.outbox_max_age_seconds must be a number >= 0")
     if not isinstance(cfg["mode"].get("dry_run"), bool):
         errors.append("mode.dry_run must be true or false")
+    cmd = cfg["commands"]
+    if not isinstance(cmd.get("enabled"), bool):
+        errors.append("commands.enabled must be true or false")
+    elif cmd["enabled"]:
+        if not cfg["notify"].get("telegram_enabled"):
+            errors.append("commands.enabled needs notify.telegram_enabled (they use the same bot and chat)")
+        for key in ("max_age_seconds", "wake_cooldown_seconds"):
+            if not isinstance(cmd.get(key), (int, float)) or cmd[key] < 0:
+                errors.append("commands.%s must be a number >= 0" % key)
+        if not isinstance(cmd.get("poll_timeout_seconds"), (int, float)) or not 1 <= cmd["poll_timeout_seconds"] <= 50:
+            errors.append("commands.poll_timeout_seconds must be between 1 and 50")
     ind = cfg["indicator"]
     if not isinstance(ind.get("enabled"), bool):
         errors.append("indicator.enabled must be true or false")
@@ -340,6 +358,23 @@ def telegram_send(token: str, chat_id: str, text: str, silent: bool) -> None:
         raise RuntimeError("telegram send failed (%s)" % exc.__class__.__name__) from None
 
 
+def telegram_api(token: str, method: str, payload: Dict[str, Any], timeout: float) -> Dict[str, Any]:
+    """One Telegram Bot API call. Errors carry the status or the exception class, never the URL (it holds the token)."""
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request("https://api.telegram.org/bot%s/%s" % (token, method), data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError("telegram %s HTTP %s" % (method, exc.code)) from None
+    except Exception as exc:
+        raise RuntimeError("telegram %s failed (%s)" % (method, exc.__class__.__name__)) from None
+    if not data.get("ok"):
+        raise RuntimeError("telegram %s was refused" % method)
+    return data
+
+
 SEVERITY = {"ok": "info", "info": "info", "warn": "warning", "crit": "critical"}
 
 
@@ -459,7 +494,7 @@ def new_state() -> Dict[str, Any]:
         "status": "UNKNOWN", "fail_count": 0, "first_fail_at": None, "down_since": None, "net_fail": 0,
         "net_down": False, "last_known": {}, "last_recovery_end": None, "flap_mult": 1, "history": [],
         "recovery": {"phase": "IDLE", "since": 0, "wait": 0, "hot": False, "actions": [], "last_reminder": 0},
-        "last_summary_day": None, "outbox": [],
+        "last_summary_day": None, "outbox": [], "tg_offset": None,
     }
 
 
@@ -845,6 +880,13 @@ class Indicator:
                 except GPIO_ERRORS:
                     pass
 
+    def silence(self) -> bool:
+        """Same as pressing the mute button. True when something was sounding or an alarm was pending."""
+        with self._lock:
+            sounding = self._seg_on or bool(self._beeps) or (self.mode == "GAVE_UP" and not self.acked)
+            self._pressed()
+            return sounding
+
     def demo(self, mode: str, t: float, beeps: int = 0, long_beeps: bool = False) -> None:
         """Force a mode (hardware test, `test-indicator`); the beeps ignore quiet hours."""
         with self._lock:
@@ -960,6 +1002,158 @@ def run_demo(ind: Indicator, hold: float, clock: Callable[[], float], sleep: Cal
     return ind.acked
 
 
+# --------------------------------------------------------------------------- telegram commands
+
+def fmt_duration(seconds: float) -> str:
+    seconds = int(max(0, seconds))
+    hours, rest = divmod(seconds, 3600)
+    if hours:
+        return "%d h %02d min" % (hours, rest // 60)
+    return "%d min" % (rest // 60) if rest >= 60 else "%d s" % seconds
+
+
+class CommandBot:
+    """Telegram commands from the one authorised private chat, by long polling (no port is opened on the Pi).
+
+    It can read the state, send a Wake-on-LAN, pause the watchdog and mute the buzzer. It cannot log in to the
+    lab (the Pi holds no credentials for it), so there is deliberately no command to shut anything down."""
+
+    HELP = ("Órdenes:\n/estado: situación del lab y del vigilante\n"
+            "/encender: enviar un Wake-on-LAN ahora (\"/encender forzar\" aunque el lab responda)\n"
+            "/mantenimiento N: pausar N minutos (1-720); /reanudar para volver antes\n"
+            "/silenciar: callar el zumbador, como el botón\n/ayuda: esta lista")
+    PHASES = {"GRACE": "caída confirmada", "WAIT1": "WoL nº 1 enviado, esperando el arranque",
+              "WAIT2": "WoL nº 2 enviado, esperando el arranque", "WAIT3": "ciclo de enchufe hecho, esperando el arranque"}
+
+    def __init__(self, cfg: Dict[str, Any], state: Dict[str, Any], token: str,
+                 api: Callable[[str, str, Dict[str, Any], float], Dict[str, Any]] = telegram_api,
+                 waker: Any = None, indicator: Any = None, now: Callable[[], float] = time.time):
+        c = cfg["commands"]
+        self.cfg, self.state, self.token, self.api, self.now = cfg, state, token, api, now
+        self.waker, self.indicator = waker or Waker(), indicator
+        self.chat_id = int(str(cfg["notify"]["chat_id"]))
+        self.max_age, self.cooldown, self.poll_timeout = c["max_age_seconds"], c["wake_cooldown_seconds"], c["poll_timeout_seconds"]
+        self._last_wake = float("-inf")
+        self._handlers = {"/estado": self._status, "/encender": self._wake, "/mantenimiento": self._maintenance,
+                          "/reanudar": self._resume, "/silenciar": self._silence, "/ayuda": self._help, "/start": self._help}
+
+    # ---- the loop
+    def run(self, stop: threading.Event) -> None:
+        failures = 0
+        while not stop.is_set():
+            try:
+                self.poll_once(self.now())
+                failures = 0
+            except RuntimeError as exc:  # no Internet, Telegram down...: say it now and then, and keep trying
+                failures += 1
+                if failures in (1, 10) or failures % 60 == 0:
+                    logging.warning("telegram commands: %s (attempt %d)", exc, failures)
+                stop.wait(min(60, 5 * failures))
+            except Exception:
+                logging.exception("telegram commands failed")
+                stop.wait(30)
+
+    def poll_once(self, now: float) -> int:
+        """Fetch and answer pending commands. The first call after a fresh start discards whatever is queued."""
+        if self.state.get("tg_offset") is None:
+            last = self.api(self.token, "getUpdates", {"offset": -1, "timeout": 0}, 10).get("result", [])
+            self.state["tg_offset"] = last[-1]["update_id"] + 1 if last else 0
+            return 0
+        payload = {"offset": self.state["tg_offset"], "timeout": self.poll_timeout, "allowed_updates": ["message"]}
+        answered = 0
+        for update in self.api(self.token, "getUpdates", payload, self.poll_timeout + 10).get("result", []):
+            self.state["tg_offset"] = update["update_id"] + 1  # acknowledged before acting: never replayed
+            reply = self.handle(update.get("message") or {}, now)
+            if reply:
+                self._reply(reply)
+                answered += 1
+        return answered
+
+    def _reply(self, text: str) -> None:
+        try:
+            self.api(self.token, "sendMessage", {"chat_id": self.chat_id, "text": text}, 10)
+        except RuntimeError as exc:
+            logging.warning("telegram commands: could not answer (%s)", exc)
+
+    # ---- one command
+    def handle(self, msg: Dict[str, Any], now: float) -> Optional[str]:
+        chat = msg.get("chat") or {}
+        if chat.get("id") != self.chat_id or chat.get("type") != "private":
+            logging.warning("telegram commands: ignored a message from an unauthorised chat")
+            return None  # no answer at all: do not reveal that the bot is listening
+        if now - msg.get("date", 0) > self.max_age:
+            logging.info("telegram commands: ignored a stale command")
+            return None
+        text = str(msg.get("text") or "").strip()
+        if not text.startswith("/"):
+            return None
+        word, _, arg = text.partition(" ")
+        command, arg = word.split("@")[0].lower(), arg.strip().lower()
+        handler = self._handlers.get(command)
+        logging.info("telegram command: %s", command if handler else "(unknown)")
+        return handler(arg, now) if handler else "No conozco esa orden.\n" + self.HELP
+
+    def _help(self, arg: str, now: float) -> str:
+        return self.HELP
+
+    def _status(self, arg: str, now: float) -> str:
+        s, rec = self.state, self.state.get("recovery") or {}
+        lk, status, retry = s.get("last_known") or {}, s.get("status"), self.cfg["intervals"].get("retry_seconds", 0)
+        if s.get("net_down"):
+            lab = "Sin red local: no puedo juzgar al lab."
+        elif status in ("UP", "DEGRADED"):
+            facts = (["%.0f °C" % lk["temp_c"]] if "temp_c" in lk else []) + (
+                ["SAI EN BATERÍA"] if lk.get("on_battery") is True else ["SAI en red"] if lk.get("on_battery") is False else [])
+            lab = "Lab: responde%s." % (" (%s)" % ", ".join(facts) if facts else "")
+            if status == "DEGRADED":
+                lab += " Contesta al ping pero no por SSH ni HTTPS."
+        elif status == "DOWN":
+            phase = rec.get("phase")
+            detail = ("sigo reintentando el Wake-on-LAN cada %d min" % max(1, int(retry // 60)) if retry else "me he rendido") \
+                if phase == "GAVE_UP" else self.PHASES.get(phase, "caído")
+            lab = "Lab: CAÍDO desde las %s (%s): %s." % (fmt_time(s.get("down_since") or now),
+                                                        fmt_duration(now - (s.get("down_since") or now)), detail)
+        elif status == "SUSPECT":
+            lab = "Lab: sin respuesta en la última comprobación; lo confirmo en el siguiente ciclo."
+        else:
+            lab = "Lab: aún sin datos."
+        lines = [lab, "Vigilante en modo %s." % ("SIMULACIÓN (no envía WoL)" if self.cfg["mode"]["dry_run"] else "real")]
+        until = maintenance_until(self.cfg["paths"]["maintenance"], now)
+        if until:
+            lines.append("En mantenimiento hasta las %s: sin avisos ni WoL." % fmt_time(until))
+        queued = len(s.get("outbox") or [])
+        if queued:
+            lines.append("Avisos pendientes de enviar: %d." % queued)
+        return "\n".join(lines)
+
+    def _wake(self, arg: str, now: float) -> str:
+        if self.cfg["mode"]["dry_run"]:
+            return "El vigilante está en modo SIMULACIÓN: no envío ningún Wake-on-LAN."
+        if self.state.get("status") in ("UP", "DEGRADED") and arg != "forzar":
+            return "El lab responde ahora mismo. Si aun así quieres mandar el paquete: /encender forzar"
+        if now - self._last_wake < self.cooldown:
+            return "Acabo de enviar uno hace %d s: espera un poco." % (now - self._last_wake)
+        lab = self.cfg["lab"]
+        self.waker.send(lab["mac"], lab["broadcast"])
+        self._last_wake = now
+        return "Wake-on-LAN enviado a %s." % lab["mac"]
+
+    def _maintenance(self, arg: str, now: float) -> str:
+        if not arg.isdigit() or not 1 <= int(arg) <= 720:
+            return "Uso: /mantenimiento N, con N entre 1 y 720 minutos (por ejemplo /mantenimiento 30)."
+        until = set_maintenance(self.cfg["paths"]["maintenance"], int(arg), now)
+        return "Mantenimiento hasta las %s: no enviaré avisos ni Wake-on-LAN. /reanudar para volver antes." % fmt_time(until or now)
+
+    def _resume(self, arg: str, now: float) -> str:
+        set_maintenance(self.cfg["paths"]["maintenance"], 0, now)
+        return "Mantenimiento terminado: vuelvo a vigilar."
+
+    def _silence(self, arg: str, now: float) -> str:
+        if self.indicator is None:
+            return "El indicador local no está activado: no hay zumbador que silenciar."
+        return "Zumbador silenciado." if self.indicator.silence() else "No había nada sonando."
+
+
 # --------------------------------------------------------------------------- persistence and CLI
 
 def load_state(path: str) -> Dict[str, Any]:
@@ -977,6 +1171,29 @@ def save_state(path: str, state: Dict[str, Any]) -> None:
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         json.dump(state, handle)
     os.replace(tmp, path)
+
+
+def set_maintenance(path: str, minutes: int, now: float) -> Optional[float]:
+    """Pause the watchdog for N minutes (returns when it ends); 0 or less resumes it (returns None)."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    if minutes <= 0:
+        if os.path.exists(path):
+            os.remove(path)
+        return None
+    until = now + minutes * 60
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(str(until))
+    return until
+
+
+def maintenance_until(path: str, now: float) -> Optional[float]:
+    """When the current maintenance window ends, or None when there is none."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            until = float(handle.read().strip())
+    except (OSError, ValueError):
+        return None
+    return until if until > now else None
 
 
 def purge_outbox(state: Dict[str, Any]) -> int:
@@ -1050,6 +1267,12 @@ def cmd_run(cfg: Dict[str, Any], once: bool) -> int:
         thread = threading.Thread(target=indicator.run, args=(stop,), name="indicator", daemon=True)
         thread.start()
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))  # let `finally` silence the buzzer on `systemctl stop`
+    if cfg["commands"]["enabled"] and not once:
+        if notifier.token:
+            bot = CommandBot(cfg, state, notifier.token, indicator=indicator)
+            threading.Thread(target=bot.run, args=(stop,), name="telegram-commands", daemon=True).start()
+        else:
+            logging.warning("telegram commands are enabled but there is no bot token: they stay off")
     notifier.send("info", "Vigilante del lab arrancado (v%s, %s)." % (VERSION, "SIMULACIÓN: no actuaré" if cfg["mode"]["dry_run"] else "modo real"), silent=True)
     try:
         while True:
@@ -1156,14 +1379,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         finally:
             ind.shutdown()
     elif args.cmd == "maintenance":
-        path = cfg["paths"]["maintenance"]
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        if args.minutes <= 0 and os.path.exists(path):
-            os.remove(path)
-        elif args.minutes > 0:
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(str(time.time() + args.minutes * 60))
-        print("maintenance %s" % ("until %s" % fmt_time(time.time() + args.minutes * 60) if args.minutes > 0 else "cleared"))
+        until = set_maintenance(cfg["paths"]["maintenance"], args.minutes, time.time())
+        print("maintenance %s" % ("until %s" % fmt_time(until) if until else "cleared"))
     elif args.cmd == "purge-outbox":
         dropped = purge_outbox(state)
         save_state(cfg["paths"]["state"], state)

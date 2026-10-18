@@ -96,6 +96,8 @@ journalctl -u lab-watchdog -f                                                 # 
 ## Indicador local (LED, zumbador y botón)
 Avisa **en la propia Pi**, sin depender del lab, del router ni de Telegram: es la única vía cuando el lab no arranca y el aviso diferido no puede salir. Está **desactivado por defecto** (`lab_watchdog_indicator_enabled: false`). Lo maneja un hilo propio del vigilante y **nunca lo tumba**: sin GPIO, o si falla, se desactiva y reintenta cada 5 min.
 
+Esquema, lista de conexiones y lista de materiales para una **placa a medida** que sustituya a la de prototipos: `docs/hardware/panel-pcb.md`.
+
 Montaje (numeración BCM, ajustable con `lab_watchdog_indicator_pin_*`): zumbador activo de 5 V por un transistor NPN en GPIO17 (pin 11), LED verde en GPIO27 (pin 13), LED rojo en GPIO22 (pin 15), pulsador a GND en GPIO23 (pin 16). Esquema y lista de piezas: `docs/watchdog-contexto-sesion-pi.md`, sección 4.
 
 | Estado del vigilante | Verde | Rojo | Zumbador |
@@ -134,6 +136,23 @@ Tres piezas independientes, todas **desactivadas por defecto**. Las dos primeras
 - **El botón no despierta tras un corte de luz** (sin corriente no hay nada que despertar): en ese caso la Pi arranca sola al volver la corriente.
 - **El pitido de arranque ignora las horas de silencio**: a esas alturas del arranque el reloj no es fiable (la Pi no tiene reloj propio). Cuando está activado, el pitido de inicio del servicio se desactiva solo (`indicator.startup_beep: false`), para no oír dos seguidos; el test de LED del servicio se mantiene.
 - Tras aplicar el rol con alguna de las dos primeras piezas, la Pi pide **un reinicio** (`sudo reboot`). Si se desactivan las dos, el bloque se elimina del fichero.
+
+## Órdenes por Telegram
+Desde el chat autorizado puedes hablar con el bot de la Pi (`lab_watchdog_telegram_commands_enabled`, **desactivado por defecto**; necesita Telegram directo activo).
+
+| Orden | Qué hace |
+|---|---|
+| `/estado` | Situación del lab (responde, temperatura, SAI, o caído desde cuándo y en qué fase), modo del vigilante, mantenimiento activo y avisos pendientes |
+| `/encender` | Manda un Wake-on-LAN ahora. Si el lab responde no hace nada; `/encender forzar` lo envía igualmente. Máximo uno cada 30 s. En modo simulación no envía nada |
+| `/mantenimiento N` | Pausa avisos y acciones N minutos (1-720), como `maintenance N` en la Pi. `/reanudar` vuelve antes |
+| `/silenciar` | Calla el zumbador y la alarma de "rendido", como el botón |
+| `/ayuda` | La lista |
+
+**Seguridad.** Funciona por *long polling*: la Pi pregunta a Telegram, **no abre ningún puerto**.
+- Solo responde a **un chat privado** cuyo identificador es el configurado; cualquier otro recibe silencio (ni siquiera sabe que el bot escucha). Un grupo con el mismo identificador tampoco vale.
+- Ignora órdenes de más de 5 min, y al arrancar **descarta lo que estuviera en cola**, de modo que un reinicio nunca repite una orden vieja. Cada orden se confirma a Telegram antes de ejecutarse, así que no puede ejecutarse dos veces.
+- **No hay ninguna orden para apagar o tocar el lab**: la Pi no tiene credenciales suyas. Lo peor que puede hacer quien controle ese chat es mandar un Wake-on-LAN (inofensivo), pausar el vigilante o callar el zumbador; por eso la cuenta de Telegram debe tener verificación en dos pasos.
+- Se necesita Internet: sin él la orden no llega, y la Pi lo reintenta sola con esperas crecientes.
 
 ## Plan de pruebas
 **Automáticas (sin hardware):** `python3 -m unittest discover -s tests/lab_watchdog -v` → 56 pruebas con reloj, red, entrega al lab, Telegram, Wake-on-LAN, enchufe y GPIO simulados; ningún socket real. Incluyen la **repetición del incidente del 16-oct** (también con el indicador: qué se ve y se oye en cada fase). Las pruebas detectan averías introducidas a propósito (límite horario, modo simulación, comprobación de red, espera por calor, formato del paquete, silencio nocturno, botón, apagado de salidas, fallo de backend).
