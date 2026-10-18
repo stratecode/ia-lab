@@ -1,0 +1,94 @@
+#!/usr/bin/env python3
+"""Export a few SMART attributes of the system SSD to the node_exporter textfile collector.
+
+Why: the lab restarts by itself without leaving anything in its logs. The attributes that count power cycles and
+unexpected power-offs (9, 12 and 192 on this SSD), sampled every minute, show whether the disk saw its power go away
+around each event. Observational only: it reads SMART and writes one small file.
+
+Standard library only. Needs smartctl and root.
+"""
+import argparse
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import time
+
+# ID# ATTRIBUTE_NAME FLAG VALUE WORST THRESH TYPE UPDATED WHEN_FAILED RAW_VALUE
+ROW = re.compile(r"^\s*(\d+)\s+(\S+)\s+0x[0-9a-fA-F]+\s+\d+\s+\d+\s+\d+\s+\S+\s+\S+\s+\S+\s+(\d+)")
+
+
+def parse_attributes(text, wanted):
+    """{id: (name, raw)} for the wanted attribute ids found in `smartctl -A` output."""
+    found = {}
+    for line in text.splitlines():
+        match = ROW.match(line)
+        if match and int(match.group(1)) in wanted:
+            found[int(match.group(1))] = (match.group(2), int(match.group(3)))
+    return found
+
+
+def render(device, attributes, now, ok):
+    """Prometheus text format. `ok` is False when SMART could not be read."""
+    name = os.path.basename(device)
+    lines = ["# HELP lab_ssd_smart_up 1 if the SMART attributes of the system SSD could be read",
+             "# TYPE lab_ssd_smart_up gauge", "lab_ssd_smart_up %d" % (1 if ok else 0)]
+    if ok:
+        lines += ["# HELP lab_ssd_smart_attribute_raw Raw value of a SMART attribute of the system SSD",
+                  "# TYPE lab_ssd_smart_attribute_raw gauge"]
+        for attr_id in sorted(attributes):
+            attr_name, raw = attributes[attr_id]
+            lines.append('lab_ssd_smart_attribute_raw{device="%s",id="%d",name="%s"} %d' % (name, attr_id, attr_name, raw))
+        lines += ["# HELP lab_ssd_smart_last_success_timestamp_seconds Unix time of the last successful read",
+                  "# TYPE lab_ssd_smart_last_success_timestamp_seconds gauge",
+                  "lab_ssd_smart_last_success_timestamp_seconds %d" % now]
+    return "\n".join(lines) + "\n"
+
+
+def find_device(lsblk_output):
+    """First real disk (sdX or nvmeXnY, not a loop device) from `lsblk -dn -o NAME,TYPE`."""
+    for line in lsblk_output.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "disk" and re.match(r"^(sd[a-z]+|nvme\d+n\d+)$", parts[0]):
+            return "/dev/" + parts[0]
+    return None
+
+
+def write_atomically(path, content):
+    directory = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".lab-ssd.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.chmod(tmp, 0o644)  # node_exporter runs as another user
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def main(argv=None, run=subprocess.run, now=time.time):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--device", default="auto", help="/dev/sdX, or auto for the first disk")
+    parser.add_argument("--attributes", default="9,12,192", help="comma separated SMART attribute ids")
+    parser.add_argument("--out", default="/var/lib/prometheus/node-exporter/lab-ssd.prom")
+    args = parser.parse_args(argv)
+    wanted = {int(item) for item in args.attributes.split(",") if item.strip()}
+    device, attributes, ok = args.device, {}, False
+    try:
+        if device == "auto":
+            device = find_device(run(["lsblk", "-dn", "-o", "NAME,TYPE"], capture_output=True, text=True, timeout=10).stdout)
+        if device:
+            smart = run(["smartctl", "-A", device], capture_output=True, text=True, timeout=30)
+            attributes = parse_attributes(smart.stdout, wanted)
+            ok = bool(attributes)
+    except (OSError, subprocess.SubprocessError):
+        ok = False  # a missing tool or a hung disk must not fail the timer: the metric says it
+    write_atomically(args.out, render(device or "unknown", attributes, int(now()), ok))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

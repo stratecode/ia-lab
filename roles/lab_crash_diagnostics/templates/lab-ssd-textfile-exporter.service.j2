@@ -1,0 +1,7 @@
+# Managed by Ansible (role lab_crash_diagnostics)
+[Unit]
+Description=Export SMART counters of the system SSD to node_exporter
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/lab-ssd-textfile-exporter --device {{ lab_crash_diag_ssd_device }} --attributes {{ lab_crash_diag_ssd_attributes }} --out {{ lab_crash_diag_textfile_dir }}/lab-ssd.prom
