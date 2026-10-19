@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestReadOnlyMCPKeepsSourcesAndRejectsWrites(t *testing.T) {
+func TestGranolaMCPKeepsReadOnlyToolsAndRejectsJiraTools(t *testing.T) {
 	calls := []string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer secret" {
@@ -37,10 +37,7 @@ func TestReadOnlyMCPKeepsSourcesAndRejectsWrites(t *testing.T) {
 			return
 		}
 		calls = append(calls, req.Params.Name)
-		result := `[{"id":"cloud-1","url":"https://example.atlassian.net"}]`
-		if req.Params.Name == "searchJiraIssuesUsingJql" {
-			result = `{"issues":[{"key":"STRAT-42","fields":{"summary":"Revisar propuesta","status":{"name":"En curso"}}}]}`
-		}
+		result := `[]`
 		if req.Params.Name == "list_meetings" {
 			result = `<meetings_data count="1"><meeting id="meet-1" title="Atlas &amp; Team" date="2026-10-10"/></meetings_data>`
 		}
@@ -51,11 +48,8 @@ func TestReadOnlyMCPKeepsSourcesAndRejectsWrites(t *testing.T) {
 		w.Write(b)
 	}))
 	defer server.Close()
-	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: server.URL, AccessToken: "secret"}, Granola: OAuthConfig{ServerURL: server.URL, AccessToken: "secret"}}, Client: server.Client(), StateDir: t.TempDir(), allowTestHTTP: true}
-	jira, err := c.Jira(context.Background())
-	if err != nil || !strings.Contains(jira, "STRAT-42") {
-		t.Fatalf("Jira %q %v", jira, err)
-	}
+	c := &Connectors{Config: ConnectorConfig{Granola: OAuthConfig{ServerURL: server.URL, AccessToken: "secret"}}, Client: server.Client(), StateDir: t.TempDir(), allowTestHTTP: true}
+	var err error
 	meetings, err := c.GranolaResult(context.Background())
 	if err != nil || !strings.Contains(meetings.Text, "Atlas & Team") || !strings.Contains(meetings.Text, "2026-10-10") || !strings.Contains(meetings.Text, "Ana preparará la propuesta") || strings.Contains(meetings.Text, "private discussion details") {
 		t.Fatalf("Granola %q %v", meetings.Text, err)
@@ -63,44 +57,17 @@ func TestReadOnlyMCPKeepsSourcesAndRejectsWrites(t *testing.T) {
 	if meetings.ResultCount != 1 || len(meetings.Evidence) != 1 || meetings.Evidence[0].Provider != "Granola" || meetings.Evidence[0].ID != "meet-1" || meetings.Evidence[0].Title != "Atlas & Team" {
 		t.Fatalf("Granola evidence missing provider-backed meeting reference: %+v", meetings)
 	}
-	if len(calls) != 4 {
+	if len(calls) != 2 {
 		t.Fatalf("unexpected calls %v", calls)
 	}
-	_, err = c.tool(context.Background(), c.Config.Jira, "createJiraIssue", map[string]any{})
-	if err == nil || len(calls) != 4 {
-		t.Fatal("write was sent to provider")
-	}
-}
-
-func TestMCPToolPermissionErrorReportsOnlyRequiredRovoScopes(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			ID     int    `json:"id"`
-			Method string `json:"method"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatal(err)
-		}
-		switch req.Method {
-		case "initialize":
-			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}`)
-		case "notifications/initialized":
-			w.WriteHeader(http.StatusAccepted)
-		case "tools/call":
-			io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"isError":true,"content":[{"type":"text","text":"Missing required scope read:jira:agent-interface. Internal detail must not escape."}]}}`)
-		default:
-			t.Errorf("unexpected MCP method %q", req.Method)
-		}
-	}))
-	defer server.Close()
-	s := &mcpSession{owner: &Connectors{Client: server.Client()}, config: OAuthConfig{ServerURL: server.URL, AccessToken: "secret"}}
-	if _, err := s.callTool(context.Background(), "getJiraIssue", map[string]any{}); err == nil || !strings.Contains(err.Error(), "read:jira:agent-interface") || strings.Contains(err.Error(), "Internal detail") {
-		t.Fatalf("MCP scope failure was not reported safely: %v", err)
+	_, err = c.tool(context.Background(), c.Config.Granola, "searchJiraIssuesUsingJql", map[string]any{})
+	if err == nil || len(calls) != 2 {
+		t.Fatal("Jira tool was sent through Granola MCP")
 	}
 }
 
 func TestConnectorDestinationsAndPartialCoverage(t *testing.T) {
-	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: "https://attacker.invalid", AccessToken: "secret"}}}
+	c := &Connectors{Config: ConnectorConfig{Jira: JiraRESTConfig{AccessToken: "secret"}}}
 	if _, err := c.Jira(context.Background()); err == nil {
 		t.Fatal("credential destination accepted")
 	}
@@ -127,7 +94,7 @@ func TestUnknownSourceSchemaIsNotAnEmptyInbox(t *testing.T) {
 		io.WriteString(w, `{"result":{"content":[{"type":"text","text":"{}"}]}}`)
 	}))
 	defer server.Close()
-	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: server.URL, AccessToken: "secret", CloudID: "cloud-1"}}, Client: server.Client(), allowTestHTTP: true}
+	c := &Connectors{Config: ConnectorConfig{Jira: JiraRESTConfig{AccessToken: "secret", CloudID: "cloud-1"}}, Client: server.Client(), allowTestHTTP: true, jiraAPIBase: server.URL}
 	if _, err := c.Jira(context.Background()); err == nil {
 		t.Fatal("unknown payload presented as zero issues")
 	}
@@ -163,6 +130,93 @@ func TestGranolaSummaryTruncationPreservesProjectOwnersAndNextSteps(t *testing.T
 		if !strings.Contains(answer, expected) {
 			t.Errorf("answer omitted %q: %s", expected, answer)
 		}
+	}
+}
+
+func TestJiraUsesRESTJQLInsteadOfMCP(t *testing.T) {
+	var gotJQL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/ex/jira/cloud-1/rest/api/3/search/jql" {
+			t.Errorf("Jira request = %s %s, want POST /ex/jira/cloud-1/rest/api/3/search/jql", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer service-token" {
+			t.Error("Jira REST request did not use the configured service token")
+		}
+		var body struct {
+			JQL string `json:"jql"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		gotJQL = body.JQL
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"issues":[{"key":"STRAT-42","fields":{"summary":"Revisar propuesta","status":{"name":"En curso"},"duedate":null}}],"isLast":true}`)
+	}))
+	defer server.Close()
+	c := &Connectors{
+		Config: ConnectorConfig{Jira: JiraRESTConfig{AccessToken: "service-token", CloudID: "cloud-1", OperatorAccountID: "operator-123"}},
+		Client: server.Client(), allowTestHTTP: true, jiraAPIBase: server.URL,
+	}
+	got, err := c.Jira(context.Background())
+	if err != nil || !strings.Contains(got, "STRAT-42") {
+		t.Fatalf("Jira REST result = %q, %v", got, err)
+	}
+	if gotJQL != `assignee = "operator-123" AND statusCategory != Done ORDER BY updated DESC` {
+		t.Fatalf("JQL = %q", gotJQL)
+	}
+}
+
+func TestJiraPersonalSearchRequiresConfiguredOperatorIdentity(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		io.WriteString(w, `{"issues":[]}`)
+	}))
+	defer server.Close()
+	connectors := &Connectors{
+		Config: ConnectorConfig{Jira: JiraRESTConfig{AccessToken: "service-token", CloudID: "cloud-1"}},
+		Client: server.Client(), allowTestHTTP: true, jiraAPIBase: server.URL,
+	}
+	if _, err := connectors.Jira(context.Background()); err == nil || !strings.Contains(err.Error(), "operator_account_id") {
+		t.Fatalf("Jira() err = %v, want missing operator identity error", err)
+	}
+	if called {
+		t.Fatal("Jira queried currentUser() for the service account")
+	}
+}
+
+func TestJiraPrivateConfigDecodesOperatorAccountID(t *testing.T) {
+	var config ConnectorConfig
+	if err := json.Unmarshal([]byte(`{"jira":{"access_token":"synthetic-token","cloud_id":"cloud-1","operator_account_id":"operator-123"}}`), &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.Jira.OperatorAccountID != "operator-123" {
+		t.Fatalf("operator_account_id = %q", config.Jira.OperatorAccountID)
+	}
+}
+
+func TestCompileJiraJQLUsesSafeIssueAndTaskFilters(t *testing.T) {
+	tests := []struct{ query, want string }{
+		{"Dame el estado de SW-76", "key = SW-76 ORDER BY updated DESC"},
+		{"¿Qué tareas tengo pendientes para esta semana?", `assignee = "operator-123" AND statusCategory != Done ORDER BY updated DESC`},
+		{"¿Qué tarea en proceso requiere de mí?", `assignee = "operator-123" AND statusCategory = "In Progress" ORDER BY updated DESC`},
+		{"¿Tengo alguna tarea en proceso que requiera de mí?", `assignee = "operator-123" AND statusCategory = "In Progress" ORDER BY updated DESC`},
+		{"Busca el plan Atlas migración", `text ~ "atlas" AND text ~ "migracion" ORDER BY updated DESC`},
+	}
+	for _, tt := range tests {
+		got, err := compileJiraJQL(tt.query, "operator-123")
+		if err != nil || got != tt.want {
+			t.Errorf("compileJiraJQL(%q) = %q, %v; want %q", tt.query, got, err, tt.want)
+		}
+	}
+	if _, err := compileJiraJQL(strings.Repeat("x", 2001), "operator-123"); err == nil {
+		t.Fatal("oversized natural-language query was accepted")
+	}
+	if _, err := compileJiraJQL("¿Qué tareas tengo pendientes?", ""); err == nil {
+		t.Fatal("personal tasks fell back to the service account identity")
+	}
+	if _, err := compileJiraJQL("¿Qué tareas tengo pendientes?", `operator-123" OR assignee IS NOT EMPTY`); err == nil {
+		t.Fatal("unsafe account id was accepted")
 	}
 }
 
@@ -286,203 +340,8 @@ func TestGranolaQueryUsesCitedMeetingNotesInsteadOfGeneratedAnswer(t *testing.T)
 }
 
 func TestCredentialsDoNotCrossProviderBoundary(t *testing.T) {
-	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: "https://mcp.granola.ai/mcp", AccessToken: "jira-secret"}}}
+	c := &Connectors{Config: ConnectorConfig{Jira: JiraRESTConfig{AccessToken: "jira-secret"}}}
 	if _, err := c.Jira(context.Background()); err == nil {
 		t.Fatal("Jira credential sent to another provider")
-	}
-}
-
-func TestRovoSearchPassesNaturalLanguageToReadOnlyMCP(t *testing.T) {
-	var gotName string
-	var gotArgs map[string]any
-	var gotSearchArgs map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			ID     int    `json:"id"`
-			Method string `json:"method"`
-			Params struct {
-				Name      string         `json:"name"`
-				Arguments map[string]any `json:"arguments"`
-			} `json:"params"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatal(err)
-		}
-		switch req.Method {
-		case "initialize":
-			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`)
-		case "notifications/initialized":
-			w.WriteHeader(http.StatusAccepted)
-		case "tools/call":
-			gotName, gotArgs = req.Params.Name, req.Params.Arguments
-			if req.Params.Name == "search" {
-				gotSearchArgs = req.Params.Arguments
-			}
-			text := `{"results":[{"key":"STRAT-42","title":"Plan de lanzamiento","snippet":"Revisar tareas pendientes","url":"https://stratecode.atlassian.net/browse/STRAT-42"}]}`
-			if req.Params.Name == "getJiraIssue" {
-				if req.Params.Arguments["issueIdOrKey"] != "STRAT-42" || req.Params.Arguments["updateHistory"] != false {
-					t.Errorf("unexpected exact Jira lookup arguments: %#v", req.Params.Arguments)
-				}
-				text = `{"key":"STRAT-42","fields":{"summary":"Plan de lanzamiento","status":{"name":"En curso"},"assignee":{"displayName":"Ana Pérez"},"duedate":null}}`
-			} else if req.Params.Name != "search" {
-				t.Errorf("unexpected Jira tool %q", req.Params.Name)
-			}
-			b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": text}}}})
-			w.Write(b)
-		default:
-			t.Errorf("unexpected MCP method %q", req.Method)
-		}
-	}))
-	defer server.Close()
-	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: server.URL, AccessToken: "secret", CloudID: "cloud-1"}}, Client: server.Client(), allowTestHTTP: true}
-
-	const question = "¿Qué tareas importantes tengo pendientes esta semana?"
-	result, err := c.RovoResult(context.Background(), question)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotName != "getJiraIssue" || gotArgs["cloudId"] != "cloud-1" || gotArgs["issueIdOrKey"] != "STRAT-42" || gotArgs["updateHistory"] != false {
-		t.Fatalf("unexpected Rovo call %q %#v", gotName, gotArgs)
-	}
-	if gotSearchArgs["query"] != question || gotSearchArgs["targetApp"] != "JIRA" || gotSearchArgs["limit"] != float64(10) {
-		t.Fatalf("Jira search was not scoped to relevant issue results: %#v", gotSearchArgs)
-	}
-	if !strings.Contains(result.Text, "Plan de lanzamiento") || !strings.Contains(result.Text, "En curso") || !strings.Contains(result.Text, "Ana Pérez") || !strings.Contains(result.Text, "sin vencimiento") {
-		t.Fatalf("verified Jira fields were not preserved: %q", result.Text)
-	}
-	if result.ResultCount != 1 || len(result.Evidence) != 1 || result.Evidence[0].ID != "STRAT-42" || result.Evidence[0].URL != "https://stratecode.atlassian.net/browse/STRAT-42" {
-		t.Fatalf("Rovo evidence was not sourced from the provider response: %+v", result)
-	}
-}
-
-func TestRovoIssueKeyQueryReadsIssueDirectlyWhenSearchWouldBeEmpty(t *testing.T) {
-	var gotIssueLookup bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			ID     int    `json:"id"`
-			Method string `json:"method"`
-			Params struct {
-				Name      string         `json:"name"`
-				Arguments map[string]any `json:"arguments"`
-			} `json:"params"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatal(err)
-		}
-		switch req.Method {
-		case "initialize":
-			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`)
-		case "notifications/initialized":
-			w.WriteHeader(http.StatusAccepted)
-		case "tools/call":
-			if req.Params.Name != "getJiraIssue" {
-				t.Errorf("issue-key lookup must bypass semantic search; got tool %q", req.Params.Name)
-			}
-			if req.Params.Arguments["issueIdOrKey"] != "SW-76" {
-				t.Errorf("issue key was not preserved: %#v", req.Params.Arguments)
-			}
-			gotIssueLookup = true
-			body := `{"key":"SW-76","fields":{"summary":"Actualizar importador de locations","status":{"name":"En curso"},"assignee":{"displayName":"Gonzalo Sánchez"},"duedate":null}}`
-			b, _ := json.Marshal(map[string]any{"jsonrpc":"2.0","id":req.ID,"result":map[string]any{"content":[]any{map[string]string{"type":"text","text":body}}}})
-			w.Write(b)
-		default:
-			t.Errorf("unexpected MCP method %q", req.Method)
-		}
-	}))
-	defer server.Close()
-	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: server.URL, AccessToken: "secret", CloudID: "cloud-1"}}, Client: server.Client(), allowTestHTTP: true}
-
-	result, err := c.RovoResult(context.Background(), "Dame el estado, la persona asignada y el vencimiento de SW-76, actualizar importador de locations.")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !gotIssueLookup || !result.DirectAnswer || result.ResultCount != 1 {
-		t.Fatalf("exact Jira issue was not read as a verified direct answer: lookup=%v result=%+v", gotIssueLookup, result)
-	}
-	for _, want := range []string{"SW-76", "En curso", "Gonzalo Sánchez", "sin vencimiento"} {
-		if !strings.Contains(result.Text, want) {
-			t.Errorf("verified Jira answer %q missing from %q", want, result.Text)
-		}
-	}
-}
-
-func TestRovoEvidenceDoesNotPromoteRequestIDsToSourceEvidence(t *testing.T) {
-	raw := json.RawMessage(`{"request":{"id":"request-123"},"results":[{"title":"Plan sin referencia estable"}]}`)
-	if evidence := parseRovoEvidence(raw); len(evidence) != 0 {
-		t.Fatalf("non-source request metadata became evidence: %+v", evidence)
-	}
-}
-
-func TestRovoResolvesCloudIDFromActualAtlassianResourceEnvelope(t *testing.T) {
-	var searchCloudID string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			ID     int    `json:"id"`
-			Method string `json:"method"`
-			Params struct {
-				Name      string         `json:"name"`
-				Arguments map[string]any `json:"arguments"`
-			} `json:"params"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatal(err)
-		}
-		switch req.Method {
-		case "initialize":
-			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`)
-		case "notifications/initialized":
-			w.WriteHeader(http.StatusAccepted)
-		case "tools/call":
-			var text string
-			switch req.Params.Name {
-			case "getAccessibleAtlassianResources":
-				text = `{"data":{"resources":[{"cloudId":"stratecode-cloud","url":"https://stratecode.atlassian.net"}]}}`
-			case "search":
-				searchCloudID = req.Params.Arguments["cloudId"].(string)
-				text = `{"results":[{"title":"Roadmap","snippet":"Plan aprobado"}]}`
-			default:
-				t.Errorf("unexpected MCP tool %q", req.Params.Name)
-			}
-			b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": req.ID, "result": map[string]any{"content": []any{map[string]string{"type": "text", "text": text}}}})
-			w.Write(b)
-		default:
-			t.Errorf("unexpected MCP method %q", req.Method)
-		}
-	}))
-	defer server.Close()
-	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: server.URL, AccessToken: "secret"}}, Client: server.Client(), allowTestHTTP: true}
-	if _, err := c.Rovo(context.Background(), "¿Qué plan está aprobado?"); err != nil {
-		t.Fatal(err)
-	}
-	if searchCloudID != "stratecode-cloud" {
-		t.Fatalf("Rovo search used cloud id %q", searchCloudID)
-	}
-}
-
-func TestRovoEmptySearchDoesNotBecomeSynthesisContext(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			ID     int    `json:"id"`
-			Method string `json:"method"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatal(err)
-		}
-		switch req.Method {
-		case "initialize":
-			io.WriteString(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26","capabilities":{}}}`)
-		case "notifications/initialized":
-			w.WriteHeader(http.StatusAccepted)
-		case "tools/call":
-			io.WriteString(w, `{"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"results":[]}}}`)
-		default:
-			t.Errorf("unexpected MCP method %q", req.Method)
-		}
-	}))
-	defer server.Close()
-	c := &Connectors{Config: ConnectorConfig{Jira: OAuthConfig{ServerURL: server.URL, AccessToken: "secret", CloudID: "cloud-1"}}, Client: server.Client(), allowTestHTTP: true}
-	result, err := c.Rovo(context.Background(), "¿Qué tareas quedan pendientes?")
-	if err != nil || result != "" {
-		t.Fatalf("empty Rovo results=%q err=%v", result, err)
 	}
 }

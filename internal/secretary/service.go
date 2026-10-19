@@ -578,19 +578,13 @@ func (s *Service) capabilities() []ReadCapability {
 				return capabilityResultFromText(text), err
 			},
 		})
-		if rovo, ok := s.Sources.(interface {
-			Rovo(context.Context, string) (string, error)
-		}); ok {
+		if _, ok := s.Sources.(JiraQueryReader); ok {
 			capabilities = append(capabilities, ReadCapability{
-				Name:        "Rovo",
-				Description: "búsqueda semántica de planes, tareas y actividades pendientes en Jira y Confluence",
-				Match:       rovoTaskIntent,
+				Name:        "Jira",
+				Description: "búsqueda de incidencias mediante Jira REST y JQL de solo lectura",
+				Match:       jiraTaskIntent,
 				Read: func(ctx context.Context, query string) (CapabilityResult, error) {
-					if structured, ok := s.Sources.(StructuredSourceReader); ok {
-						return structured.RovoResult(ctx, query)
-					}
-					text, err := rovo.Rovo(ctx, query)
-					return capabilityResultFromText(text), err
+					return s.Sources.(JiraQueryReader).JiraQueryResult(ctx, query)
 				},
 			})
 		}
@@ -633,11 +627,19 @@ func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapabilit
 			}
 		}
 	}
+	if only := explicitlyRequestedCapabilityOnly(query); only != "" {
+		for _, capability := range registered {
+			if strings.EqualFold(capability.Name, only) && capability.Read != nil && capability.Match != nil && capability.Match(query) {
+				return []ReadCapability{capability}, true, query
+			}
+		}
+		return nil, false, query
+	}
 
 	meetingIntent := localIntent(query) == intentCapability && containsAny(normalizedIntentText(query), "reunion", "reuniones", "granola")
-	taskIntent := rovoTaskIntent(query)
+	taskIntent := jiraTaskIntent(query) && !explicitlyExcludedCapability(query, "Jira")
 	var previousMeetingQuery string
-	if taskIntent && !hasExplicitRovoReference(query) && (refersToPriorMeeting(query) || !meetingIntent) {
+	if taskIntent && !hasExplicitJiraReference(query) && (refersToPriorMeeting(query) || !meetingIntent) {
 		userTurns := 0
 		for i := len(history) - 1; i >= 0; i-- {
 			if history[i].Role != "user" {
@@ -666,6 +668,9 @@ func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapabilit
 		if capability.Name == "" || capability.Read == nil || capability.Match == nil {
 			continue
 		}
+		if explicitlyExcludedCapability(query, capability.Name) {
+			continue
+		}
 		if capability.Match(query) || (taskIntent && meetingIntent && previousMeetingQuery != "" && capability.Match(previousMeetingQuery)) {
 			matched = append(matched, capability)
 		}
@@ -689,6 +694,29 @@ func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapabilit
 	return nil, false, query
 }
 
+func explicitlyRequestedCapabilityOnly(query string) string {
+	normalized := normalizedIntentText(query)
+	for _, capability := range []string{"Granola", "Jira"} {
+		name := strings.ToLower(capability)
+		if containsAny(normalized, "solo "+name, "unicamente "+name, "exclusivamente "+name, "only "+name) {
+			return capability
+		}
+	}
+	return ""
+}
+
+func explicitlyExcludedCapability(query, capability string) bool {
+	normalized := normalizedIntentText(query)
+	switch strings.ToLower(strings.TrimSpace(capability)) {
+	case "jira":
+		return containsAny(normalized, "no consultes jira", "no consultar jira", "no uses jira", "no usar jira", "sin consultar jira", "sin jira", "no jira")
+	case "granola":
+		return containsAny(normalized, "no consultes granola", "no consultar granola", "no uses granola", "no usar granola", "sin consultar granola", "sin granola", "no granola")
+	default:
+		return false
+	}
+}
+
 func refersToPriorMeeting(query string) bool {
 	return containsAny(normalizedIntentText(query), "esa reunion", "esa misma reunion", "esta reunion", "dicha reunion", "aquella reunion", "la reunion anterior", "esa reunion anterior")
 }
@@ -709,8 +737,8 @@ func explicitMeetingAnchor(query string) bool {
 	)
 }
 
-func hasExplicitRovoReference(query string) bool {
-	return jiraIssueKeyMention.MatchString(strings.ToUpper(query)) || containsAny(normalizedIntentText(query), "jira", "confluence", "rovo")
+func hasExplicitJiraReference(query string) bool {
+	return jiraIssueKeyMention.MatchString(strings.ToUpper(query)) || containsAny(normalizedIntentText(query), "jira")
 }
 
 func capabilityResultFromText(text string) CapabilityResult {
@@ -752,18 +780,10 @@ func capabilityFailureLabel(name string, err error) string {
 	if err == nil {
 		return name
 	}
-	seen := map[string]bool{}
-	var scopes []string
-	for _, scope := range rovoScopeMention.FindAllString(err.Error(), -1) {
-		if !seen[scope] {
-			scopes = append(scopes, scope)
-			seen[scope] = true
-		}
+	if name == sharedWebCapabilityName && strings.Contains(err.Error(), "HTTP 403") {
+		return name + " (el sitio bloquea la lectura automatizada: HTTP 403)"
 	}
-	if len(scopes) == 0 {
-		return name
-	}
-	return name + " (faltan permisos: " + strings.Join(scopes, ", ") + ")"
+	return name
 }
 
 func (s *Service) answerFromCapabilities(ctx context.Context, question, readQuery string, capabilities []ReadCapability, memories []conversationMemory, stream func(string), progress func(string), observer InteractionObserver) (string, []CapabilityOutcome, InteractionBlockReason, error) {
@@ -822,7 +842,7 @@ func (s *Service) answerFromCapabilities(ctx context.Context, question, readQuer
 		}
 		return "No he encontrado notas o resultados en " + capabilityNamesText(capabilities) + " que permitan verificarlo.", outcomes, "", nil
 	}
-	if explicitMeetingAnchor(question) && !hasExplicitRovoReference(question) {
+	if explicitMeetingAnchor(question) && !hasExplicitJiraReference(question) {
 		for i, result := range successfulResults {
 			if i >= len(successfulCapabilities) || !strings.EqualFold(successfulCapabilities[i], "Granola") {
 				continue
@@ -992,7 +1012,7 @@ func (s *Service) sourceStatus() string {
 		status = s.Sources.Status()
 	}
 	lines := []string{}
-	for _, name := range []string{"Jira", "Rovo", "Granola"} {
+	for _, name := range []string{"Jira", "Granola"} {
 		state := "no conectado"
 		if status[name] {
 			state = "configurado (validar consulta)"

@@ -30,9 +30,14 @@ type OAuthConfig struct {
 	ExpiresAt     int64  `json:"expires_at,omitempty"`
 	CloudID       string `json:"cloud_id,omitempty"`
 }
+type JiraRESTConfig struct {
+	AccessToken       string `json:"access_token"`
+	CloudID           string `json:"cloud_id"`
+	OperatorAccountID string `json:"operator_account_id"`
+}
 type ConnectorConfig struct {
-	Jira    OAuthConfig `json:"jira"`
-	Granola OAuthConfig `json:"granola"`
+	Jira    JiraRESTConfig `json:"jira"`
+	Granola OAuthConfig    `json:"granola"`
 }
 type Connectors struct {
 	Config        ConnectorConfig
@@ -40,13 +45,14 @@ type Connectors struct {
 	StateDir      string
 	mu            sync.Mutex
 	allowTestHTTP bool
+	jiraAPIBase   string
 }
 
 func NewConnectors(config ConnectorConfig, stateDir string) *Connectors {
 	c := &Connectors{Config: config, StateDir: stateDir, Client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error { return errors.New("connector redirects disabled") }}}
 	var cached ConnectorConfig
 	if raw, err := os.ReadFile(filepath.Join(stateDir, "oauth-cache.json")); err == nil && json.Unmarshal(raw, &cached) == nil {
-		for _, pair := range [][2]*OAuthConfig{{&c.Config.Jira, &cached.Jira}, {&c.Config.Granola, &cached.Granola}} {
+		for _, pair := range [][2]*OAuthConfig{{&c.Config.Granola, &cached.Granola}} {
 			if pair[0].ServerURL == pair[1].ServerURL && pair[0].ClientID == pair[1].ClientID && pair[1].ExpiresAt > pair[0].ExpiresAt {
 				*pair[0] = *pair[1]
 			}
@@ -57,10 +63,10 @@ func NewConnectors(config ConnectorConfig, stateDir string) *Connectors {
 func (c *Connectors) Status() map[string]bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return map[string]bool{"Jira": c.Config.Jira.AccessToken != "", "Rovo": c.Config.Jira.AccessToken != "", "Granola": c.Config.Granola.AccessToken != ""}
+	return map[string]bool{"Jira": c.Config.Jira.AccessToken != "" && c.Config.Jira.CloudID != "", "Granola": c.Config.Granola.AccessToken != ""}
 }
 func (c *Connectors) validServer(raw string) bool {
-	if raw == "https://mcp.atlassian.com/v2/mcp" || raw == "https://mcp.granola.ai/mcp" {
+	if raw == "https://mcp.granola.ai/mcp" {
 		return true
 	}
 	if c.allowTestHTTP {
@@ -77,10 +83,7 @@ func (c *Connectors) access(ctx context.Context, config *OAuthConfig) error {
 		return nil
 	}
 	endpoint, err := url.Parse(config.TokenEndpoint)
-	expected := "auth.atlassian.com"
-	if config.ServerURL == "https://mcp.granola.ai/mcp" {
-		expected = "mcp-auth.granola.ai"
-	}
+	expected := "mcp-auth.granola.ai"
 	if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() != expected || endpoint.User != nil || config.RefreshToken == "" {
 		return errors.New("connector reauthentication required")
 	}
@@ -191,8 +194,7 @@ func (c *Connectors) session(ctx context.Context, config OAuthConfig) (*mcpSessi
 	return s, err
 }
 
-var readTools = map[string]bool{"getAccessibleAtlassianResources": true, "searchJiraIssuesUsingJql": true, "getJiraIssue": true, "search": true, "list_meetings": true, "get_meetings": true, "query_granola_meetings": true}
-var rovoScopeMention = regexp.MustCompile(`\b(?:read|search|write|delete|manage):[a-z-]+:agent-interface\b`)
+var readTools = map[string]bool{"list_meetings": true, "get_meetings": true, "query_granola_meetings": true}
 
 func (c *Connectors) tool(ctx context.Context, config OAuthConfig, name string, args map[string]any) (json.RawMessage, error) {
 	if !readTools[name] {
@@ -224,19 +226,6 @@ func (s *mcpSession) callTool(ctx context.Context, name string, args map[string]
 		return nil, errors.New("connector tool failed")
 	}
 	if result.IsError {
-		var missing []string
-		seen := map[string]bool{}
-		for _, item := range result.Content {
-			for _, scope := range rovoScopeMention.FindAllString(item.Text, -1) {
-				if !seen[scope] {
-					missing = append(missing, scope)
-					seen[scope] = true
-				}
-			}
-		}
-		if len(missing) > 0 {
-			return nil, fmt.Errorf("Rovo missing required scopes: %s", strings.Join(missing, ", "))
-		}
 		return nil, errors.New("connector tool failed")
 	}
 	if len(result.Structured) > 0 && string(result.Structured) != "null" {
@@ -253,328 +242,225 @@ func (s *mcpSession) callTool(ctx context.Context, name string, args map[string]
 	return nil, errors.New("structured source data required")
 }
 func (c *Connectors) Jira(ctx context.Context) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.Config.Jira.AccessToken == "" {
 		return "Jira: no conectado", nil
 	}
-	if c.Config.Jira.ServerURL != "https://mcp.atlassian.com/v2/mcp" && !c.allowTestHTTP {
-		return "", errors.New("Jira credential destination rejected")
-	}
-	if err := c.access(ctx, &c.Config.Jira); err != nil {
-		return "", err
-	}
-	s, err := c.session(ctx, c.Config.Jira)
+	jql, err := jiraAssigneeJQL(c.Config.Jira.OperatorAccountID, false)
 	if err != nil {
 		return "", err
 	}
-	cloud := c.Config.Jira.CloudID
-	if cloud == "" {
-		raw, err := s.callTool(ctx, "getAccessibleAtlassianResources", map[string]any{})
-		if err != nil {
-			return "", err
-		}
-		var sites []struct {
-			ID string `json:"id"`
-		}
-		if json.Unmarshal(raw, &sites) != nil || len(sites) != 1 {
-			return "", errors.New("select a Jira cloud_id before querying")
-		}
-		cloud = sites[0].ID
-	}
-	raw, err := s.callTool(ctx, "searchJiraIssuesUsingJql", map[string]any{"cloudId": cloud, "jql": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC", "maxResults": 5, "fields": []string{"summary", "status", "duedate"}})
+	result, err := c.queryJira(ctx, jql)
 	if err != nil {
 		return "", err
 	}
-	var data struct {
-		Issues []struct {
-			Key    string `json:"key"`
-			Fields struct {
-				Summary string `json:"summary"`
-				Status  struct {
-					Name string `json:"name"`
-				} `json:"status"`
-				Due string `json:"duedate"`
-			} `json:"fields"`
-		} `json:"issues"`
-		IsLast *bool `json:"isLast"`
-	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil || len(fields["issues"]) == 0 || string(fields["issues"]) == "null" || json.Unmarshal(raw, &data) != nil {
-		return "", errors.New("unexpected Jira source schema")
-	}
-	lines := []string{"Jira · hasta 5 pendientes asignados a tu cuenta (muestra, no listado completo):"}
-	if len(data.Issues) == 0 {
-		lines = append(lines, "La consulta no devolvió incidencias.")
-	}
-	for i, item := range data.Issues {
-		if i == 5 {
-			break
-		}
-		if item.Key == "" {
-			return "", errors.New("Jira source ID missing")
-		}
-		due := item.Fields.Due
-		if due == "" {
-			due = "sin fecha"
-		}
-		lines = append(lines, fmt.Sprintf("[%s] %s · %s · %s", short(item.Key), short(item.Fields.Summary), short(item.Fields.Status.Name), short(due)))
-	}
-	return strings.Join(lines, "\n"), nil
+	return formatJiraIssues("Jira · hasta 5 pendientes asignados a tu cuenta (muestra, no listado completo):", result.Issues), nil
 }
 
-// Rovo searches Jira and Confluence together so the shared router can answer
-// natural-language questions about plans, tasks, and pending activities.
-func (c *Connectors) Rovo(ctx context.Context, query string) (string, error) {
-	result, err := c.RovoResult(ctx, query)
-	return result.Text, err
-}
-
-func (c *Connectors) RovoResult(ctx context.Context, query string) (CapabilityResult, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// JiraQueryResult compiles a natural-language request into a bounded JQL query,
+// then uses Jira Cloud REST directly. The configured token is sent only to
+// api.atlassian.com; the MCP endpoint is never used for Jira.
+func (c *Connectors) JiraQueryResult(ctx context.Context, query string) (CapabilityResult, error) {
 	if c.Config.Jira.AccessToken == "" {
-		return CapabilityResult{}, errors.New("Rovo no conectado")
+		return CapabilityResult{}, errors.New("Jira no conectado")
 	}
-	if c.Config.Jira.ServerURL != "https://mcp.atlassian.com/v2/mcp" && !c.allowTestHTTP {
-		return CapabilityResult{}, errors.New("Rovo credential destination rejected")
-	}
-	query = strings.TrimSpace(query)
-	if query == "" || len([]rune(query)) > 2000 {
-		return CapabilityResult{}, errors.New("Rovo query length rejected")
-	}
-	if err := c.access(ctx, &c.Config.Jira); err != nil {
-		return CapabilityResult{}, err
-	}
-	s, err := c.session(ctx, c.Config.Jira)
+	jql, err := compileJiraJQL(query, c.Config.Jira.OperatorAccountID)
 	if err != nil {
 		return CapabilityResult{}, err
 	}
-	cloud := c.Config.Jira.CloudID
-	if cloud == "" {
-		cloud, err = accessibleCloudID(ctx, s)
-		if err != nil {
-			return CapabilityResult{}, err
-		}
-	}
-	if issueKey := jiraIssueKeyMention.FindString(strings.ToUpper(query)); issueKey != "" {
-		issueRaw, err := s.callTool(ctx, "getJiraIssue", map[string]any{
-			"cloudId": cloud, "issueIdOrKey": issueKey,
-			"fields": []string{"summary", "status", "assignee", "duedate", "updated", "project"},
-			"updateHistory": false,
-		})
-		if err != nil {
-			return CapabilityResult{}, err
-		}
-		line, issueEvidence, ok := parseJiraIssueEvidence(issueRaw, EvidenceRef{ID: issueKey, Provider: "Jira"})
-		if !ok {
-			return CapabilityResult{}, errors.New("Jira issue fields could not be verified")
-		}
-		return CapabilityResult{
-			Text: "Jira · incidencia verificada en la consulta actual:\n" + line,
-			ResultCount: 1, Evidence: []EvidenceRef{issueEvidence}, DirectAnswer: true,
-		}, nil
-	}
-	raw, err := s.callTool(ctx, "search", map[string]any{
-		"cloudId": cloud, "query": query, "targetApp": "JIRA", "mode": "STANDARD", "limit": 10,
-	})
+	result, err := c.queryJira(ctx, jql)
 	if err != nil {
 		return CapabilityResult{}, err
 	}
-	if rovoHasNoResults(raw) {
+	if len(result.Issues) == 0 {
 		return CapabilityResult{}, nil
 	}
-	evidence := parseRovoEvidence(raw)
-	verified := make([]string, 0, 5)
-	verifiedEvidence := make([]EvidenceRef, 0, 5)
-	for _, candidate := range evidence {
-		if !jiraIssueKey.MatchString(candidate.ID) || len(verified) == 5 {
-			continue
+	evidence := make([]EvidenceRef, 0, len(result.Issues))
+	for _, issue := range result.Issues {
+		evidence = append(evidence, EvidenceRef{Provider: "Jira", ID: issue.Key, Title: issue.Fields.Summary, RetrievedAt: time.Now()})
+	}
+	return CapabilityResult{
+		Text:        formatJiraIssues("Jira · incidencias encontradas mediante Jira REST/JQL:", result.Issues),
+		ResultCount: len(result.Issues), Evidence: evidence,
+	}, nil
+}
+
+type jiraSearchResponse struct {
+	Issues []struct {
+		Key    string `json:"key"`
+		Fields struct {
+			Summary string `json:"summary"`
+			Status  struct {
+				Name string `json:"name"`
+			} `json:"status"`
+			Assignee *struct {
+				DisplayName string `json:"displayName"`
+				AccountID   string `json:"accountId"`
+			} `json:"assignee"`
+			Due     string `json:"duedate"`
+			Updated string `json:"updated"`
+		} `json:"fields"`
+	} `json:"issues"`
+}
+
+func (c *Connectors) queryJira(ctx context.Context, jql string) (jiraSearchResponse, error) {
+	if c.Config.Jira.AccessToken == "" {
+		return jiraSearchResponse{}, errors.New("Jira no conectado")
+	}
+	cloudID := strings.TrimSpace(c.Config.Jira.CloudID)
+	if cloudID == "" || !regexp.MustCompile(`^[A-Za-z0-9-]{1,100}$`).MatchString(cloudID) {
+		return jiraSearchResponse{}, errors.New("Jira cloud_id no configurado o no válido")
+	}
+	base := "https://api.atlassian.com"
+	if c.allowTestHTTP {
+		u, err := url.Parse(c.jiraAPIBase)
+		if err == nil && u.Scheme == "http" && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost") {
+			base = strings.TrimRight(c.jiraAPIBase, "/")
 		}
-		issueRaw, err := s.callTool(ctx, "getJiraIssue", map[string]any{
-			"cloudId": cloud, "issueIdOrKey": candidate.ID,
-			"fields": []string{"summary", "status", "assignee", "duedate", "updated", "project"},
-			"updateHistory": false,
-		})
-		if err != nil {
-			continue
+	}
+	endpoint := base + "/ex/jira/" + url.PathEscape(cloudID) + "/rest/api/3/search/jql"
+	body, _ := json.Marshal(map[string]any{"jql": jql, "maxResults": 10, "fields": []string{"summary", "status", "assignee", "duedate", "updated"}})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return jiraSearchResponse{}, errors.New("Jira REST request rejected")
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Config.Jira.AccessToken)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	client := c.Client
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return jiraSearchResponse{}, errors.New("Jira REST unavailable")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return jiraSearchResponse{}, fmt.Errorf("Jira REST HTTP %d", resp.StatusCode)
+	}
+	var result jiraSearchResponse
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return jiraSearchResponse{}, errors.New("invalid Jira REST response")
+	}
+	var envelope struct {
+		Issues json.RawMessage `json:"issues"`
+	}
+	if json.Unmarshal(payload, &envelope) != nil || len(envelope.Issues) == 0 || envelope.Issues[0] != '[' {
+		return jiraSearchResponse{}, errors.New("unexpected Jira REST response schema")
+	}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return jiraSearchResponse{}, errors.New("invalid Jira REST response")
+	}
+	for _, issue := range result.Issues {
+		if !jiraIssueKey.MatchString(issue.Key) {
+			return jiraSearchResponse{}, errors.New("Jira issue key missing or invalid")
 		}
-		line, issueEvidence, ok := parseJiraIssueEvidence(issueRaw, candidate)
-		if !ok {
-			continue
-		}
-		verified = append(verified, line)
-		verifiedEvidence = append(verifiedEvidence, issueEvidence)
 	}
-	if len(verified) > 0 {
-		return CapabilityResult{
-			Text:        "Jira · incidencias verificadas en la consulta actual:\n" + strings.Join(verified, "\n"),
-			ResultCount: len(verified), Evidence: verifiedEvidence, DirectAnswer: true,
-		}, nil
-	}
-	text := strings.TrimSpace(string(raw))
-	if len(text) > 12000 {
-		text = string([]rune(text)[:12000])
-	}
-	if text == "" || text == `""` {
-		return CapabilityResult{}, nil
-	}
-	count := len(evidence)
-	if count == 0 {
-		count = 1
-	}
-	return CapabilityResult{Text: "Rovo · resultados de búsqueda en Jira (sin verificación de campos):\n" + text, ResultCount: count, Evidence: evidence}, nil
+	return result, nil
 }
 
 var jiraIssueKey = regexp.MustCompile(`^[A-Z][A-Z0-9]*-[0-9]+$`)
 var jiraIssueKeyMention = regexp.MustCompile(`\b[A-Z][A-Z0-9]*-[0-9]+\b`)
+var jiraWord = regexp.MustCompile(`[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9_-]{3,}`)
 
-func parseJiraIssueEvidence(raw json.RawMessage, candidate EvidenceRef) (string, EvidenceRef, bool) {
-	var root any
-	if json.Unmarshal(raw, &root) != nil {
-		return "", EvidenceRef{}, false
+func compileJiraJQL(query, operatorAccountID string) (string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" || len([]rune(query)) > 2000 {
+		return "", errors.New("Jira query length rejected")
 	}
-	var issue map[string]any
-	var find func(any)
-	find = func(value any) {
-		if issue != nil {
-			return
+	if key := jiraIssueKeyMention.FindString(strings.ToUpper(query)); key != "" {
+		return "key = " + key + " ORDER BY updated DESC", nil
+	}
+	normalized := normalizedIntentText(query)
+	if containsAny(normalized, "mis tareas", "mi tarea", "mis pendientes", "pendientes mios", "asignadas a mi", "asignados a mi", "asignada a mi", "que tengo pendiente", "que tengo pendientes", "que tareas tengo", "para mi", "de mi", "a mi cargo", "requiere de mi", "requiera de mi", "necesita de mi", "necesite de mi") {
+		return jiraAssigneeJQL(operatorAccountID, containsAny(normalized, "en proceso", "en curso", "en marcha"))
+	}
+	stop := map[string]bool{
+		"que": true, "tengo": true, "tarea": true, "tareas": true, "pendiente": true, "pendientes": true,
+		"jira": true, "plan": true, "buscar": true, "busca": true, "dame": true, "muestrame": true, "cual": true, "cuales": true,
+		"para": true, "sobre": true, "estado": true, "persona": true, "asignada": true, "asignado": true,
+		"responsable": true, "fecha": true, "vencimiento": true, "hoy": true, "semana": true, "proxima": true,
+		"proximo": true, "segun": true, "reuniones": true, "reunion": true, "mañana": true, "manana": true,
+		"esta": true, "las": true, "los": true, "una": true, "con": true, "del": true, "por": true, "como": true,
+		"deberia": true, "debo": true, "hacer": true, "hacerme": true, "haga": true, "toca": true, "estan": true,
+		"alguna": true, "alguno": true, "requiera": true,
+		"en": true, "mi": true, "me": true, "proceso": true, "curso": true, "marcha": true, "requieran": true,
+		"requiere": true, "importantes": true, "importante": true, "acciones": true, "accion": true,
+		"actividades": true, "actividad": true, "trabajo": true, "dia": true, "dias": true, "ultima": true,
+		"ultimas": true, "mes": true, "meses": true, "pasada": true, "pasado": true, "pasados": true,
+		"pasadas": true, "todo": true, "todas": true, "todos": true,
+	}
+	seen := map[string]bool{}
+	var terms []string
+	for _, word := range jiraWord.FindAllString(query, -1) {
+		word = normalizedIntentText(word)
+		if stop[word] || seen[word] {
+			continue
 		}
-		switch node := value.(type) {
-		case map[string]any:
-			if key, _ := node["key"].(string); key == candidate.ID {
-				if _, ok := node["fields"].(map[string]any); ok {
-					issue = node
-					return
-				}
-			}
-			for _, child := range node {
-				find(child)
-			}
-		case []any:
-			for _, child := range node {
-				find(child)
-			}
+		seen[word] = true
+		terms = append(terms, word)
+		if len(terms) == 4 {
+			break
 		}
 	}
-	find(root)
-	if issue == nil {
-		return "", EvidenceRef{}, false
+	if len(terms) == 0 {
+		return jiraAssigneeJQL(operatorAccountID, containsAny(normalized, "en proceso", "en curso", "en marcha"))
 	}
-	fields, _ := issue["fields"].(map[string]any)
-	readName := func(value any, field string) string {
-		row, _ := value.(map[string]any)
-		name, _ := row[field].(string)
-		return strings.TrimSpace(name)
+	clauses := make([]string, 0, len(terms))
+	for _, term := range terms {
+		clauses = append(clauses, `text ~ "`+strings.ReplaceAll(term, `"`, `\\"`)+`"`)
 	}
-	summary, _ := fields["summary"].(string)
-	status := readName(fields["status"], "name")
-	assignee := readName(fields["assignee"], "displayName")
-	if assignee == "" {
-		assignee = readName(fields["assignee"], "name")
-	}
-	due, _ := fields["duedate"].(string)
-	updated, _ := fields["updated"].(string)
-	if strings.TrimSpace(summary) == "" || status == "" {
-		return "", EvidenceRef{}, false
-	}
-	if assignee == "" {
-		assignee = "sin asignar"
-	}
-	if strings.TrimSpace(due) == "" {
-		due = "sin vencimiento"
-	}
-	issueLabel := candidate.ID
-	if validEvidenceURL(candidate.URL) {
-		issueLabel = fmt.Sprintf("[%s](%s)", candidate.ID, candidate.URL)
-	}
-	line := fmt.Sprintf("%s %s · Estado: %s · Responsable: %s · Vencimiento: %s", issueLabel, short(summary), short(status), short(assignee), short(due))
-	if updated != "" {
-		line += " · Actualizada: " + short(updated)
-	}
-	candidate.Provider = "Jira"
-	candidate.Title = summary
-	candidate.RetrievedAt = time.Now()
-	return line, candidate, true
+	return strings.Join(clauses, " AND ") + " ORDER BY updated DESC", nil
 }
 
-func parseRovoEvidence(raw json.RawMessage) []EvidenceRef {
-	var root any
-	if json.Unmarshal(raw, &root) != nil {
-		return nil
+var jiraAccountID = regexp.MustCompile(`^[A-Za-z0-9:_-]{1,200}$`)
+
+func jiraAssigneeJQL(operatorAccountID string, inProgress bool) (string, error) {
+	operatorAccountID = strings.TrimSpace(operatorAccountID)
+	if !jiraAccountID.MatchString(operatorAccountID) {
+		return "", errors.New("Jira operator_account_id no configurado o no válido; no buscaré tareas de la cuenta de servicio")
 	}
-	var evidence []EvidenceRef
-	seen := map[string]bool{}
-	addRecord := func(node map[string]any) {
-		ref := EvidenceRef{Provider: "Rovo", RetrievedAt: time.Now()}
-		for key, child := range node {
-			text, ok := child.(string)
-			if !ok {
-				continue
-			}
-			switch strings.ToLower(key) {
-			case "key", "issuekey":
-				if jiraIssueKey.MatchString(strings.TrimSpace(text)) {
-					ref.ID = strings.TrimSpace(text)
-				}
-			case "id", "pageid", "contentid":
-				if ref.ID == "" {
-					ref.ID = strings.TrimSpace(text)
-				}
-			case "title", "summary", "name":
-				if ref.Title == "" {
-					ref.Title = strings.TrimSpace(text)
-				}
-			case "url", "weburl", "link":
-				if validEvidenceURL(text) {
-					ref.URL = text
-				}
-			}
-		}
-		if ref.ID == "" && ref.URL == "" {
-			return
-		}
-		identity := ref.ID + "|" + ref.URL
-		if !seen[identity] {
-			seen[identity] = true
-			evidence = append(evidence, ref)
-		}
+	status := `statusCategory != Done`
+	if inProgress {
+		status = `statusCategory = "In Progress"`
 	}
-	var findResults func(any)
-	findResults = func(value any) {
-		switch node := value.(type) {
-		case map[string]any:
-			for key, child := range node {
-				lower := strings.ToLower(key)
-				if lower == "results" || lower == "items" || lower == "issues" || lower == "matches" {
-					if rows, ok := child.([]any); ok {
-						for _, row := range rows {
-							if record, ok := row.(map[string]any); ok {
-								addRecord(record)
-							}
-						}
-					}
-					continue
-				}
-				if lower == "text" {
-					if encoded, ok := child.(string); ok {
-						var nested any
-						if json.Unmarshal([]byte(encoded), &nested) == nil {
-							findResults(nested)
-						}
-					}
-					continue
-				}
-				findResults(child)
-			}
-		case []any:
-			for _, child := range node {
-				findResults(child)
-			}
-		}
+	return `assignee = "` + operatorAccountID + `" AND ` + status + ` ORDER BY updated DESC`, nil
+}
+
+func formatJiraIssues(heading string, issues []struct {
+	Key    string `json:"key"`
+	Fields struct {
+		Summary string `json:"summary"`
+		Status  struct {
+			Name string `json:"name"`
+		} `json:"status"`
+		Assignee *struct {
+			DisplayName string `json:"displayName"`
+			AccountID   string `json:"accountId"`
+		} `json:"assignee"`
+		Due     string `json:"duedate"`
+		Updated string `json:"updated"`
+	} `json:"fields"`
+}) string {
+	lines := []string{heading}
+	if len(issues) == 0 {
+		return heading + "\nLa consulta JQL no devolvió incidencias."
 	}
-	findResults(root)
-	return evidence
+	if len(issues) > 10 {
+		issues = issues[:10]
+	}
+	for _, issue := range issues {
+		assignee, due := "sin asignar", "sin vencimiento"
+		if issue.Fields.Assignee != nil && issue.Fields.Assignee.DisplayName != "" {
+			assignee = issue.Fields.Assignee.DisplayName
+		}
+		if issue.Fields.Due != "" {
+			due = issue.Fields.Due
+		}
+		lines = append(lines, fmt.Sprintf("[%s] %s · Estado: %s · Responsable: %s · Vencimiento: %s", short(issue.Key), short(issue.Fields.Summary), short(issue.Fields.Status.Name), short(assignee), short(due)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func validEvidenceURL(raw string) bool {
@@ -582,92 +468,6 @@ func validEvidenceURL(raw string) bool {
 	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil
 }
 
-func accessibleCloudID(ctx context.Context, s *mcpSession) (string, error) {
-	raw, err := s.callTool(ctx, "getAccessibleAtlassianResources", map[string]any{})
-	if err != nil {
-		return "", err
-	}
-	var response struct {
-		ID      string `json:"id"`
-		CloudID string `json:"cloudId"`
-		Data    struct {
-			Resources []struct {
-				ID      string `json:"id"`
-				CloudID string `json:"cloudId"`
-			} `json:"resources"`
-		} `json:"data"`
-		Resources []struct {
-			ID      string `json:"id"`
-			CloudID string `json:"cloudId"`
-		} `json:"resources"`
-	}
-	if err := json.Unmarshal(raw, &response); err != nil {
-		return "", errors.New("unexpected Atlassian sites response")
-	}
-	resources := response.Resources
-	if len(resources) == 0 {
-		resources = response.Data.Resources
-	}
-	if len(resources) == 1 {
-		if resources[0].CloudID != "" {
-			return resources[0].CloudID, nil
-		}
-		if resources[0].ID != "" {
-			return resources[0].ID, nil
-		}
-	}
-	if len(resources) == 0 && (response.CloudID != "" || response.ID != "") {
-		if response.CloudID != "" {
-			return response.CloudID, nil
-		}
-		return response.ID, nil
-	}
-	return "", errors.New("select a single Atlassian cloud_id before querying")
-}
-
-func rovoHasNoResults(raw json.RawMessage) bool {
-	var value any
-	if json.Unmarshal(raw, &value) != nil {
-		return false
-	}
-	var inspect func(any) (bool, bool)
-	inspect = func(node any) (bool, bool) {
-		switch typed := node.(type) {
-		case map[string]any:
-			found := false
-			for key, child := range typed {
-				if key == "results" || key == "items" || key == "issues" || key == "matches" {
-					if rows, ok := child.([]any); ok {
-						found = true
-						if len(rows) > 0 {
-							return false, true
-						}
-						continue
-					}
-				}
-				if empty, nestedFound := inspect(child); nestedFound {
-					if !empty {
-						return false, true
-					}
-					found = true
-				}
-			}
-			return found, found
-		case []any:
-			for _, child := range typed {
-				if empty, found := inspect(child); found {
-					if !empty {
-						return false, true
-					}
-					return true, true
-				}
-			}
-		}
-		return false, false
-	}
-	empty, found := inspect(value)
-	return found && empty
-}
 func (c *Connectors) Granola(ctx context.Context) (string, error) {
 	result, err := c.GranolaResult(ctx)
 	return result.Text, err

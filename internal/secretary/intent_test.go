@@ -2,7 +2,7 @@ package secretary
 
 import "testing"
 
-func TestRovoTaskIntentCoversWorkQuestionsButNotMeetingSummaries(t *testing.T) {
+func TestJiraTaskIntentCoversWorkQuestionsButNotMeetingSummaries(t *testing.T) {
 	tests := []struct {
 		name string
 		text string
@@ -17,8 +17,8 @@ func TestRovoTaskIntentCoversWorkQuestionsButNotMeetingSummaries(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := rovoTaskIntent(tt.text); got != tt.want {
-				t.Fatalf("rovoTaskIntent(%q) = %t, want %t", tt.text, got, tt.want)
+			if got := jiraTaskIntent(tt.text); got != tt.want {
+				t.Fatalf("jiraTaskIntent(%q) = %t, want %t", tt.text, got, tt.want)
 			}
 		})
 	}

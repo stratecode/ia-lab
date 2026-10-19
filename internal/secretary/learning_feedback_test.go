@@ -22,7 +22,7 @@ func feedbackTestService(t *testing.T) (*Service, *JSONLLearningStore) {
 	service := New(model.URL, "test-key", "instructions", state, map[int64]bool{7: true, 8: true})
 	store := NewJSONLLearningStore(state)
 	service.Learning = store
-	service.Capabilities = []ReadCapability{{Name: "Rovo", Description: "tareas", Match: func(string) bool { return true }, Read: func(context.Context, string) (CapabilityResult, error) {
+	service.Capabilities = []ReadCapability{{Name: "Jira", Description: "tareas", Match: func(string) bool { return true }, Read: func(context.Context, string) (CapabilityResult, error) {
 		return CapabilityResult{Text: "ISSUE-17 pendiente", ResultCount: 1, Evidence: []EvidenceRef{{Provider: "jira", ID: "ISSUE-17"}}}, nil
 	}}}
 	return service, store

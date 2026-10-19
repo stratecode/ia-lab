@@ -8,9 +8,9 @@ import (
 // CapabilityResult contains a provider's bounded, synthesis-ready text and
 // references that were actually present in the provider response.
 type CapabilityResult struct {
-	Text        string
-	ResultCount int
-	Evidence    []EvidenceRef
+	Text         string
+	ResultCount  int
+	Evidence     []EvidenceRef
 	DirectAnswer bool
 }
 
@@ -34,7 +34,12 @@ type CapabilityOutcome struct {
 // source metadata for the common natural-language router.
 type StructuredSourceReader interface {
 	GranolaResult(context.Context) (CapabilityResult, error)
-	RovoResult(context.Context, string) (CapabilityResult, error)
+}
+
+// JiraQueryReader performs a bounded, read-only query against Jira REST using
+// JQL compiled by the secretary.
+type JiraQueryReader interface {
+	JiraQueryResult(context.Context, string) (CapabilityResult, error)
 }
 
 // GranolaQueryReader exposes query-aware retrieval when the provider supports it.

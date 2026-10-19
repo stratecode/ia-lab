@@ -19,6 +19,7 @@ const (
 	maxSharedWebBytes       = 1 << 20
 	maxSharedWebChars       = 20000
 	sharedWebCapabilityName = "Enlace web"
+	sharedWebUserAgent      = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
 var (
@@ -174,7 +175,7 @@ func readWebPage(ctx context.Context, rawURL string, client *http.Client) (Capab
 		return CapabilityResult{}, fmt.Errorf("no he podido preparar la lectura del enlace")
 	}
 	request.Header.Set("Accept", "text/html, application/xhtml+xml, text/plain;q=0.9")
-	request.Header.Set("User-Agent", "Donna-Secretary/1.0 (+https://stratecode.com)")
+	request.Header.Set("User-Agent", sharedWebUserAgent)
 	response, err := client.Do(request)
 	if err != nil {
 		return CapabilityResult{}, fmt.Errorf("no he podido leer el enlace")

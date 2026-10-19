@@ -23,7 +23,7 @@ func traceTestService(t *testing.T, read func(context.Context, string) (Capabili
 	store := NewJSONLLearningStore(state)
 	service.Learning = store
 	service.ModelLabel = "test-model"
-	service.Capabilities = []ReadCapability{{Name: "Rovo", Description: "tareas", Match: func(string) bool { return true }, Read: read}}
+	service.Capabilities = []ReadCapability{{Name: "Jira", Description: "tareas", Match: func(string) bool { return true }, Read: read}}
 	return service, store
 }
 
@@ -41,7 +41,7 @@ func TestTraceRecordsSelectedCapabilitiesAndEvidence(t *testing.T) {
 	if trace.ID == "" || trace.SchemaVersion != learningSchemaVersion || trace.Intent == "" || trace.Outcome != "success" || trace.RouterVersion != secretaryRouterVersion || trace.ModelLabel != "test-model" {
 		t.Fatalf("trace missing interaction metadata: %+v", trace)
 	}
-	if len(trace.Capabilities) != 1 || trace.Capabilities[0].Capability != "Rovo" || trace.Capabilities[0].Outcome != "success" || trace.Capabilities[0].ResultCount != 1 || len(trace.Capabilities[0].Evidence) != 1 || trace.Capabilities[0].Evidence[0].ID != "ISSUE-7" || trace.Capabilities[0].Duration <= 0 {
+	if len(trace.Capabilities) != 1 || trace.Capabilities[0].Capability != "Jira" || trace.Capabilities[0].Outcome != "success" || trace.Capabilities[0].ResultCount != 1 || len(trace.Capabilities[0].Evidence) != 1 || trace.Capabilities[0].Evidence[0].ID != "ISSUE-7" || trace.Capabilities[0].Duration <= 0 {
 		t.Fatalf("trace missing capability evidence: %+v", trace.Capabilities)
 	}
 }

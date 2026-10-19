@@ -21,11 +21,11 @@ weights are removed after principal-model validation. Reproduction:
 This increment provides browser conversation and persisted chat history.
 The shared `lab-secretary` service fronts telemetry and Open WebUI, with bounded
 Telegram history, fixed read-only commands and natural-language routing through a
-registry of read-only capabilities. Atlassian Rovo is the source for plans, tasks,
-priorities and pending activities across Jira and Confluence; Granola serves
+registry of read-only capabilities. Jira Cloud REST/JQL is the source for plans,
+tasks, priorities and pending activities; Granola serves
 meeting summaries and decisions that do not ask for tasks. Adding other sources
 should register a capability without changing the conversation flow. Correlating
-Granola with Rovo and company employees or customers remains a later phase.
+Granola with Jira and company employees or customers remains a later phase.
 The secretary keeps per-operator memory on the lab server and retrieves relevant
 prior exchanges. Telegram and Open WebUI use the same routing, capability and
 memory layer; `/new` clears shared short context and `/forget` deletes shared

@@ -111,7 +111,7 @@ func TestHistoricalKnowledgeDoesNotOverrideLiveSourceState(t *testing.T) {
 	if err := s.Learning.SaveKnowledge(KnowledgeItem{OperatorID: 7, Type: KnowledgeTypeFact, Status: KnowledgeApproved, Subject: "proyecto Atlas", Value: "Históricamente estaba abierto", CreatedAt: time.Now(), UpdatedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	s.Capabilities = []ReadCapability{{Name: "Rovo", Description: "Jira", Match: func(string) bool { return true }, Read: func(context.Context, string) (CapabilityResult, error) {
+	s.Capabilities = []ReadCapability{{Name: "Jira", Description: "Jira", Match: func(string) bool { return true }, Read: func(context.Context, string) (CapabilityResult, error) {
 		return CapabilityResult{Text: "Estado actual en Jira: cerrado", ResultCount: 1}, nil
 	}}}
 	if _, err := s.ReplyInConversation(context.Background(), 7, "telegram", "chat-a", "¿Qué estado actual tiene la tarea del proyecto Atlas?"); err != nil {

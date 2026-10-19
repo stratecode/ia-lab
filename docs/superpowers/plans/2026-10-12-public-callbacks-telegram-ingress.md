@@ -10,10 +10,14 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-12-public-callbacks-telegram-ingress-design.md`
 
+> **Current-state note (2026-10-19):** this historical plan's Jira OAuth
+> callback steps are retired. Jira now uses direct REST/JQL with a private
+> service token; only Granola retains OAuth callbacks.
+
 ## Global Constraints
 
 - Route only external IPv4 TCP 443 from the router to `192.168.0.85:443`; do not use UPnP or forward ports 80, 22, or application ports.
-- Expose only `POST /telegram/webhook`, `GET /oauth/jira/callback`, and `GET /oauth/granola/callback` on `assistant.stratecode.com`; reject other paths, methods, and unknown TLS hosts.
+- Expose only `POST /telegram/webhook` and `GET /oauth/granola/callback` on `assistant.stratecode.com`; reject other paths, methods, and unknown TLS hosts.
 - Preserve existing LAN/VPN access lists for chat, Cockpit, and monitoring; never proxy the public vhost to Open WebUI, model, telemetry, or administrative interfaces.
 - Keep secretary, model, telemetry, and OAuth callback listeners on loopback. Keep reverse SSH forwards bound to lab loopback.
 - Preserve OAuth PKCE S256, state checks, provider-host allowlists, token validation, and private token storage. Callback access logs must omit query strings.
@@ -97,7 +101,7 @@ Expected: PASS; the deployed mode remains `polling`.
 
 - [x] **Step 7: Commit** mode wiring, tests, and Ansible runtime configuration.
 
-### Task 3: Public OAuth redirect URIs and temporary reverse tunnel
+### Task 3: Granola OAuth redirect URI and temporary reverse tunnel
 
 **Files:**
 - Modify: `scripts/connect-secretary.py`
@@ -107,12 +111,12 @@ Expected: PASS; the deployed mode remains `polling`.
 **Interfaces:**
 - Add CLI argument `--public-origin`; when absent, preserve the current loopback redirect URI.
 - When set, require exactly `https://assistant.stratecode.com` with no path, credentials, port, query, or fragment. Build provider callbacks as `/oauth/{provider}/callback` while the local helper continues to listen on `127.0.0.1:<port>/callback`.
-- Preserve discovery endpoint validation, PKCE S256, state validation, read-only Jira scopes, and private token output.
+- Preserve Granola discovery endpoint validation, PKCE S256, state validation, and private token output. Jira does not use OAuth.
 
-- [ ] **Step 1: Add failing OAuth tests** for the exact Jira and Granola public callback URIs, callback path mapping, rejected origins, mismatched/repeated state, and unchanged default loopback behavior.
+- [ ] **Step 1: Add failing OAuth tests** for the exact Granola public callback URI, callback path mapping, rejected origins, mismatched/repeated state, and unchanged default loopback behavior.
 - [ ] **Step 2: Run `python3 scripts/test-secretary-oauth.py` and confirm the new public-origin tests fail.**
 - [ ] **Step 3: Implement `--public-origin` and a provider-specific callback URI helper**; keep the existing local callback listener bound to loopback.
-- [ ] **Step 4: Document the temporary command** using reverse forwards bound to `127.0.0.1` on the lab and the existing local helper ports 18765/18766. Document that provider consent is successful only after a read-only query.
+- [ ] **Step 4: Document the temporary command** using a reverse forward bound to `127.0.0.1` on the lab and the existing local helper port 18766. Document that provider consent is successful only after a read-only query.
 - [ ] **Step 5: Run OAuth tests and Python syntax validation.**
 
 Run: `python3 scripts/test-secretary-oauth.py && python3 -m py_compile scripts/connect-secretary.py scripts/test-secretary-oauth.py`
@@ -134,7 +138,7 @@ Expected: PASS; invalid public origins and invalid callback state are rejected.
 - Add `LAB_ASSISTANT_DOMAIN=assistant.stratecode.com` and `lab_assistant_domain`; leave `.env` untouched.
 - Ensure Route53 has `assistant.stratecode.com CNAME -> vpn-lab.stratecode.com` in the existing hosted zone. Detect and fail on a conflicting record type instead of replacing it silently.
 - Add the assistant hostname to the existing Certbot DNS-01 SAN set.
-- Create a dedicated Nginx vhost with exact routes: POST `/telegram/webhook` to `127.0.0.1:8082/telegram/webhook`; GET `/oauth/jira/callback` to `127.0.0.1:18765/callback`; GET `/oauth/granola/callback` to `127.0.0.1:18766/callback`.
+- Create a dedicated Nginx vhost with exact routes: POST `/telegram/webhook` to `127.0.0.1:8082/telegram/webhook`; GET `/oauth/granola/callback` to `127.0.0.1:18766/callback`.
 - For callback paths, log only method, normalized path, and status. Reject unknown TLS hosts, paths, and methods. Preserve every existing private vhost ACL.
 
 - [x] **Step 1: Add failing Bats contract tests** for the CNAME target, certificate SAN, exact Nginx routes, loopback upstreams, sanitized logs, and rejection of unlisted paths.

@@ -138,8 +138,8 @@ func boundedCapability(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "granola":
 		return "granola"
-	case "rovo":
-		return "rovo"
+	case "jira":
+		return "jira"
 	case "memory":
 		return "memory"
 	case "none", "":

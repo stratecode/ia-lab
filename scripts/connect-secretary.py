@@ -16,10 +16,6 @@ from urllib.parse import urlencode, urlsplit, parse_qs
 from urllib.request import Request, build_opener, HTTPSHandler, HTTPRedirectHandler
 
 PROVIDERS = {
-    "jira": {"resource": "https://mcp.atlassian.com/v2/mcp",
-             "metadata": "https://mcp.atlassian.com/.well-known/oauth-protected-resource/v2/mcp",
-             "auth_host": "auth.atlassian.com",
-             "scope": "read:me read:jira:agent-interface search:jira:agent-interface offline_access"},
     "granola": {"resource": "https://mcp.granola.ai/mcp",
                 "metadata": "https://mcp.granola.ai/.well-known/oauth-protected-resource",
                 "auth_host": "mcp-auth.granola.ai", "scope": "mcp"},
@@ -113,7 +109,7 @@ def save_config(path, provider, value):
             os.unlink(tmp)
 
 
-def connect(provider, path, port, cloud_id, public_origin=None):
+def connect(provider, path, port, public_origin=None):
     auth = discover(provider)
     redirect = callback_uri(provider, port, public_origin)
     state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(48)
@@ -165,14 +161,10 @@ def connect(provider, path, port, cloud_id, public_origin=None):
     token = request_json(auth['token_endpoint'], payload, form=True)
     if not token.get('access_token') or token.get('token_type', 'Bearer').lower() != 'bearer':
         raise ValueError('OAuth token response rejected')
-    if provider == 'jira' and any(s.startswith(('write:', 'delete:', 'manage:')) for s in token.get('scope', '').split()):
-        raise ValueError('Write scopes rejected: authorize read-only access')
     value = {'server_url': PROVIDERS[provider]['resource'], 'access_token': token['access_token'],
              'refresh_token': token.get('refresh_token', ''), 'client_id': client['client_id'],
              'client_secret': client.get('client_secret', ''), 'token_endpoint': auth['token_endpoint'],
              'expires_at': int(time.time()) + int(token.get('expires_in', 3600))}
-    if provider == 'jira' and cloud_id:
-        value['cloud_id'] = cloud_id
     save_config(path, provider, value)
     print(f'{provider}: OAuth saved privately to {path.expanduser()}', flush=True)
 
@@ -183,7 +175,6 @@ def main():
     parser.add_argument('--discover', action='store_true')
     parser.add_argument('--output', type=Path, default=Path('~/.config/stratecode-lab/secretary-connectors.json'))
     parser.add_argument('--port', type=int, default=18765)
-    parser.add_argument('--cloud-id', default='')
     parser.add_argument('--public-origin', default=None)
     args = parser.parse_args()
     try:
@@ -191,7 +182,7 @@ def main():
             auth = discover(args.provider)
             print(json.dumps({k: auth[k] for k in ('issuer', 'authorization_endpoint', 'token_endpoint', 'registration_endpoint')}, indent=2))
         else:
-            connect(args.provider, args.output, args.port, args.cloud_id, args.public_origin)
+            connect(args.provider, args.output, args.port, args.public_origin)
     except KeyboardInterrupt:
         raise SystemExit('OAuth cancelled')
     except Exception as error:

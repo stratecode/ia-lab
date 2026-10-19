@@ -45,16 +45,16 @@ func localIntent(text string) secretaryIntent {
 	return intentGeneral
 }
 
-// rovoTaskIntent keeps planning and pending-work questions on the broader
-// Atlassian source, even when the user mentions meetings. Meeting summaries
-// without an action request continue to use Granola.
-func rovoTaskIntent(text string) bool {
+// jiraTaskIntent routes task and planning questions to Jira REST/JQL, even
+// when the user mentions meetings. Meeting summaries without action requests
+// continue to use Granola.
+func jiraTaskIntent(text string) bool {
 	query := normalizedIntentText(text)
 	if jiraIssueKeyMention.MatchString(strings.ToUpper(text)) {
 		return true
 	}
 	return containsAny(query,
-		"rovo", "jira", "confluence", "plan", "planificacion", "planificar",
+		"jira", "plan", "planificacion", "planificar",
 		"tarea", "pendiente", "actividad", "accion", "hacer", "ejecut", "realizar", "llevar a cabo",
 		"acciones por hacer", "que debo hacer", "que tengo que hacer",
 		"siguiente paso", "prioridad", "priorizar",
