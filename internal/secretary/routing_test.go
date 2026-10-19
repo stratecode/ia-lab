@@ -42,6 +42,9 @@ func TestCapabilitiesForIntentSelectsExpectedSources(t *testing.T) {
 		{name: "work task", query: "¿Qué tareas tengo pendientes?", want: []string{"Jira"}},
 		{name: "specific Jira issue fields", query: "Dame el estado, la persona asignada y el vencimiento de SW-76, actualizar importador de locations.", want: []string{"Jira"}},
 		{name: "meeting follow-up task", query: "¿Qué tareas debería hacer según las reuniones de esta mañana?", want: []string{"Granola", "Jira"}},
+		{name: "only Granola explicitly excludes Jira", query: "Solo Granola: dime una reunión reciente. No consultes Jira.", want: []string{"Granola"}},
+		{name: "meeting question excludes Jira without only wording", query: "¿Qué se dijo en una reunión reciente? No consultes Jira.", want: []string{"Granola"}},
+		{name: "only Jira explicitly excludes Granola", query: "Solo Jira: ¿qué estado tiene PMI-46? No consultes Granola.", want: []string{"Jira"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

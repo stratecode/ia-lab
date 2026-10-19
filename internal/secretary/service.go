@@ -627,9 +627,17 @@ func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapabilit
 			}
 		}
 	}
+	if only := explicitlyRequestedCapabilityOnly(query); only != "" {
+		for _, capability := range registered {
+			if strings.EqualFold(capability.Name, only) && capability.Read != nil && capability.Match != nil && capability.Match(query) {
+				return []ReadCapability{capability}, true, query
+			}
+		}
+		return nil, false, query
+	}
 
 	meetingIntent := localIntent(query) == intentCapability && containsAny(normalizedIntentText(query), "reunion", "reuniones", "granola")
-	taskIntent := jiraTaskIntent(query)
+	taskIntent := jiraTaskIntent(query) && !explicitlyExcludedCapability(query, "Jira")
 	var previousMeetingQuery string
 	if taskIntent && !hasExplicitJiraReference(query) && (refersToPriorMeeting(query) || !meetingIntent) {
 		userTurns := 0
@@ -660,6 +668,9 @@ func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapabilit
 		if capability.Name == "" || capability.Read == nil || capability.Match == nil {
 			continue
 		}
+		if explicitlyExcludedCapability(query, capability.Name) {
+			continue
+		}
 		if capability.Match(query) || (taskIntent && meetingIntent && previousMeetingQuery != "" && capability.Match(previousMeetingQuery)) {
 			matched = append(matched, capability)
 		}
@@ -681,6 +692,29 @@ func (s *Service) capabilitiesFor(query string, history []Turn) ([]ReadCapabilit
 		return fallback, true, readQuery
 	}
 	return nil, false, query
+}
+
+func explicitlyRequestedCapabilityOnly(query string) string {
+	normalized := normalizedIntentText(query)
+	for _, capability := range []string{"Granola", "Jira"} {
+		name := strings.ToLower(capability)
+		if containsAny(normalized, "solo "+name, "unicamente "+name, "exclusivamente "+name, "only "+name) {
+			return capability
+		}
+	}
+	return ""
+}
+
+func explicitlyExcludedCapability(query, capability string) bool {
+	normalized := normalizedIntentText(query)
+	switch strings.ToLower(strings.TrimSpace(capability)) {
+	case "jira":
+		return containsAny(normalized, "no consultes jira", "no consultar jira", "no uses jira", "no usar jira", "sin consultar jira", "sin jira", "no jira")
+	case "granola":
+		return containsAny(normalized, "no consultes granola", "no consultar granola", "no uses granola", "no usar granola", "sin consultar granola", "sin granola", "no granola")
+	default:
+		return false
+	}
 }
 
 func refersToPriorMeeting(query string) bool {
