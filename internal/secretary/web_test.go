@@ -58,8 +58,8 @@ func TestReadWebPageExtractsTextAndKeepsEvidence(t *testing.T) {
 		if request.URL.String() != "https://example.test/brief" {
 			t.Fatalf("unexpected URL: %s", request.URL)
 		}
-		if request.Header.Get("Accept") == "" || request.Header.Get("User-Agent") == "" {
-			t.Fatal("expected explicit content negotiation and user agent")
+		if request.Header.Get("Accept") == "" || !strings.Contains(request.Header.Get("User-Agent"), "Mozilla/5.0") || !strings.Contains(request.Header.Get("User-Agent"), "Chrome/") {
+			t.Fatalf("expected browser-style user agent, got %q", request.Header.Get("User-Agent"))
 		}
 		return &http.Response{
 			StatusCode: http.StatusOK,
