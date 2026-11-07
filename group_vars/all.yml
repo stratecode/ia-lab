@@ -295,6 +295,8 @@ lab_granola_api_key: "{{ lookup('env', 'LAB_GRANOLA_API_KEY') }}"
 lab_granola_webhook_secret: "{{ lookup('env', 'LAB_GRANOLA_WEBHOOK_SECRET') }}"
 lab_granola_notification_token: "{{ lookup('env', 'LAB_GRANOLA_NOTIFICATION_TOKEN') }}"
 lab_granola_webhook_url: "https://{{ lab_assistant_domain }}/webhooks/granola"
+# "donna" gives the secretary her character in code-built replies; "neutral" removes it.
+lab_secretary_persona: "{{ lookup('env', 'LAB_SECRETARY_PERSONA') | default('donna', true) }}"
 lab_secretary_intent_mode: "{{ lookup('env', 'LAB_INTENT_MODE') | default('enabled', true) }}"
 lab_secretary_transcription_enabled: false
 lab_secretary_voice_enabled: false

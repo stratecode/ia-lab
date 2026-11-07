@@ -100,6 +100,7 @@
       LAB_SECRETARY_QWEN_UPSTREAM=http://127.0.0.1:{{ qwen_eval_port }}
       LAB_SECRETARY_QWEN_MODEL_KEY={{ qwen_eval_api_key }}
       LAB_SECRETARY_INSTRUCTIONS=/etc/lab-secretary/instructions.md
+      LAB_SECRETARY_PERSONA={{ lab_secretary_persona }}
       LAB_SECRETARY_TELEGRAM_MODE={{ lab_secretary_telegram_mode }}
       LAB_TELEGRAM_BOT_TOKEN={{ orchestrator_telegram_bot_token }}
       LAB_TELEGRAM_ALLOWED_USERS={{ orchestrator_telegram_allowed_users }}

@@ -49,6 +49,7 @@ func main() {
 		log.Fatal("instructions file required")
 	}
 	service := secretary.New(env("LAB_SECRETARY_UPSTREAM", "http://127.0.0.1:8081"), os.Getenv("LAB_SECRETARY_MODEL_KEY"), string(instructions), env("STATE_DIRECTORY", "/var/lib/lab-secretary"), allowed)
+	secretary.SetCharacter(secretary.ParseCharacterMode(os.Getenv("LAB_SECRETARY_PERSONA")))
 	identityURL, identityToken := strings.TrimSpace(os.Getenv("LAB_IDENTITY_URL")), strings.TrimSpace(os.Getenv("LAB_IDENTITY_TOKEN"))
 	if identityURL != "" || identityToken != "" {
 		if identityURL == "" || len(identityToken) < 32 {

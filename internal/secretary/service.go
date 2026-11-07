@@ -652,9 +652,13 @@ func (s *Service) replyWithHistoryContext(ctx context.Context, user int64, chann
 		if negatedAction {
 			answer = "Entendido; no aplicaré ningún cambio."
 		} else {
-			answer = "¿Qué fuente o información quieres que consulte?"
+			answer = clarifyQuestion(text, time.Now())
 		}
 	default:
+		if !syntheticScenario && len(memories) == 0 && statusQuestionWithoutSource(text) {
+			answer = noDataAnswer(text, time.Now())
+			break
+		}
 		emitInteraction(InteractionEvent{Kind: EventStageChanged, Stage: "sintetizando la respuesta"})
 		if progress != nil {
 			progress("preparando la respuesta")
