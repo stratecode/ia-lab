@@ -74,6 +74,10 @@ type Service struct {
 	voiceMetrics                          *VoiceMetrics
 	voiceMetricsOnce                      sync.Once
 	diagnostics                           *conversationLog
+	// Voice and VoiceAudio back the OpenAI-compatible audio endpoints used by
+	// Open WebUI's call mode. Both are nil when speech is not configured.
+	Voice      SpeechProcessor
+	VoiceAudio AudioConverter
 }
 
 func New(upstream, key, instructions, stateDir string, allowed map[int64]bool) *Service {
@@ -1583,6 +1587,14 @@ func (s *Service) Handler() http.Handler {
 		}
 		if subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+s.Key)) != 1 || s.Key == "" {
 			http.Error(w, "unauthorised", 401)
+			return
+		}
+		switch r.URL.Path {
+		case "/v1/audio/transcriptions":
+			s.handleTranscription(w, r)
+			return
+		case "/v1/audio/speech":
+			s.handleSpeech(w, r)
 			return
 		}
 		if r.URL.Path != "/v1/chat/completions" && r.URL.Path != "/v1/models" {

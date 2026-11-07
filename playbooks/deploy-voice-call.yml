@@ -1,0 +1,187 @@
+# Voice calls with Donna from the browser (Open WebUI call mode).
+#
+#   1. a second Whisper instance that encodes a reduced audio window (--audio-ctx),
+#      used for short utterances; Telegram's long notes keep the full-window one
+#   2. the secretary learns about it, about Piper (its URL is empty while Telegram
+#      voice replies are off; setting it does not turn them on) and gets a
+#      vocabulary prompt for Whisper
+#   3. Open WebUI uses the secretary's OpenAI-compatible audio endpoints for
+#      speech-to-text and text-to-speech
+#
+# Deploy the secretary binary first (playbooks/deploy-secretary-runtime.yml): it
+# contains the /v1/audio/* endpoints. Nothing here prints a credential.
+- name: Enable voice calls with Donna in Open WebUI
+  hosts: lab
+  become: true
+  vars:
+    whisper_unit: /etc/systemd/system/lab-whisper.service
+    whisper_call_unit: /etc/systemd/system/lab-whisper-call.service
+    whisper_call_port: 8185
+    piper_port: 8084
+    whisper_audio_ctx: 768
+    # ggml-small-q5_1.bin (about 3 s per clip) or ggml-base-q5_1.bin (about 1 s,
+    # less robust to noise and accents). Swap with -e whisper_call_model=ggml-base-q5_1.bin
+    whisper_call_model: ggml-small-q5_1.bin
+    whisper_models_dir: /srv/ai-lab/lab-speech/models
+    secretary_env: /etc/lab-secretary/secretary.env
+    open_webui_dir: /srv/ai-lab/open-webui
+    open_webui_env: /srv/ai-lab/open-webui/open-webui.env
+    secretary_port: 8082
+    voice_vocabulary: "Conversación en español con Donna, la secretaria personal de Fran. Palabras: Jira, Granola, Donna, PMI, STRAT, sprint, backlog, Valentina, Gonzalo, Gustavo."
+  tasks:
+    - name: Read the existing Whisper unit
+      ansible.builtin.slurp:
+        src: "{{ whisper_unit }}"
+      register: whisper_source
+
+    - name: Derive the short-utterance unit from it
+      ansible.builtin.set_fact:
+        call_unit_text: >-
+          {{ (whisper_source.content | b64decode)
+             | regex_replace('--port [0-9]+', '--port ' ~ whisper_call_port)
+             | regex_replace('--model [^ ]+', '--model ' ~ whisper_models_dir ~ '/' ~ whisper_call_model)
+             | regex_replace('--no-gpu', '--no-gpu --audio-ctx ' ~ whisper_audio_ctx)
+             | regex_replace('Description=.*', 'Description=Local CPU Whisper for short voice-call utterances') }}
+
+    - name: Refuse to continue if the derived unit does not look right
+      ansible.builtin.assert:
+        that:
+          - "('--port ' ~ whisper_call_port) in call_unit_text"
+          - "('--audio-ctx ' ~ whisper_audio_ctx) in call_unit_text"
+          - "whisper_call_model in call_unit_text"
+          - "'whisper-server' in call_unit_text"
+
+    - name: Fetch the base model when it is the chosen one (pinned revision, checked)
+      ansible.builtin.get_url:
+        url: https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base-q5_1.bin
+        dest: "{{ whisper_models_dir }}/ggml-base-q5_1.bin"
+        checksum: sha256:422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898
+        mode: "0644"
+      when: whisper_call_model == 'ggml-base-q5_1.bin'
+
+    - name: Install the short-utterance Whisper unit
+      ansible.builtin.copy:
+        content: "{{ call_unit_text }}"
+        dest: "{{ whisper_call_unit }}"
+        mode: "0644"
+      register: call_unit
+
+    - name: Start it
+      ansible.builtin.systemd:
+        name: lab-whisper-call
+        state: "{{ 'restarted' if call_unit.changed else 'started' }}"
+        enabled: true
+        daemon_reload: true
+
+    - name: Wait for its health endpoint
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ whisper_call_port }}/health"
+        status_code: 200
+      register: call_health
+      until: call_health.status == 200
+      retries: 30
+      delay: 2
+
+    - name: Tell the secretary about the fast instance and the vocabulary
+      ansible.builtin.lineinfile:
+        path: "{{ secretary_env }}"
+        regexp: "^{{ item.key }}="
+        line: "{{ item.key }}={{ item.value }}"
+        mode: "0600"
+        backup: true
+      loop:
+        - { key: LAB_PIPER_URL, value: "http://127.0.0.1:{{ piper_port }}" }
+        - { key: LAB_WHISPER_FAST_URL, value: "http://127.0.0.1:{{ whisper_call_port }}" }
+        - { key: LAB_SECRETARY_VOCABULARY, value: "\"{{ voice_vocabulary }}\"" }
+      loop_control:
+        label: "{{ item.key }}"
+      register: secretary_env_change
+
+    - name: Restart the secretary when its settings changed
+      ansible.builtin.systemd:
+        name: lab-secretary
+        state: restarted
+      when: secretary_env_change.changed
+
+    - name: Wait for the secretary
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ secretary_port }}/health"
+        status_code: 200
+      register: secretary_health
+      until: secretary_health.status == 200
+      retries: 20
+      delay: 2
+
+    - name: Point Open WebUI's speech engines at the secretary
+      ansible.builtin.command:
+        argv: [python3, "-", "{{ open_webui_env }}", "{{ secretary_port }}"]
+        stdin: |
+          import json, os, sys, tempfile
+          path, port = sys.argv[1], sys.argv[2]
+          lines = open(path).read().splitlines()
+          values = {}
+          for line in lines:
+              if "=" in line and not line.startswith("#"):
+                  key, _, value = line.partition("=")
+                  values[key] = value
+          urls = values.get("OPENAI_API_BASE_URLS", "").split(";")
+          keys = values.get("OPENAI_API_KEYS", "").split(";")
+          index = next((i for i, url in enumerate(urls) if ":" + port + "/" in url + "/"), None)
+          if index is None or index >= len(keys) or not keys[index]:
+              raise SystemExit("secretary connection not found in the Open WebUI environment")
+          base = urls[index].rstrip("/")
+          wanted = {
+              "AUDIO_STT_ENGINE": "openai",
+              "AUDIO_STT_MODEL": "whisper-1",
+              "AUDIO_STT_OPENAI_API_BASE_URL": base,
+              "AUDIO_STT_OPENAI_API_KEY": keys[index],
+              "AUDIO_TTS_ENGINE": "openai",
+              "AUDIO_TTS_MODEL": "tts-1",
+              "AUDIO_TTS_VOICE": "donna",
+              "AUDIO_TTS_OPENAI_API_BASE_URL": base,
+              "AUDIO_TTS_OPENAI_API_KEY": keys[index],
+          }
+          changed = False
+          for key, value in wanted.items():
+              line = key + "=" + value
+              for i, existing in enumerate(lines):
+                  if existing.startswith(key + "="):
+                      if existing != line:
+                          lines[i] = line
+                          changed = True
+                      break
+              else:
+                  lines.append(line)
+                  changed = True
+          if changed:
+              directory = os.path.dirname(path)
+              handle, temp = tempfile.mkstemp(dir=directory)
+              with os.fdopen(handle, "w") as out:
+                  out.write("\n".join(lines) + "\n")
+              os.chmod(temp, 0o600)
+              os.replace(temp, path)
+          print(json.dumps({"changed": changed}))
+      register: owui_env
+      changed_when: (owui_env.stdout | from_json).changed
+      no_log: true
+
+    - name: Recreate Open WebUI when its environment changed
+      ansible.builtin.command: docker compose up -d open-webui
+      args:
+        chdir: "{{ open_webui_dir }}"
+      when: owui_env.changed
+
+    - name: Verify Open WebUI is healthy
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - open-webui
+          - python3
+          - -c
+          - "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ['PORT'] + '/health', timeout=5)"
+      register: owui_health
+      changed_when: false
+      retries: 30
+      delay: 2
+      until: owui_health.rc == 0

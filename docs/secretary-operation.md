@@ -328,6 +328,24 @@ transcript is written to application logs or metrics; scratch conversion data
 is held in memory, and Whisper runs with a private temporary directory. Telegram
 renders Markdown bold as HTML and escapes other markup.
 
+## Voice calls from Open WebUI
+
+`lab-secretary` serves two OpenAI-compatible audio endpoints under `/v1/audio/`, protected
+by the same bearer key as the chat endpoint, so Open WebUI's call mode can use the local
+speech services:
+
+| Endpoint | Behaviour |
+|---|---|
+| `POST /v1/audio/transcriptions` | Multipart upload (`file`). The audio is converted to 16 kHz WAV in memory and sent to Whisper with Spanish recognition and the vocabulary prompt. Answers `{"text": ...}`. Clips of up to 14 s go to the short-utterance Whisper (`LAB_WHISPER_FAST_URL`), longer ones to the full-window instance. |
+| `POST /v1/audio/speech` | JSON (`input`, up to 4,000 characters). The text is rewritten to be spoken (`SpokenText`: numbers, issue keys, ISO dates, percentages and euros in words; no Markdown, links or emojis) and synthesised by Piper. Answers a WAV file. |
+
+Neither endpoint stores audio or text, and neither logs content; only the phase counters
+`lab_secretary_voice_phase_calls_total` and durations are recorded. `LAB_PIPER_URL` must be
+set for synthesis; setting it does not turn on Telegram voice replies, which stay off.
+`LAB_SECRETARY_VOCABULARY` is Whisper's initial prompt, also used for Telegram voice notes.
+Deploy with `playbooks/deploy-voice-call.yml` after the secretary binary; see
+[the voice plan](superpowers/plans/2026-11-07-donna-voice.md) for measurements and options.
+
 ## Conversation memory
 
 Short-term history is scoped to the operator, channel, and conversation ID. It

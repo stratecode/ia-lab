@@ -16,6 +16,10 @@ import (
 	"time"
 )
 
+// DefaultVocabulary is Whisper's initial prompt: it nudges the recogniser towards
+// the words Donna's conversations actually contain.
+const DefaultVocabulary = "Conversación en español con Donna, la secretaria personal de Fran. Palabras: Jira, Granola, Donna, sprint, backlog."
+
 const (
 	maxWhisperResponseBytes = 1 << 20
 	maxSpeechResponseBytes  = 50_000_000
@@ -36,8 +40,15 @@ type AudioConverter interface {
 
 // HTTPVoiceClient calls the loopback Whisper and Piper HTTP services.
 type HTTPVoiceClient struct {
-	whisperURL             string
-	piperURL               string
+	whisperURL string
+	piperURL   string
+	// FastWhisperURL, when set, serves short clips (up to fastWhisperMaxSeconds)
+	// from a Whisper instance that encodes a reduced audio window. It answers in
+	// about half the time; longer clips keep using the full-window instance.
+	FastWhisperURL string
+	// Vocabulary is sent to Whisper as its initial prompt so proper nouns such as
+	// Jira or team names are spelled correctly.
+	Vocabulary             string
 	client                 *http.Client
 	maxSpeechResponseBytes int64
 }
@@ -75,6 +86,11 @@ func (c *HTTPVoiceClient) Transcribe(ctx context.Context, wav []byte) (string, e
 	if err := writer.WriteField("language", "es"); err != nil {
 		return "", errors.New("speech transcription failed")
 	}
+	if prompt := strings.TrimSpace(c.Vocabulary); prompt != "" {
+		if err := writer.WriteField("prompt", prompt); err != nil {
+			return "", errors.New("speech transcription failed")
+		}
+	}
 	part, err := writer.CreateFormFile("file", "voice.wav")
 	if err != nil {
 		return "", errors.New("speech transcription failed")
@@ -85,7 +101,11 @@ func (c *HTTPVoiceClient) Transcribe(ctx context.Context, wav []byte) (string, e
 	if err := writer.Close(); err != nil {
 		return "", errors.New("speech transcription failed")
 	}
-	endpoint, err := localEndpoint(c.whisperURL, "inference")
+	base := c.whisperURL
+	if c.FastWhisperURL != "" && wavSeconds(wav) <= fastWhisperMaxSeconds {
+		base = c.FastWhisperURL
+	}
+	endpoint, err := localEndpoint(base, "inference")
 	if err != nil {
 		return "", errors.New("speech transcription failed")
 	}
@@ -117,6 +137,23 @@ func (c *HTTPVoiceClient) Transcribe(ctx context.Context, wav []byte) (string, e
 		return "", errors.New("speech transcription failed")
 	}
 	return transcript, nil
+}
+
+// fastWhisperMaxSeconds is what a 768-frame audio context can hold (about 15 s)
+// with a margin; anything longer would be cut off by the fast instance.
+const fastWhisperMaxSeconds = 14.0
+
+// wavSeconds returns the duration of a PCM WAV payload, or a very large number
+// when the header cannot be read so the clip goes to the full-window instance.
+func wavSeconds(wav []byte) float64 {
+	if len(wav) < 44 || !validWAV(wav) {
+		return 1e9
+	}
+	byteRate := float64(uint32(wav[28]) | uint32(wav[29])<<8 | uint32(wav[30])<<16 | uint32(wav[31])<<24)
+	if byteRate <= 0 {
+		return 1e9
+	}
+	return float64(len(wav)-44) / byteRate
 }
 
 // Synthesize asks Piper for a WAV response with a fixed maximum response size.

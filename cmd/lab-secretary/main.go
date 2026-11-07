@@ -136,6 +136,14 @@ func main() {
 	if transcriptionEnabled && !configureVoiceInput(bot, true, env("LAB_WHISPER_URL", ""), env("LAB_PIPER_URL", ""), env("LAB_FFMPEG_BINARY", "/usr/bin/ffmpeg")) {
 		log.Print("secretary_transcription_disabled_missing_whisper_endpoint")
 	}
+	if client, ok := bot.Speech.(*secretary.HTTPVoiceClient); ok {
+		// The same speech clients also serve Open WebUI's call mode through the
+		// OpenAI-compatible audio endpoints of the secretary.
+		client.FastWhisperURL = strings.TrimSpace(os.Getenv("LAB_WHISPER_FAST_URL"))
+		client.Vocabulary = env("LAB_SECRETARY_VOCABULARY", secretary.DefaultVocabulary)
+		service.Voice = client
+		service.VoiceAudio = bot.Audio
+	}
 	var queue secretary.TelegramUpdateQueue
 	webhookSecret := ""
 	if mode == "webhook" {

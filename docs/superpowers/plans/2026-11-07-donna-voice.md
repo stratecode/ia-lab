@@ -1,7 +1,37 @@
 # Hablar con Donna por voz: qué hay, qué falta y en qué orden
 
-Estado: desglose del 7 de noviembre de 2026, sin implementar. Se apoya en mediciones
+Estado: **la opción B (modo llamada de Open WebUI) está implementada y desplegada** el 7 de
+noviembre de 2026; las demás opciones y fases siguen sin hacer. Se apoya en mediciones
 hechas en el lab ese mismo día.
+
+## Qué se implementó (opción B, fases 1 y 2 para el navegador)
+
+- **Texto hablado:** `internal/secretary/spoken.go` convierte cifras, claves de Jira, fechas
+  ISO, porcentajes, euros y horas a palabras, y quita Markdown, enlaces, emojis y marcadores
+  de datos ocultos. «PMI-67 vence el 2026-11-12» se dice «pe eme i sesenta y siete vence el
+  doce de noviembre de dos mil veintiséis».
+- **Puntos de entrada compatibles con OpenAI** en `lab-secretary`
+  (`internal/secretary/voice_api.go`): `POST /v1/audio/transcriptions` y
+  `POST /v1/audio/speech`. Sin estado, con la misma clave del servicio, sin guardar audio ni
+  texto. Open WebUI convierte el WAV de la síntesis a MP3 por su cuenta.
+- **Whisper rápido** (`lab-whisper-call`, puerto 8185, `--audio-ctx 768`) para frases de hasta
+  14 s: unos 3 s por clip frente a 5-6 s. Las notas largas de Telegram siguen usando el
+  Whisper de ventana completa.
+- **Vocabulario** para Whisper (`LAB_SECRETARY_VOCABULARY`), que ahora también mejora las
+  notas de voz de Telegram.
+- **Open WebUI** usa esos servicios como motor de voz a texto y de texto a voz, con la voz
+  `donna`, configurado por entorno (`playbooks/deploy-voice-call.yml`, sin teclear claves).
+
+**Comprobado:** síntesis y reconocimiento de extremo a extremo en el host (audio WebM/Opus
+como lo envía el navegador); el botón de leer en voz alta de Open WebUI llama a nuestra
+síntesis; la configuración de los dos motores consta en Open WebUI.
+**Sin comprobar:** una conversación real con micrófono, porque el navegador automatizado no
+puede hablar. Hace falta una prueba tuya con voz real.
+
+**Cómo probarlo:** en `chat.stratecode.com`, abre un chat y pulsa el botón de llamada (el
+icono de ondas junto al cuadro de mensaje) y permite el micrófono. Si la transcripción tarda
+demasiado, se puede pasar el Whisper rápido a `base` (≈1 s) con
+`ansible-playbook playbooks/deploy-voice-call.yml -e whisper_call_model=ggml-base-q5_1.bin`.
 
 ## Objetivo
 
