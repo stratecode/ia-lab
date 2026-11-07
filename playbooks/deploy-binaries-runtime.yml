@@ -1,0 +1,70 @@
+- name: Replace only the Donna runtime binaries without touching configuration
+  hosts: all
+  become: true
+  vars:
+    runtime_binaries:
+      - { name: donna-granola-events, service: donna-granola-events, health: "" }
+      - { name: llm-telemetry, service: llm-telemetry, health: "http://127.0.0.1:{{ llm_telemetry_port }}/health" }
+  tasks:
+    - name: Install each binary, restart its service and verify it
+      block:
+        - name: Install the built binary and keep the previous version
+          ansible.builtin.copy:
+            src: "{{ playbook_dir }}/../dist/{{ item.name }}-linux-amd64"
+            dest: "/usr/local/bin/{{ item.name }}"
+            owner: root
+            group: root
+            mode: "0755"
+            backup: true
+          register: installed
+          loop: "{{ runtime_binaries }}"
+
+        - name: Restart changed services
+          ansible.builtin.systemd:
+            name: "{{ item.item.service }}"
+            state: restarted
+          loop: "{{ installed.results }}"
+          when: item.changed
+
+        - name: Verify the service is active
+          ansible.builtin.command: "systemctl is-active {{ item.service }}"
+          changed_when: false
+          register: active
+          until: active.stdout == 'active'
+          retries: 10
+          delay: 2
+          loop: "{{ runtime_binaries }}"
+
+        - name: Verify health where the service exposes it
+          ansible.builtin.uri:
+            url: "{{ item.health }}"
+            status_code: 200
+          register: health
+          until: health.status == 200
+          retries: 15
+          delay: 2
+          loop: "{{ runtime_binaries }}"
+          when: item.health | length > 0
+
+      rescue:
+        - name: Restore previous binaries
+          ansible.builtin.copy:
+            src: "{{ item.backup_file }}"
+            dest: "/usr/local/bin/{{ item.item.name }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+          loop: "{{ installed.results | default([]) }}"
+          when: item.backup_file is defined
+
+        - name: Restart restored services
+          ansible.builtin.systemd:
+            name: "{{ item.item.service }}"
+            state: restarted
+          loop: "{{ installed.results | default([]) }}"
+          when: item.backup_file is defined
+
+        - name: Report failure
+          ansible.builtin.fail:
+            msg: "Runtime binary deployment failed verification; rollback was attempted."
