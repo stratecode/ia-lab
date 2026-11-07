@@ -39,6 +39,8 @@ type VoiceMetrics struct {
 	maintenanceError prometheus.Counter
 	guardrail        *prometheus.CounterVec
 	responseWords    *prometheus.HistogramVec
+	answerAdjust     *prometheus.CounterVec
+	modelTokens      *prometheus.CounterVec
 }
 
 func NewVoiceMetrics() *VoiceMetrics {
@@ -95,12 +97,47 @@ func NewVoiceMetrics() *VoiceMetrics {
 			Help:    "Words in final secretary answers by bounded intent. Used to keep answers short.",
 			Buckets: []float64{5, 10, 20, 30, 45, 60, 90, 130, 200, 400},
 		}, []string{"intent"}),
+		answerAdjust: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lab_secretary_answer_adjustments_total",
+			Help: "Model answers that exceeded the length contract and were regenerated or trimmed.",
+		}, []string{"action"}),
+		modelTokens: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lab_secretary_model_tokens_total",
+			Help: "Prompt and completion tokens reported by the model backend for secretary requests.",
+		}, []string{"kind"}),
 	}
-	registry.MustRegister(metrics.phaseDuration, metrics.phaseCalls, metrics.requestDuration, metrics.interactions, metrics.interactionTime, metrics.memoryRetrieval, metrics.memoryHits, metrics.traceWriteError, metrics.maintenanceError, metrics.guardrail, metrics.responseWords)
+	registry.MustRegister(metrics.phaseDuration, metrics.phaseCalls, metrics.requestDuration, metrics.interactions, metrics.interactionTime, metrics.memoryRetrieval, metrics.memoryHits, metrics.traceWriteError, metrics.maintenanceError, metrics.guardrail, metrics.responseWords, metrics.answerAdjust, metrics.modelTokens)
 	for _, category := range guardrailCategories {
 		metrics.guardrail.WithLabelValues(category)
 	}
+	for _, action := range []string{"regenerated", "trimmed"} {
+		metrics.answerAdjust.WithLabelValues(action)
+	}
+	for _, kind := range []string{"prompt", "completion"} {
+		metrics.modelTokens.WithLabelValues(kind)
+	}
 	return metrics
+}
+
+// ObserveAnswerAdjustment counts a length-contract correction.
+func (m *VoiceMetrics) ObserveAnswerAdjustment(action string) {
+	if m == nil || (action != "regenerated" && action != "trimmed") {
+		return
+	}
+	m.answerAdjust.WithLabelValues(action).Inc()
+}
+
+// ObserveModelTokens records backend-reported token usage, ignoring absent values.
+func (m *VoiceMetrics) ObserveModelTokens(prompt, completion int) {
+	if m == nil {
+		return
+	}
+	if prompt > 0 {
+		m.modelTokens.WithLabelValues("prompt").Add(float64(prompt))
+	}
+	if completion > 0 {
+		m.modelTokens.WithLabelValues("completion").Add(float64(completion))
+	}
 }
 
 // ObserveResponseWords records the length of a final answer without its text.

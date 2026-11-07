@@ -294,3 +294,38 @@ func splitSentences(line string) []string {
 }
 
 func countWords(text string) int { return len(strings.Fields(text)) }
+
+// answerWordLimit is the length contract for a model-written answer. Short by
+// default; more room when the operator asks for explanation or the full list.
+func answerWordLimit(question string, hasSources bool) int {
+	normalized := normalizedIntentText(question)
+	switch {
+	case wantsFullListing(question), containsAny(normalized, "explica", "explicame", "analiza", "analisis", "desglosa", "paso a paso", "en detalle"):
+		return 250
+	case hasSources:
+		return 90
+	default:
+		return 70
+	}
+}
+
+// trimToSentences keeps whole sentences up to maxWords, and always at least
+// the first one, so a trimmed answer never ends mid-thought.
+func trimToSentences(text string, maxWords int) string {
+	if countWords(text) <= maxWords {
+		return text
+	}
+	var kept []string
+	words := 0
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		for _, sentence := range splitSentences(line) {
+			n := countWords(sentence)
+			if len(kept) > 0 && words+n > maxWords {
+				return strings.Join(kept, " ")
+			}
+			kept = append(kept, sentence)
+			words += n
+		}
+	}
+	return strings.Join(kept, " ")
+}

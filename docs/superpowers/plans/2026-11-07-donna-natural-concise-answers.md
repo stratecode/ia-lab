@@ -1,6 +1,9 @@
 # Donna: respuestas naturales, correctas y breves
 
-Plan del 7 de noviembre de 2026. Estado: propuesto, sin implementar.
+Plan del 7 de noviembre de 2026. Estado: fases 1 a 4 implementadas y desplegadas el 7 de noviembre de 2026
+(evidencia en `docs/validation/2026-11-07-donna-concise-answers.md`). Pendientes:
+conjunto de oro formal, memoria semántica y optimización con DSPy, que
+dependen de datos que aún no existen.
 Objetivo del operador: que Donna (Telegram y Open WebUI) responda como una
 persona que conoce el contexto, con información correcta y útil, y que lo que
 cabe en un párrafo de dos líneas no ocupe tres pantallas. Cuando la versión

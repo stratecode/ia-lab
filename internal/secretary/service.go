@@ -1337,7 +1337,32 @@ func (s *Service) answerWithContext(ctx context.Context, question string, histor
 	if err != nil {
 		return answer, err
 	}
-	return polishAnswer(answer), nil
+	answer = polishAnswer(answer)
+	return s.enforceAnswerLength(ctx, question, turns, answer, len(sources) > 0 && strings.TrimSpace(sources[0]) != ""), nil
+}
+
+// enforceAnswerLength applies the length contract: one regeneration asking for
+// a shorter answer, then a trim to whole sentences if it is still too long.
+// The model's wording is never replaced by invented text.
+func (s *Service) enforceAnswerLength(ctx context.Context, question string, turns []Turn, answer string, hasSources bool) string {
+	limit := answerWordLimit(question, hasSources)
+	if countWords(answer) <= limit {
+		return answer
+	}
+	s.VoiceMetrics().ObserveAnswerAdjustment("regenerated")
+	retry := append(append([]Turn(nil), turns...),
+		Turn{Role: "assistant", Content: answer},
+		Turn{Role: "user", Content: fmt.Sprintf("Reescribe tu respuesta en como máximo %d palabras: conserva los hechos, cifras y nombres, y quita todo lo demás.", limit*3/4)})
+	if shorter, err := s.complete(ctx, retry, 256); err == nil {
+		if shorter = polishAnswer(shorter); countWords(shorter) < countWords(answer) {
+			answer = shorter
+		}
+	}
+	if hard := limit * 3 / 2; countWords(answer) > hard {
+		s.VoiceMetrics().ObserveAnswerAdjustment("trimmed")
+		answer = trimToSentences(answer, hard)
+	}
+	return answer
 }
 
 // guardOutbound is the single choke point between Donna and the model backend:
@@ -1385,10 +1410,15 @@ func (s *Service) complete(ctx context.Context, turns []Turn, maxTokens int) (an
 		Choices []struct {
 			Message Turn `json:"message"`
 		} `json:"choices"`
+		Usage struct {
+			Prompt     int `json:"prompt_tokens"`
+			Completion int `json:"completion_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&response); err != nil {
 		return "", errors.New("invalid model response")
 	}
+	s.VoiceMetrics().ObserveModelTokens(response.Usage.Prompt, response.Usage.Completion)
 	if len(response.Choices) == 0 || strings.TrimSpace(response.Choices[0].Message.Content) == "" {
 		return "", errors.New("empty model response")
 	}
@@ -1402,7 +1432,7 @@ func (s *Service) completeStream(ctx context.Context, turns []Turn, maxTokens in
 	if target.Name == "main" || target.Name == "qwen-eval" {
 		conversationRecord(ctx, "model.selected."+target.Name, "ok", 0, 0, 0)
 	}
-	payload := map[string]any{"model": target.Name, "messages": s.guardOutbound(ctx, turns), "temperature": 0, "max_tokens": maxTokens, "stream": true}
+	payload := map[string]any{"model": target.Name, "messages": s.guardOutbound(ctx, turns), "temperature": 0, "max_tokens": maxTokens, "stream": true, "stream_options": map[string]any{"include_usage": true}}
 	data, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.Upstream+"/v1/chat/completions", bytes.NewReader(data))
 	if err != nil {
@@ -1439,8 +1469,18 @@ func (s *Service) completeStream(ctx context.Context, turns []Turn, maxTokens in
 					Content string `json:"content"`
 				} `json:"delta"`
 			} `json:"choices"`
+			Usage *struct {
+				Prompt     int `json:"prompt_tokens"`
+				Completion int `json:"completion_tokens"`
+			} `json:"usage"`
 		}
-		if json.Unmarshal([]byte(data), &event) != nil || len(event.Choices) == 0 {
+		if json.Unmarshal([]byte(data), &event) != nil {
+			continue
+		}
+		if event.Usage != nil {
+			s.VoiceMetrics().ObserveModelTokens(event.Usage.Prompt, event.Usage.Completion)
+		}
+		if len(event.Choices) == 0 {
 			continue
 		}
 		chunk := event.Choices[0].Delta.Content
