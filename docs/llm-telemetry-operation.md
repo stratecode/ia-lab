@@ -14,7 +14,45 @@ la API ni ejecuta herramientas. Solo analiza transitoriamente los eventos SSE
 para identificar la primera salida; no registra contenidos, identificadores de
 usuario ni claves. Las etiquetas son modelo configurado, endpoint, estado y
 resultado; no provienen de mensajes. Solo escucha en loopback. systemd limita su
-memoria a 128 MiB y la ejecuta con usuario dinámico sin escritura persistente.
+memoria a 128 MiB y la ejecuta con usuario dinámico. El directorio privado de
+estado conserva checkpoints de diagnóstico, descritos abajo.
+
+## Bitácora de cada petición al motor
+
+`/var/lib/llm-telemetry/inference-steps.jsonl` registra, con fsync, la llegada
+de cada POST de inferencia, el inicio del reenvío, conexión al motor, cabeceras
+y cuerpo enviados, primer byte de respuesta, cabeceras recibidas, primer token
+útil del streaming y cierre. Los errores antes de recibir cabeceras también
+quedan marcados. Conserva el archivo actual y
+cuatro rotaciones de 16 MiB. Solo contiene hora, boot ID, identificador aleatorio
+de intento, etapa, resultado, código HTTP, duración y bytes recibidos. No guarda
+prompt, respuesta, cuerpo HTTP, URL completa, cabeceras ni credenciales.
+
+Donna transmite el `attempt_id` de su bitácora privada como identificador de
+correlación hacia esta pasarela; la pasarela retira la cabecera antes de llamar
+al motor. Las peticiones que entren por otro cliente obtienen un ID aleatorio
+propio. Para reconstruir un incidente, agrupar ambos JSONL por ese ID y ordenar
+por hora y boot ID. Contrastar después con las muestras del registrador de
+vuelo, el journal del kernel y los logs nativos de llama.cpp. Una etapa `.start`
+sin su `.end` solo identifica dónde dejó de observarse progreso; no demuestra
+que esa etapa causara la pérdida de alimentación. La pasarela no puede ver el
+interior del motor nativo ni los raíles eléctricos de la placa.
+
+La bitácora de la pasarela cubre `main`. La ruta opcional `qwen-eval` usa otro
+backend; mientras esté inactivo, no se declara cubierta ni se redirige.
+
+La sonda temporal de diagnóstico nativo se despliega con
+`playbooks/deploy-deep-inference-trace.yml`. Sin modificar el ejecutable de
+llama.cpp, observa entradas y salidas de `llama_decode` y
+`ggml_backend_sched_graph_compute_async` mediante uprobes. Registra las ocho
+primeras llamadas de cada proceso y luego una de cada dieciséis, con PID,
+TID, reloj monotónico, duración y resultado; nunca tokens ni prompts. Su
+archivo privado es `/var/log/lab-investigation/native-inference-steps.jsonl`
+(modo 0600), escrito con `O_DSYNC`. El servicio
+`lab-native-inference-trace` vuelve a adjuntarse tras reiniciar el host. La
+entrega desde el buffer de BPF al proceso observador es asíncrona: un corte
+brusco todavía puede perder el último evento. Esta sonda añade algo de carga
+y debe desactivarse tras la investigación si ya no aporta datos.
 
 ## Qué se mide
 

@@ -1,3 +1,9 @@
+- name: Validate the global debug flag
+  ansible.builtin.assert:
+    that:
+      - lab_debug_enabled_raw in ['true', 'false']
+    fail_msg: "LAB_DEBUG_ENABLED must be exactly true or false."
+
 - name: Install LLM telemetry binary
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../dist/llm-telemetry-linux-amd64"
@@ -16,7 +22,9 @@
 
       [Service]
       DynamicUser=yes
-      ExecStart=/usr/local/bin/llm-telemetry --listen 127.0.0.1:{{ llm_telemetry_port }} --upstream http://127.0.0.1:{{ (llama_cpp_instances | first).port }} --model {{ llm_telemetry_model_label }}
+      StateDirectory=llm-telemetry
+      StateDirectoryMode=0700
+      ExecStart=/usr/local/bin/llm-telemetry --listen 127.0.0.1:{{ llm_telemetry_port }} --upstream http://127.0.0.1:{{ (llama_cpp_instances | first).port }} --model {{ llm_telemetry_model_label }}{{ ' --trace-dir /var/lib/llm-telemetry' if lab_debug_enabled | bool else '' }}
       Restart=on-failure
       RestartSec=3
       NoNewPrivileges=yes

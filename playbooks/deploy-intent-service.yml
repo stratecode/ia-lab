@@ -1,0 +1,10 @@
+---
+- name: Deploy independent intent-service release
+  hosts: lab
+  become: true
+  vars:
+    intent_service_binary: "{{ lookup('env', 'LAB_INTENT_BINARY') }}"
+    intent_service_sha256: "{{ lookup('env', 'LAB_INTENT_SHA256') }}"
+    intent_service_profile: "{{ lookup('env', 'LAB_INTENT_PROFILE') }}"
+  roles:
+    - intent_service

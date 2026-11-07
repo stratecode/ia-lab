@@ -1,0 +1,21 @@
+---
+- name: Restart Donna Granola events
+  ansible.builtin.systemd:
+    name: donna-granola-events
+    daemon_reload: true
+    state: restarted
+  when: not ansible_check_mode
+
+- name: Restart lab secretary
+  ansible.builtin.systemd:
+    name: lab-secretary
+    daemon_reload: true
+    state: restarted
+  when: not ansible_check_mode
+
+- name: Reload nginx
+  ansible.builtin.systemd:
+    name: nginx
+    state: reloaded
+  when: not ansible_check_mode
+

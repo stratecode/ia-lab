@@ -1,0 +1,67 @@
+---
+- name: Disable CPU boost on the lab host
+  hosts: lab
+  become: true
+  vars:
+    boost_control_path: /sys/devices/system/cpu/cpufreq/boost
+    boost_unit_content: |
+      [Unit]
+      Description=Disable CPU boost on the lab host
+      After=cpu-tuning.service cpufrequtils.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/bin/sh -c 'printf 0 > /sys/devices/system/cpu/cpufreq/boost'
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+
+  pre_tasks:
+    - name: Confirm the host supports the boost control
+      ansible.builtin.stat:
+        path: "{{ boost_control_path }}"
+      register: boost_control
+
+    - name: Require the global CPU boost switch
+      ansible.builtin.assert:
+        that:
+          - boost_control.stat.exists
+        fail_msg: This host has no global CPU boost switch; no tuning was changed.
+
+    - name: Read boost before applying the service
+      ansible.builtin.command:
+        argv: [cat, "{{ boost_control_path }}"]
+      register: boost_before
+      changed_when: false
+      check_mode: false
+
+  tasks:
+    - name: Install the boot-time boost setting
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/lab-disable-cpu-boost.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ boost_unit_content }}"
+      register: boost_unit
+
+    - name: Enable and apply the boost setting
+      ansible.builtin.systemd:
+        name: lab-disable-cpu-boost.service
+        daemon_reload: "{{ boost_unit.changed }}"
+        enabled: true
+        state: "{{ 'restarted' if boost_before.stdout | trim != '0' or boost_unit.changed else 'started' }}"
+
+    - name: Read the effective boost setting
+      ansible.builtin.command:
+        argv: [cat, "{{ boost_control_path }}"]
+      register: boost_effective
+      changed_when: false
+      check_mode: false
+
+    - name: Verify boost is disabled
+      ansible.builtin.assert:
+        that:
+          - boost_effective.stdout | trim == '0'
+        fail_msg: Boost remains enabled after applying the service.

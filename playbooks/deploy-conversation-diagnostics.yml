@@ -1,0 +1,70 @@
+---
+- name: Add durable checkpoints across chat and inference
+  hosts: lab
+  become: true
+  vars:
+    allowed_secretary_sha256:
+      - d5955de9c636a303b52619c0b6e61da29f3513c418f412e51137f23daf08903f
+      - 287222fa00780130adb07c2ff001ccc8effa95a2262dee88acad74aca741e7ff
+    allowed_telemetry_sha256:
+      - c956ed5af4169cec6a65c25bd754c5b146b2c706dbf942b27dae0c1788563559
+      - 9eab7a460df7bce02321e17ff685d10e4584f477a4c63c6a80c4ac66b13031e9
+  pre_tasks:
+    - name: Inspect built artifacts on the controller
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../dist/{{ item }}-linux-amd64"
+        checksum_algorithm: sha256
+      loop:
+        - lab-secretary
+        - llm-telemetry
+      delegate_to: localhost
+      become: false
+      register: built_binaries
+
+    - name: Inspect currently deployed binaries
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        checksum_algorithm: sha256
+      loop:
+        - /usr/local/bin/lab-secretary
+        - /usr/local/bin/llm-telemetry
+      register: deployed_binaries
+
+    - name: Reject concurrent or unexpected deployments
+      ansible.builtin.assert:
+        that:
+          - built_binaries.results[0].stat.exists
+          - built_binaries.results[1].stat.exists
+          - deployed_binaries.results[0].stat.checksum in (allowed_secretary_sha256 + [built_binaries.results[0].stat.checksum])
+          - deployed_binaries.results[1].stat.checksum in (allowed_telemetry_sha256 + [built_binaries.results[1].stat.checksum])
+        fail_msg: Deployed binaries changed since preflight; inspect before replacing them.
+
+  roles:
+    - llm_telemetry
+
+  tasks:
+    - name: Install secretary with request correlation
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../dist/lab-secretary-linux-amd64"
+        dest: /usr/local/bin/lab-secretary
+        mode: "0755"
+        backup: true
+      notify: Restart secretary for diagnostics
+
+    - name: Activate secretary changes
+      ansible.builtin.meta: flush_handlers
+
+    - name: Verify secretary health without inference
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ lab_secretary_port }}/health"
+        status_code: 200
+      register: secretary_health
+      retries: 10
+      delay: 2
+      until: secretary_health.status == 200
+
+  handlers:
+    - name: Restart secretary for diagnostics
+      ansible.builtin.systemd:
+        name: lab-secretary
+        state: restarted

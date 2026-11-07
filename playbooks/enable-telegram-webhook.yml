@@ -18,7 +18,7 @@
         that:
           - telegram_public_probe_passed | bool
         fail_msg: >-
-          Keep polling active until an external network confirms TCP 443,
+          Do not register the webhook until an external network confirms TCP 443,
           trusted TLS, and the exact assistant webhook route.
 
     - name: Keep the synthetic webhook probe outside the Telegram allowlist

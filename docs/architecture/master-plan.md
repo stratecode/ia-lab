@@ -40,6 +40,23 @@ OAuth enrollment and live connector access are documented in the operation
 guide. The channel boundary must authenticate the operator and preserve action
 permissions; a public inference endpoint is not required.
 
+### Granola follow-ups — code implemented, activation pending
+
+The lab now has a separate `donna-granola-events` service for signed
+`note.generated` callbacks in the fixed `personal` scope. It durably queues and
+deduplicates events, fetches only the generated note summary, and sends
+candidate Jira actions without writing to Jira. Telegram is the immediate
+private delivery channel; Open WebUI receives an operator-scoped pending notice
+on the next authenticated conversation.
+
+This is a local implementation status, not a live integration claim. Activation
+still requires an eligible Granola Business or Enterprise account, a personal
+API key and webhook scope, a public HTTPS callback, and the one-time signing
+secret saved in private configuration. See
+[`secretary-operation.md`](../secretary-operation.md) and
+[`granola-followups-operation.md`](../granola-followups-operation.md) for setup
+and validation boundaries.
+
 Secretary tooling and skill priorities are analyzed in
 `../research/2026-10-11-ai-secretary-tools-skills.md`. Six synthetic prompts on
 the deployed LFM exposed an incorrect attribution of a commitment deadline and

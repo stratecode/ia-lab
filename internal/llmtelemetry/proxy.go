@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/http/httputil"
 	"net/url"
 	"strconv"
@@ -24,7 +25,12 @@ type Proxy struct {
 	durations, ttft *prometheus.HistogramVec
 	active          prometheus.Gauge
 	metrics         http.Handler
+	trace           *traceLog
 }
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func New(target *url.URL, model string, registry *prometheus.Registry) *Proxy {
 	buckets := []float64{0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300, 600, 900}
@@ -38,6 +44,9 @@ func New(target *url.URL, model string, registry *prometheus.Registry) *Proxy {
 	p.metrics = promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 	return p
 }
+
+// SetTraceDir enables private, fsynced request checkpoints without storing payloads.
+func (p *Proxy) SetTraceDir(dir string) { p.trace = newTraceLog(dir) }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/metrics" {
@@ -64,10 +73,55 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
+	traceID := requestTraceID(r.Header.Get(traceHeader))
+	p.trace.record(traceID, endpoint, "proxy.request.start", "", start, 0, 0)
+	director := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		director(req)
+		req.Header.Del(traceHeader)
+		p.trace.record(traceID, endpoint, "proxy.upstream.start", "", start, 0, 0)
+	}
+	proxy.Transport = roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		p.trace.record(traceID, endpoint, "proxy.upstream.roundtrip.start", "", start, 0, 0)
+		steps := &httptrace.ClientTrace{
+			GotConn: func(info httptrace.GotConnInfo) {
+				outcome := "new"
+				if info.Reused {
+					outcome = "reused"
+				}
+				p.trace.record(traceID, endpoint, "proxy.upstream.connected", outcome, start, 0, 0)
+			},
+			WroteHeaders: func() {
+				p.trace.record(traceID, endpoint, "proxy.upstream.request.headers_written", "", start, 0, 0)
+			},
+			WroteRequest: func(info httptrace.WroteRequestInfo) {
+				outcome := "ok"
+				if info.Err != nil {
+					outcome = "error"
+				}
+				p.trace.record(traceID, endpoint, "proxy.upstream.request.written", outcome, start, 0, 0)
+			},
+			GotFirstResponseByte: func() {
+				p.trace.record(traceID, endpoint, "proxy.upstream.response.first_byte", "", start, 0, 0)
+			},
+		}
+		res, err := http.DefaultTransport.RoundTrip(req.WithContext(httptrace.WithClientTrace(req.Context(), steps)))
+		outcome := "ok"
+		if err != nil {
+			outcome = "error"
+		}
+		p.trace.record(traceID, endpoint, "proxy.upstream.roundtrip.end", outcome, start, 0, 0)
+		return res, err
+	})
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		p.trace.record(traceID, endpoint, "proxy.upstream.error", "error", start, http.StatusBadGateway, 0)
+		http.Error(w, "model upstream unavailable", http.StatusBadGateway)
+	}
 	status := http.StatusBadGateway
 	received := false
 	outcome := "ok"
 	observer := &streamObserver{start: start}
+	var body *observedBody
 	p.active.Inc()
 	defer func() {
 		p.active.Dec()
@@ -86,11 +140,22 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if observer.first > 0 {
 			p.ttft.WithLabelValues(p.model, endpoint).Observe(observer.first)
 		}
+		var receivedBytes int64
+		if body != nil {
+			receivedBytes = body.bytes
+		}
+		p.trace.record(traceID, endpoint, "proxy.request.end", outcome, start, status, receivedBytes)
 	}()
 	proxy.ModifyResponse = func(res *http.Response) error {
 		received = true
 		status = res.StatusCode
-		res.Body = &observedBody{ReadCloser: res.Body, observer: observer, sse: strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream")}
+		headerOutcome := "ok"
+		if status >= http.StatusBadRequest {
+			headerOutcome = "error"
+		}
+		p.trace.record(traceID, endpoint, "proxy.upstream.headers", headerOutcome, start, status, 0)
+		body = &observedBody{ReadCloser: res.Body, observer: observer, sse: strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream"), trace: p.trace, id: traceID, endpoint: endpoint, start: start, status: status}
+		res.Body = body
 		return nil
 	}
 	proxy.ServeHTTP(w, r)
@@ -98,17 +163,32 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 type observedBody struct {
 	io.ReadCloser
-	observer *streamObserver
-	sse      bool
+	observer              *streamObserver
+	sse                   bool
+	trace                 *traceLog
+	id, endpoint          string
+	start                 time.Time
+	status                int
+	bytes                 int64
+	firstByte, firstToken bool
 }
 
 func (b *observedBody) Read(buf []byte) (int, error) {
 	n, err := b.ReadCloser.Read(buf)
+	b.bytes += int64(n)
+	if n > 0 && !b.firstByte {
+		b.firstByte = true
+		b.trace.record(b.id, b.endpoint, "proxy.upstream.first_byte", "", b.start, b.status, b.bytes)
+	}
 	if err == io.EOF {
 		b.observer.complete = true
 	}
 	if b.sse && n > 0 {
 		b.observer.consume(buf[:n])
+		if b.observer.first > 0 && !b.firstToken {
+			b.firstToken = true
+			b.trace.record(b.id, b.endpoint, "proxy.upstream.first_token", "", b.start, b.status, b.bytes)
+		}
 	}
 	if (err == io.EOF && b.sse && !b.observer.done) || (err != nil && err != io.EOF) {
 		b.observer.failed = true

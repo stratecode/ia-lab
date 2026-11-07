@@ -2,10 +2,13 @@ package llmtelemetry
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +16,79 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
+
+func TestDurableTraceCorrelatesBoundariesWithoutPayload(t *testing.T) {
+	const id = "0123456789abcdef01234567"
+	const private = "private-prompt-and-token"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(traceHeader) != "" {
+			t.Error("internal trace header forwarded to model")
+		}
+		body, _ := io.ReadAll(r.Body)
+		if string(body) != private {
+			t.Error("request body changed")
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"secret-output\"}}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+	target, _ := url.Parse(upstream.URL)
+	proxy := New(target, "test", prometheus.NewRegistry())
+	dir := t.TempDir()
+	proxy.SetTraceDir(dir)
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(private))
+	req.Header.Set(traceHeader, id)
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "inference-steps.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), private) || strings.Contains(string(data), "secret-output") {
+		t.Fatal("private payload written to trace")
+	}
+	var events []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var event traceEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.ID != id || event.Endpoint != "chat" {
+			t.Fatalf("uncorrelated event: %+v", event)
+		}
+		events = append(events, event.Event)
+	}
+	want := []string{
+		"proxy.request.start", "proxy.upstream.start", "proxy.upstream.roundtrip.start",
+		"proxy.upstream.connected", "proxy.upstream.request.headers_written", "proxy.upstream.request.written",
+		"proxy.upstream.response.first_byte", "proxy.upstream.roundtrip.end", "proxy.upstream.headers",
+		"proxy.upstream.first_byte", "proxy.upstream.first_token", "proxy.request.end",
+	}
+	if strings.Join(events, ",") != strings.Join(want, ",") {
+		t.Fatalf("trace events %v, want %v", events, want)
+	}
+}
+
+func TestProxyDoesNotWriteDetailedTraceUnlessEnabled(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"ok":true}`)
+	}))
+	defer upstream.Close()
+	target, _ := url.Parse(upstream.URL)
+	proxy := New(target, "test", prometheus.NewRegistry())
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("{}"))
+	w := httptest.NewRecorder()
+	proxy.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d", w.Code)
+	}
+	if proxy.trace != nil {
+		t.Fatal("detailed trace logger is enabled by default")
+	}
+}
 
 func TestStreamPreservesBytesAndMeasuresRealFirstToken(t *testing.T) {
 	role := "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}\n\n"
@@ -93,6 +169,8 @@ func TestHTTPErrorAndNonStreamingHaveNoFakeTTFT(t *testing.T) {
 	target, _ := url.Parse(upstream.URL)
 	reg := prometheus.NewRegistry()
 	proxy := New(target, "test-model", reg)
+	traceDir := t.TempDir()
+	proxy.SetTraceDir(traceDir)
 	recorder := httptest.NewRecorder()
 	proxy.ServeHTTP(recorder, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader("{}")))
 	if recorder.Code != 401 || recorder.Body.String() != `{"error":"private"}` {
@@ -100,6 +178,10 @@ func TestHTTPErrorAndNonStreamingHaveNoFakeTTFT(t *testing.T) {
 	}
 	if value(proxy.requests.WithLabelValues("test-model", "chat", "401", "http_error")) != 1 {
 		t.Fatal("error not counted")
+	}
+	trace, err := os.ReadFile(filepath.Join(traceDir, "inference-steps.jsonl"))
+	if err != nil || !strings.Contains(string(trace), `"event":"proxy.upstream.headers","endpoint":"chat","elapsed_ms":`) || !strings.Contains(string(trace), `"outcome":"error","http_status":401`) {
+		t.Fatalf("HTTP error headers not marked in trace: %v", err)
 	}
 	families, _ := reg.Gather()
 	for _, f := range families {

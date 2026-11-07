@@ -50,12 +50,12 @@ func localIntent(text string) secretaryIntent {
 // continue to use Granola.
 func jiraTaskIntent(text string) bool {
 	query := normalizedIntentText(text)
-	if jiraIssueKeyMention.MatchString(strings.ToUpper(text)) {
+	if jiraIssueKeyMention.MatchString(strings.ToUpper(text)) || len(jiraPeople(text)) > 0 {
 		return true
 	}
 	return containsAny(query,
 		"jira", "plan", "planificacion", "planificar",
-		"tarea", "pendiente", "actividad", "accion", "hacer", "ejecut", "realizar", "llevar a cabo",
+		"tarea", "pendiente", "actividad", "accion", "hacer", "trabaj", "ejecut", "realizar", "llevar a cabo",
 		"acciones por hacer", "que debo hacer", "que tengo que hacer",
 		"siguiente paso", "prioridad", "priorizar",
 	)

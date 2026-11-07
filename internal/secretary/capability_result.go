@@ -12,6 +12,10 @@ type CapabilityResult struct {
 	ResultCount  int
 	Evidence     []EvidenceRef
 	DirectAnswer bool
+	Partial      bool
+	// Compact is a short, code-built rendering of Text for list-like answers.
+	// It is used instead of model synthesis unless the operator asks for detail.
+	Compact string
 }
 
 type EvidenceRef struct {
@@ -28,6 +32,7 @@ type CapabilityOutcome struct {
 	Duration    time.Duration `json:"duration"`
 	ResultCount int           `json:"result_count"`
 	Evidence    []EvidenceRef `json:"evidence,omitempty"`
+	Partial     bool          `json:"partial,omitempty"`
 }
 
 // StructuredSourceReader supplements the legacy direct-command interface with

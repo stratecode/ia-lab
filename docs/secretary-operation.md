@@ -12,54 +12,33 @@ Telegram private chat ──┼─ shared router + memory ─ selected model bac
 Future channels ───────┘                    └──── registered read-only capabilities
 ```
 
-Telegram polling is enabled and active in the lab. The operator approved stopping
-Hermes. Its Mac launchd service `ai.hermes.gateway` is stopped and disabled
-from auto-start for this user. `launchctl enable gui/$(id -u)/ai.hermes.gateway`
-reverses the auto-start setting; `hermes gateway start` starts it again. Afterwards, a
-standalone `getUpdates` returned HTTP 200 with zero pending messages, and the lab
-service logged `telegram_ready` without another 409. The check `getMe` confirmed
-`@stratecode_bot`; no webhook is set. An actual private operator message and model
-reply remains the final delivery check. If Hermes is restarted, it may reclaim the
-bot and cause another polling conflict.
-
 ## Telegram webhook ingress
 
-The repository provisions `https://assistant.stratecode.com/telegram/webhook`
-through an exact-match Nginx route to the loopback secretary. The public vhost
-rejects other paths and TLS hosts; callback access logs contain only method,
-normalized path and status. The webhook handler authenticates Telegram's secret
-header, limits request bodies, and persists/deduplicates updates before returning
-success. Polling, webhook and disabled modes are mutually exclusive. The normal
-deployment remains on polling.
+Telegram receives messages exclusively through the authenticated webhook at
+`https://assistant.stratecode.com/telegram/webhook`. The supported modes are
+`webhook` (default) and `disabled`. There is no alternative reception transport
+or automatic transport fallback. A retired mode value is rejected at startup. The deployment role also rejects
+stale binaries that still contain the retired reception API; rebuild before deploying.
+The old Hermes Mac gateway must remain disabled so it cannot reclaim this bot.
 
-The assistant DNS alias, TLS certificate and Nginx route are deployed. Local
-Nginx validation passed and the loopback webhook path rejects GET with 403 as
-configured. Three TCP 443 probes from external networks timed out while the
-assistant DNS address matched the lab's current public egress address. The
-router/upstream ingress path is therefore still unverified; do not run the
-activation playbook until an external probe confirms TCP 443 and trusted HTTPS.
-The secretary remains available through Telegram polling while this is resolved.
-The router rule must forward IPv4 TCP 443 only to the reserved lab address
-`192.168.0.85:443`; do not forward ports 80, 22 or application ports, and do not
-add IPv6 ingress.
+Nginx forwards only the exact webhook path to the loopback secretary. The handler
+validates Telegram's secret header, limits request size and persists/deduplicates
+each update before acknowledging it. A worker processes queued updates and marks
+completion after delivery. Pending updates survive a restart. A crash after
+sending but before completion can still duplicate a reply; this is at-least-once
+delivery, not an exactly-once guarantee. The timer scheduler runs with the worker.
 
-After the external check succeeds, activate the transport with:
+Activate or reconcile the transport with `playbooks/enable-telegram-webhook.yml`
+after checking trusted HTTPS and the public ingress path. The playbook tests
+wrong-secret rejection, persistent acceptance and duplicate delivery, then calls
+`setWebhook` with `drop_pending_updates=false`. Bot tokens and the webhook secret
+must never appear in output. To pause reception, use mode `disabled`; restore the
+webhook after correcting ingress. Do not delete pending updates during recovery.
 
-```bash
-set -a
-source .env
-set +a
-ansible-playbook playbooks/enable-telegram-webhook.yml \
-  -e telegram_public_probe_passed=true
-```
-
-The playbook verifies wrong-secret rejection, durable acceptance and duplicate
-delivery locally before calling Telegram `setWebhook` with
-`drop_pending_updates=false`. It suppresses token and secret output. If delivery
-fails, use `playbooks/restore-telegram-polling.yml`; it deletes the webhook
-without dropping pending updates, then restarts the exclusive polling consumer.
-Do not run both consumers at once. The queue is at-least-once: a crash after a
-Telegram reply but before local completion can duplicate that reply.
+Inspect `getWebhookInfo` for the registered URL, pending count and delivery errors,
+and inspect the local durable queue for work already accepted. A successful
+`setWebhook` only confirms registration; real delivery requires an incoming
+Telegram update. Keep ingress restricted to TCP443 and the configured Nginx route.
 
 ## Commands and permissions
 
@@ -86,6 +65,11 @@ when its unit changes and `lab-secretary` when the instructions change.
 | `/aprendizaje` | List candidate correction IDs and brief descriptions |
 | `/aprueba ID`, `/descarta ID` | Approve or reject one candidate owned by this operator |
 | `/status` | Connector configuration status; does not prove provider connectivity |
+| `/mapeo` | Ayuda para crear mapeos guiados de personas, proyectos, emails y aliases |
+| `/mapeo persona NOMBRE`, `/mapeo proyecto TEXTO` | Busca candidatos verificables en Jira y deja cada candidato pendiente |
+| `/mapeo email EMAIL para ID_JIRA`, `/mapeo alias ALIAS para ID_JIRA` | Propone un email para una persona confirmada, o un alias para una persona/proyecto confirmado |
+| `/mapeo confirmar ID HUELLA_COMPLETA`, `/mapeo descartar ID HUELLA_COMPLETA` | Confirma o descarta únicamente el candidato y la huella mostrados en esta conversación |
+| `/mapeo pendientes` | Muestra candidatos pendientes de esta conversación |
 | `/jira` | Up to five open issues assigned to the authorised Jira account |
 | `/reuniones` | Executive summary of up to five Granola notes from the last seven days; uses note summaries, never transcripts |
 | `/resumen` | Source-labelled Jira and Granola results, with explicit missing coverage |
@@ -97,8 +81,11 @@ All text prompts in Open WebUI now use the same secretary router as Telegram;
 they are no longer forwarded directly to the model. Open WebUI requests are
 accepted only for its authenticated administrator, mapped to the lab's single
 allowlisted operator. Requests without trusted admin identity or with multiple
-configured operators fail closed. Open WebUI and Telegram share durable memory,
-while short-term history stays isolated by channel and conversation. Open WebUI
+configured operators fail closed. Open WebUI and Telegram use the same durable
+memory store, but recall is filtered by the exact channel and conversation
+fingerprint. A Telegram exchange cannot leak into Open WebUI, and one Open WebUI
+chat cannot recall another chat's private dialogue. Short-term history is
+isolated by the same boundary. Open WebUI
 can select `main` (LFM) or `qwen-eval` (Qwen); both use the same routing,
 connector and memory pipeline. Telegram remains pinned to LFM. Open WebUI
 currently accepts text-only user messages through this route; multimodal messages
@@ -129,11 +116,45 @@ the service says so directly instead of asking the model to improvise from an em
 result. Empty or failed sources are excluded from the model's evidence and reported
 as a separate coverage note after synthesis.
 
+For named-person questions such as “cómo van Valentina y Gonzalo con sus tareas”,
+Donna resolves each person independently. She queries up to 100 open issues and,
+unless the request is only about pending or in-progress work, up to 100 issues
+whose Jira status category changed to Done in the last 14 days. She keeps those
+groups separate so recent completions cannot hide active work. The reading names
+relevant open issues, groups explicit Jira workflow states, highlights overdue
+and next-two-day due dates, and proposes the next check. Jira's `new` status
+category means “Por hacer”; only an explicit unplanned status means “Sin
+planificar”. An old or overdue issue is not labelled blocked without an explicit
+blocked status. Missing due dates cannot support a claim that work is on time.
+When either query has more than 100 results, the answer marks the sample as
+incomplete. Telegram and shared chat show a short source-specific progress
+message when retrieval starts. Upcoming work is surfaced when asked; Donna does
+not send unsolicited Jira alerts.
+
+In this operator profile, an unqualified question about Valentina's work defaults
+to the PMI Jira project. Explicit project scope in the current user request or
+recent user-authored conversation takes precedence. Questions asking what she is
+working on use Jira's exact `In Progress` status; the broader status category also
+contains `Waiting` items in this project. Assistant answers are never used to
+establish a person or project scope for a Jira query.
+
 For natural-language Granola questions, `query_granola_meetings` is used only to
 locate cited notes. The connector then retrieves those notes with `get_meetings`
-and gives their summaries, rather than Granola's generated answer, to the principal
-model. Transcripts remain excluded. This keeps responsibility assignments grounded
-in the source note when the provider's generated answer paraphrases an owner incorrectly.
+and returns their stored summaries with direct note links; Granola's generated
+answer is not used as factual content. Transcripts remain excluded. Explicit
+meeting-owner questions use deterministic extraction from those summaries where
+possible. Cross-source links are rendered only when the comparison validator
+finds a shared quoted fact; otherwise the source facts remain separate. Ordinary
+multi-source synthesis still uses the principal model and is not a general
+claim-by-claim entailment proof, so ambiguous or unsupported facts need a stricter
+deterministic renderer before they can be presented as established.
+
+The Jira enhanced search request follows `nextPageToken` for up to ten pages.
+Responses that omit a continuation token before `isLast`, repeat a cursor, or
+reach the page cap are marked partial. Person/task answers keep incomplete result
+counts explicitly qualified; an incomplete empty result is never stated as a
+complete “no matches” search. A missing `isLast` in a provider response is not
+treated as proof that the result set is complete.
 
 ## Supervised memory and evaluation
 
@@ -163,6 +184,57 @@ conversation IDs. No automatic weight updates, prompt mutation or rule learning
 occurs; this is a supervised feedback and regression loop, not reinforcement
 training. Real interaction records stay on the lab; repository fixtures must be
 synthetic or redacted.
+
+### Source-exclusion canaries across secretary restarts
+
+The secretary's `/metrics` counters are process-local and reset when the service
+restarts. Prometheus retains the scraped samples and `increase()` accounts for
+counter resets, so compare a canary against its isolated time window rather than
+subtracting two `/metrics` snapshots. The `lab-secretary` scrape interval is 15
+seconds; query through the Prometheus API prefix `/prometheus/api/v1/query`.
+After a restart, the `capability="none"` series may not exist until the first
+interaction. If it is absent, send one separate synthetic no-source warm-up,
+wait for two scrapes, and record the raw counter as the baseline before measuring
+the next isolated message. An absent `none` series is not a successful canary.
+
+For each synthetic message, record its UTC send and completion times, leave at
+least one scrape interval before it and two after it, and keep unrelated
+secretary traffic outside that window. Confirm `up{job="lab-secretary"} == 1`
+and evaluate these expressions at the end of the window, setting the range
+(shown as `2m`) to cover that message and its scrape margin:
+
+```promql
+sum(increase(lab_secretary_interactions_total{job="lab-secretary",capability="none"}[2m]))
+sum(increase(lab_secretary_interactions_total{job="lab-secretary",capability=~"jira|granola"}[2m])) or vector(0)
+sum(resets(lab_secretary_interactions_total{job="lab-secretary"}[2m])) or vector(0)
+```
+
+The first query must return a positive delta for the synthetic no-source
+interaction; an empty result means no matching samples were retained and is not
+proof of zero interactions. The second must remain zero; `or vector(0)` treats a
+never-created source series as zero. The third shows observed counter resets,
+not every service restart. `increase()` can return a fractional estimate
+because Prometheus extrapolates between scrape samples; compare positive versus
+zero and approximate deltas. If canary messages are close together, query a
+single window covering the whole sequence and compare total expected
+interactions with the aggregate source delta, or separate messages by more than
+the window length.
+
+Natural-language requests that ask Donna to create, edit, transition or delete a
+Jira issue stop before model synthesis and read-only connector calls while no
+write operation is registered. The response says the current connector is
+read-only; it cannot claim success. The future write path must retain the
+operator's always-confirm requirement and report success only after a verified
+provider receipt.
+
+Donna also checks model-generated answers before returning or storing them. An
+unverified claim or offer to change an external system is replaced with a
+read-only statement, including after a short confirmation such as «sí, hazlo».
+Sourced answers are rejected when they introduce a Jira issue key absent from
+the provider result. This identifier check does not verify every natural-language
+fact; source-specific factual acceptance still requires isolated live cases.
+Open WebUI may stream progress events immediately, but buffers model answer
+chunks until the final answer passes these checks.
 
 ## Shared interaction feedback
 
@@ -234,10 +306,13 @@ cause a duplicate notification.
 
 ## Telegram voice notes
 
-The first voice path accepts complete Telegram voice notes up to 20 MiB and 120
-seconds, only after the private-chat sender and chat pass the same allowlist as
-text. The adapter downloads the note, converts OGG/Opus to WAV in memory, sends
-it to local Whisper with Spanish recognition, then asks the principal model.
+The Telegram audio path accepts complete voice notes and audio attachments up
+to 20 MiB and 120 seconds when Telegram supplies a duration, only after the
+private-chat sender and chat pass the same allowlist as text. The adapter
+downloads the audio, converts it to WAV in memory, sends it to local Whisper
+with Spanish recognition, then asks the principal model. Download and size
+failures receive a short written recovery message instead of silently dropping
+the request. Non-audio attachments are identified as unsupported.
 Both voice and text input receive written responses; Telegram speech synthesis
 is currently disabled. The adapter sends a brief written acknowledgement before
 processing, alternating between a small set of short phrasings so consecutive
@@ -270,13 +345,17 @@ through Sunday partitions. Queries without a date search the latest 30 days and
 the legacy archive. `/forget` removes both formats and every short-term history
 for the operator.
 
-Conversation retrieval currently uses normalized Spanish keywords and recency,
-with a maximum of eight exchanges supplied to the model. Approved work knowledge
-uses a separate bounded lexical lookup (up to five items) and includes validity
-and evidence references. It needs no vector database or extra model. Evaluate
-missed synonyms and irrelevant matches against real queries first; if lexical
-retrieval is insufficient, add local embeddings and an index only then. Prometheus
-tracks bounded retrieval outcomes and hit counts without conversation content.
+Durable conversation retrieval runs only when the user explicitly asks Donna to
+recall a prior exchange. Ordinary questions do not receive older persisted
+dialogue automatically. Short-term history remains available inside the current
+chat for follow-ups. Explicit recall uses normalized Spanish keywords and
+recency, with a maximum of eight exchanges supplied to the model. Approved work
+knowledge uses a separate bounded lexical lookup (up to five items) and includes
+validity and evidence references. It needs no vector database or extra model.
+Evaluate missed synonyms and irrelevant matches against real queries first; if
+lexical retrieval is insufficient, add local embeddings and an index only then.
+Prometheus tracks bounded retrieval outcomes and hit counts without conversation
+content.
 
 Incoming voice transcription and spoken replies are separate features.
 `lab_secretary_transcription_enabled` controls Whisper and Telegram voice-note
@@ -405,15 +484,39 @@ omitting `LAB_SECRETARY_CONNECTORS_FILE` intentionally deploys no OAuth accounts
 The supplied token state must be refreshed/re-enrolled if the provider revokes it.
 Keep any host refresh cache private and out of evidence or Git.
 
-Telegram polling is enabled in `group_vars/all.yml`. Do not issue manual
-`getUpdates` requests while the service polls: that creates a competing consumer.
+Telegram webhook reception is enabled by default in `group_vars/all.yml`.
+Inspect webhook metadata and the persistent queue when diagnosing delivery.
 Preflight uses `playbooks/check-telegram.yml` (`getMe`, webhook metadata only).
 The retired orchestrator stays stopped.
+
+## Guardrails de datos sensibles hacia el modelo
+
+Todo texto que Donna envía al modelo (`complete` y `completeStream`) pasa por
+`guardOutbound` en `internal/secretary/guardrails.go`. Opera sobre una copia de
+los turnos: el historial guardado y lo que ve el operador no cambian. Sustituye
+por `[REDACTED:categoría]` solo valores validados:
+
+| Categoría | Qué detecta | Validación |
+|---|---|---|
+| `private_key` | Bloques de clave privada PEM | Cabecera `BEGIN … PRIVATE KEY` |
+| `token` | AWS, GitHub, Slack, Atlassian, `sk-`, JWT, token de bot de Telegram, `Bearer` | Prefijo y longitud fijos |
+| `card` | Tarjetas de 13 a 19 dígitos | Luhn; se descartan repeticiones de un dígito |
+| `iban` | IBAN con o sin espacios | Módulo 97 |
+| `national_id` | DNI y NIE españoles | Letra de control |
+
+Correos, nombres y teléfonos no se tocan: son justo los datos de Jira y Granola
+sobre los que Donna razona. Las claves de Jira (`PMI-1234`), fechas y recuentos
+no activan ningún detector porque cada patrón exige su comprobación.
+`lab_secretary_guardrail_redactions_total{category}` cuenta las redacciones con
+las cinco categorías cerradas y nunca incluye el contenido; con el diagnóstico
+activo se registra además `guardrail.redacted.<categoría>`. No se redacta la
+respuesta del modelo ni el flujo ya emitido por streaming: al recibir la entrada
+limpia, el modelo no tiene el valor que repetir.
 
 ## Verification and evidence
 
 Tests exercise allowlist rejection, private chat identity, preserved streaming,
-restart history, failure handling, durable polling offsets, source fidelity,
+restart history, failure handling, durable webhook queues, source fidelity,
 malformed source responses, provider credential destination checks and denied
 write tools. Jira tests cover REST authentication, safe JQL compilation, and
 result validation; OAuth tests cover Granola issuer discovery, allowed hosts and
@@ -436,3 +539,228 @@ Primary provider contracts: [Telegram Bot API](https://core.telegram.org/bots/ap
 [Jira Cloud REST API v3](https://developer.atlassian.com/cloud/jira/platform/rest/v3/),
 [JQL issue search](https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-issue-search/),
 [Granola MCP](https://docs.granola.ai/help-center/sharing/integrations/mcp).
+
+
+## Interpretación de órdenes mediante servicio independiente
+
+El código y el contrato HTTP v1 viven en el repositorio hermano
+`../intent-service`. Donna conserva identidad, permisos, memoria y ejecución;
+el servicio solo devuelve `goal`, operación semántica y capacidades de lectura
+sugeridas. Una petición `change_request` nunca autoriza una escritura. Donna
+comprueba cada capacidad contra su registro actual y, si el servicio falla,
+prueba primero el enrutado local y clasifica con el modelo solo una intención
+que siga siendo ambigua. Los comandos `/jira`, `/reuniones` y `/resumen` siguen
+siendo directos.
+
+El perfil `donna-v1` y el binario se despliegan de forma separada. Antes de
+desplegar Donna o el playbook principal, compila y prueba el servicio en su
+repositorio, y despliega el artefacto con la suma SHA-256 verificada:
+
+```bash
+cd ../intent-service
+bash scripts/test.sh
+bash scripts/test-contract.sh
+bash scripts/build.sh
+cd ../lab
+LAB_INTENT_BINARY="$PWD/../intent-service/dist/intent-service-linux-amd64" \
+LAB_INTENT_SHA256="$(shasum -a 256 ../intent-service/dist/intent-service-linux-amd64 | cut -d ' ' -f1)" \
+LAB_INTENT_PROFILE="$PWD/../intent-service/profiles/donna-v1.json" \
+ansible-playbook playbooks/deploy-intent-service.yml
+./scripts/build-orchestrator-go.sh
+LAB_INTENT_MODE=enabled ansible-playbook playbooks/deploy-secretary-intent.yml
+```
+
+El servicio escucha solo en `127.0.0.1:8091`; `/health` y `/metrics` exponen
+estado y contadores agregados sin texto de usuario. El token se genera en el
+host, en `/etc/lab-intent-service/client.env`, con permisos de root. El
+intérprete mantiene una ruta determinista y se abstiene ante una fuente
+ambigua. Donna intenta primero ese servicio; si falla o se abstiene, aplica su
+enrutado local y usa el clasificador del modelo solo cuando la petición sigue
+siendo ambigua. Si tampoco puede resolverla, pide una aclaración breve. Las
+acciones negadas no consultan conectores ni ejecutan cambios.
+Si una petición explícita compara varias fuentes y el intérprete devuelve solo
+una, Donna añade las capacidades que el enrutador determinista reconoce en esa
+misma consulta, respetando exclusiones como «solo Granola».
+
+En respuestas que combinan Granola y Jira, las instrucciones de síntesis piden
+enlazar una acción con una incidencia solo por clave compartida o por
+coincidencia concreta de tarea, acción y responsable. Un nombre, proyecto o
+fecha común no basta; sin evidencia directa, pide presentar las fuentes
+separadas. Es una regla del prompt, no una validación determinista de cada
+frase generada. El estado actual siempre procede de Jira.
+Por defecto responde de forma concisa y evita resaltar información no pedida.
+En Telegram una respuesta larga se divide por párrafos o frases completas; en
+Open WebUI sigue siendo una respuesta única y breve.
+
+Para volver temporalmente al enrutado anterior sin parar el servicio,
+ejecuta `LAB_INTENT_MODE=shadow ansible-playbook playbooks/deploy-secretary-intent.yml`.
+El playbook principal conserva `enabled` por defecto mediante `group_vars/all.yml`;
+`LAB_INTENT_MODE=shadow` permite una ejecución de diagnóstico.
+
+La verificación conectada, sin contenido privado en Git, está resumida en
+[validación del intérprete](validation/2026-10-27-intent-service/README.md).
+
+## Diagnóstico detallado de conversaciones e inferencia
+
+La configuración única `LAB_DEBUG_ENABLED` activa o desactiva las trazas
+detalladas de Donna, la pasarela de inferencia, el observador nativo y el
+registrador de recursos del host. Por defecto es `false`; acepta `true` o
+`false` (sin distinguir mayúsculas y minúsculas, y quitando espacios exteriores).
+Para activarlas después de instalar los colectores, ejecuta
+`LAB_DEBUG_ENABLED=true ansible-playbook -i inventory.yml playbooks/toggle-debug-tracing.yml`.
+La primera vez, instala el observador nativo con
+`LAB_DEBUG_ENABLED=true ansible-playbook -i inventory.yml playbooks/deploy-deep-inference-trace.yml`.
+Para desactivarlas, ejecuta
+`LAB_DEBUG_ENABLED=false ansible-playbook -i inventory.yml playbooks/toggle-debug-tracing.yml`.
+Antes, compila los artefactos con `./scripts/build-orchestrator-go.sh`. El
+playbook instala Donna y la pasarela actuales y solo cambia esos servicios y los
+colectores; no vuelve a desplegar ni reconfigura el modelo.
+
+Con el modo desactivado siguen disponibles los logs de ciclo de vida y error,
+health checks, métricas agregadas, journald persistente y protecciones de
+recuperación (kdump, watchdog y RAS). Los registros de aprendizaje supervisado
+son independientes y conservan su retención configurada.
+
+Cada traza de interacción guarda también `route_decision` y, cuando procede,
+`fallback_reason`. Son etiquetas limitadas como `intent_service_multi`,
+`local_fallback`, `service_unavailable` o `source_missing`; nunca incluyen la
+consulta, la respuesta ni el texto de error. Con diagnósticos detallados activos,
+`conversation-steps.jsonl` registra los eventos `router.decision` y
+`router.fallback` con esas mismas etiquetas. Esto permite distinguir una ruta
+normal de un fallback sin registrar contenido de conversación.
+
+## Bitácora física para diagnosticar apagados
+
+Con `LAB_DEBUG_ENABLED=true`, cada conversación registra checkpoints incrementales de inicio/fin en
+`/var/lib/lab-secretary/diagnostics/conversation-steps.jsonl` (0600, directorio0700).
+Se sincroniza cada registro antes de continuar. Rotación:16MiB más cuatro copias.
+`trace_id` correlaciona el mensaje; `attempt_id` distingue entregas y reintentos;
+`boot_id` permite cruzarlo con flight recorder y journal. La bitácora incluye
+espera del servicio, contexto, herramientas, límites HTTP, modelo, persistencia
+y entrega Telegram. No contiene mensajes, prompts, respuestas ni credenciales.
+Una operación con inicio sin cierre identifica el último progreso registrado,
+no demuestra qué componente apagó el host. Buscar también
+`conversation_diagnostic_write_error` en el journal. Fsync no garantiza el último
+instante ante un corte físico. Evidencia y pruebas en
+[conversation checkpoints](validation/2026-10-22-conversation-checkpoints/README.md).
+
+## Mapeos guiados de Donna
+
+La búsqueda de personas y proyectos consulta Jira REST en vivo. Las coincidencias
+con el mismo nombre se conservan como candidatos diferentes por su ID de Jira;
+un nombre visible nunca basta para decidir. Jira no siempre expone email y la
+integración actual de Granola devuelve títulos, fechas y resúmenes, no IDs de
+asistentes ni emails. Donna no completa esos datos por inferencia: el operador
+puede proponer un email para una persona, o un alias para una persona o proyecto
+ya confirmado.
+
+Cada propuesta queda pendiente. Donna muestra un ID de candidato y la huella
+completa calculada desde su contenido. Confirma con `/mapeo confirmar ID
+HUELLA_COMPLETA` o descarta con `/mapeo descartar ID HUELLA_COMPLETA`. Ambos
+valores deben coincidir y el candidato debe pertenecer al operador, canal y conversación actuales.
+Cambiar el contenido genera otra huella y la confirmación anterior deja de valer.
+Las propuestas de otra conversación no aparecen en el comando `/mapeo pendientes`.
+Los mapeos aprobados se leen desde el servicio de identidad y alimentan la
+resolución exacta de personas y proyectos en consultas posteriores. En
+consultas de tareas por persona, Donna usa primero el `accountId` de Jira de un
+mapeo aprobado; si no hay correspondencia inequívoca, recurre a la búsqueda
+activa de usuarios de Jira y conserva el error ante ambigüedad.
+
+Para compilar y desplegar el servicio (el playbook reinicia Donna para cargar la
+integración):
+
+```bash
+./scripts/build-donna-identity.sh
+ansible-playbook -i inventory.yml playbooks/deploy-donna-identity.yml
+```
+
+El servicio escucha solo en `127.0.0.1:8092`, usa un token generado en el host y
+guarda mapeos en `/var/lib/donna-identity` con acceso privado. Verifica
+`http://127.0.0.1:8092/healthz` y el endpoint de salud de `lab-secretary`.
+No edites `.env`, `group_vars/vault.yml` ni `ssh/` para crear la clave.
+
+Para retirar la integración manteniendo los mapeos para una restauración futura:
+detén y deshabilita `donna-identity`, elimina la línea
+`EnvironmentFile=/etc/lab-secretary/identity.env` de
+`/etc/systemd/system/lab-secretary.service`, borra solo
+`/etc/lab-secretary/identity.env`, recarga systemd y reinicia `lab-secretary`.
+Conserva `/var/lib/donna-identity`; bórralo solo si se decide eliminar también
+los mapeos almacenados.
+
+## Seguimientos automáticos de Granola
+
+El microservicio `donna-granola-events` recibe eventos firmados
+`note.generated` de la suscripción `personal`, recupera el resumen generado y
+entrega un mensaje corto con acciones explícitas como candidatas a Jira. Nunca
+crea ni modifica incidencias. Telegram recibe el aviso en el chat privado
+allowlisted; Open WebUI conserva el mismo aviso por operador y lo muestra en su
+siguiente conversación autenticada.
+
+La cola persiste antes de responder `202`, deduplica por ID de evento y limita
+los reintentos de lectura y entrega. La nota se consulta solo con
+`GET /v1/notes/{id}`; no se solicita ni se almacena la transcripción. Consulta
+[seguimientos de Granola](granola-followups-operation.md) para los requisitos
+de Business/Enterprise, el alta con ámbito `personal`, configuración privada,
+verificación, fallos y rollback. La implementación local no confirma todavía
+la suscripción real, el acceso de la cuenta ni la recepción desde Internet.
+
+Para compilar los dos binarios afectados y ejecutar las pruebas dirigidas:
+
+```bash
+./scripts/build-donna-granola-events.sh
+```
+
+El despliegue dedicado es `playbooks/deploy-donna-granola-events.yml`. Primero
+debe desplegarse con la clave de webhook vacía; el callback responde `503`
+hasta guardar la clave que Granola devuelve una sola vez al crear el endpoint.
+Después de guardarla en el `.env` privado, vuelve a ejecutar el playbook.
+
+## Propuestas de tareas Jira (implementadas localmente, pendientes de activación)
+
+La escritura se separa en el servicio `donna-jira-actions`, que escucha solo
+en `127.0.0.1:8094` y recibe un OAuth access token propio. El modelo y
+`lab-secretary` no reciben la credencial de Jira. El servicio solo admite
+crear una tarea o añadir un comentario a una tarea; para coincidencias, el
+comentario conserva el texto fuente y el enlace de Granola. No cambia campos
+de una tarea existente.
+
+Granola conserva localmente el ID de nota, el enlace HTTPS disponible y el
+fragmento literal de acción. Cuando falta el enlace, Donna lo pregunta y pide
+al operador comprobar que abre esa nota; la URL se valida por formato, no se
+visita ni se contrasta independientemente.
+Los candidatos duran como máximo 30 días después de completar su entrega. La
+propuesta revisa acción, proyecto, tipo, resumen y posibles coincidencias. El
+umbral configurado es 90%, con al menos 30 ejemplos correctos por dimensión;
+el porcentaje que redacte el modelo no cuenta como evidencia. Todavía no hay
+un conjunto de calibración desplegado, por lo que las dimensiones inferidas
+que no confirme el operador quedan en pregunta. Una única opción de proyecto o
+tipo permitida se puede usar sin ambigüedad. La vista previa se liga al usuario,
+canal, conversación, huella exacta del contenido y caducidad de diez minutos.
+El botón **Crear en Jira** o **Actualizar tarea** es la única autorización de
+escritura. **Descartar propuesta** cancela cualquier borrador sin tocar Jira;
+en una coincidencia dudosa, **No es la misma tarea** cancela el comentario y
+deja explícito que no se ha encontrado la misma tarea.
+
+La entrada manual de candidatos está conectada localmente desde notificaciones
+de Granola. Los adaptadores están implementados para callbacks de Telegram,
+aclaraciones en ambos canales y Actions de Open WebUI. El archivo fuente para importación manual es
+`roles/open_webui/files/donna_jira_actions.py`; hay que asociarlo solo al
+modelo de Donna y configurar sus válvulas con el ID del único administrador
+autorizado, el operador allowlisted y el token privado del servicio.
+
+**Estado de activación:** el código local ya permite iniciar una propuesta desde
+una acción de Granola y continuar una pregunta en el mismo chat. No se ha
+desplegado ni asociado la Action en Open WebUI, ni hay credenciales Jira
+configuradas aquí. No hace escrituras en Jira durante la preparación: solo el
+botón de confirmación ejecuta la creación o el comentario exacto. Un resultado
+incierto consume la autorización y no se reintenta; el operador debe inspeccionar
+Jira antes de preparar otra propuesta. El registro de tiempo trabajado queda
+para una fase posterior.
+
+La validación local se ejecuta con `./scripts/test-orchestrator-go.sh` y las
+pruebas Python de la Action. El despliegue dedicado se prepara con
+`playbooks/deploy-donna-jira-actions.yml`; requiere `DONNA_JIRA_CLOUD_ID`,
+`DONNA_JIRA_WRITE_TOKEN` OAuth y `DONNA_JIRA_ACTION_SERVICE_TOKEN` exportados
+fuera del repositorio, junto con las allowlists `DONNA_JIRA_ALLOWED_PROJECTS` y
+`DONNA_JIRA_ALLOWED_ISSUE_TYPES`. La importación y asignación de la Action en
+Open WebUI sigue siendo un paso explícito de administración.

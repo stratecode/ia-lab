@@ -13,8 +13,7 @@ import (
 
 func TestParseTelegramMode(t *testing.T) {
 	for input, want := range map[string]string{
-		"":         "polling",
-		"polling":  "polling",
+		"":         "webhook",
 		"webhook":  "webhook",
 		"disabled": "disabled",
 	} {
@@ -22,6 +21,9 @@ func TestParseTelegramMode(t *testing.T) {
 		if err != nil || string(got) != want {
 			t.Errorf("parseTelegramMode(%q) = %q, %v; want %q", input, got, err, want)
 		}
+	}
+	if _, err := parseTelegramMode("polling"); err == nil {
+		t.Fatal("retired transport was accepted")
 	}
 	if _, err := parseTelegramMode("both"); err == nil {
 		t.Fatal("invalid Telegram mode was accepted")
@@ -61,6 +63,20 @@ func TestParseProgressDelay(t *testing.T) {
 	for _, input := range []string{"0", "121", "fast"} {
 		if _, err := parseProgressDelay(input); err == nil {
 			t.Errorf("parseProgressDelay(%q) accepted an invalid threshold", input)
+		}
+	}
+}
+
+func TestParseDebugEnabledDefaultsToFalseAndRequiresBoolean(t *testing.T) {
+	for input, want := range map[string]bool{"": false, "false": false, "true": true} {
+		got, err := parseDebugEnabled(input)
+		if err != nil || got != want {
+			t.Errorf("parseDebugEnabled(%q) = %t, %v; want %t", input, got, err, want)
+		}
+	}
+	for _, input := range []string{"yes", "1", "enabled"} {
+		if _, err := parseDebugEnabled(input); err == nil {
+			t.Errorf("parseDebugEnabled(%q) accepted a non-boolean value", input)
 		}
 	}
 }
@@ -113,7 +129,7 @@ func TestConfigureVoiceInputWorksWithoutPiper(t *testing.T) {
 	}
 }
 
-func TestWebhookModeDoesNotStartPolling(t *testing.T) {
+func TestWebhookWorkerDoesNotCallTelegramReceptionAPI(t *testing.T) {
 	telegramCalls := 0
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		telegramCalls++
@@ -136,7 +152,7 @@ func TestWebhookModeDoesNotStartPolling(t *testing.T) {
 		t.Fatal(err)
 	}
 	if telegramCalls != 0 {
-		t.Fatalf("webhook mode made %d Telegram API calls; it must not start polling", telegramCalls)
+		t.Fatalf("webhook mode made %d Telegram API calls; reception must use webhook", telegramCalls)
 	}
 }
 

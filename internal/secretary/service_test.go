@@ -9,10 +9,89 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestModelRequestUsesLocalConversationTraceID(t *testing.T) {
+	var upstreamID string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamID = r.Header.Get("X-Lab-Trace-ID")
+		io.WriteString(w, `{"choices":[{"message":{"content":"Buenos días."}}]}`)
+	}))
+	defer upstream.Close()
+	dir := t.TempDir()
+	s := New(upstream.URL, "key", "instructions", dir, map[int64]bool{7: true})
+	s.SetDiagnosticsEnabled(true)
+	if _, err := s.Reply(context.Background(), 7, "Buenos días"); err != nil {
+		t.Fatal(err)
+	}
+	if len(upstreamID) != 24 {
+		t.Fatalf("missing model trace ID: %q", upstreamID)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "diagnostics", "conversation-steps.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var event conversationEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Event == "model.request.start" && event.Attempt == upstreamID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("upstream request cannot be correlated with local model checkpoint")
+	}
+}
+
+func TestGranolaNotificationIsAvailableToCurrentAndLaterConversationTurns(t *testing.T) {
+	var requests [][]Turn
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []Turn `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode model request: %v", err)
+		}
+		requests = append(requests, body.Messages)
+		io.WriteString(w, `{"choices":[{"message":{"content":"Lo reviso con el resumen."}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	const note = "Granola · Revisión SMARTFM: Gonzalo prepara SW-87."
+	if _, err := s.replyWithHistoryContext(context.Background(), 7, "openwebui", "chat-1", "¿En qué se quedó Gonzalo?", note, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 1 || !strings.Contains(fmt.Sprint(requests[0]), note) {
+		t.Fatalf("Granola context missing from the current model turn: %#v", requests)
+	}
+	key := s.historyKey(7, "openwebui", "chat-1")
+	if !strings.Contains(fmt.Sprint(s.history[key]), note) {
+		t.Fatalf("Granola context was not persisted for later turns: %#v", s.history[key])
+	}
+}
+
+func TestDetailedDiagnosticsAreDisabledByDefault(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"choices":[{"message":{"content":"Respuesta."}}]}`)
+	}))
+	defer upstream.Close()
+	dir := t.TempDir()
+	s := New(upstream.URL, "key", "instructions", dir, map[int64]bool{7: true})
+	if _, err := s.Reply(context.Background(), 7, "consulta"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "diagnostics", "conversation-steps.jsonl")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("detailed diagnostics file exists with debug disabled: %v", err)
+	}
+}
 
 func TestPrivateAllowlistAndNoLegacyCommands(t *testing.T) {
 	s := &Service{Allowed: map[int64]bool{7: true}}
@@ -60,15 +139,19 @@ func TestReplyWithInteractionEmitsIntentAndLookupLifecycle(t *testing.T) {
 }
 
 func TestReadOnlyActionNeverEmitsActionStarted(t *testing.T) {
+	modelCalls := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
 		io.WriteString(w, `{"choices":[{"message":{"content":"La tarea aparece abierta."}}]}`)
 	}))
 	defer upstream.Close()
 	s := New(upstream.URL, "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	reads := 0
 	s.Capabilities = []ReadCapability{{
 		Name: "Jira", Description: "tareas del equipo",
 		Match: func(query string) bool { return strings.Contains(strings.ToLower(query), "jira") },
 		Read: func(context.Context, string) (CapabilityResult, error) {
+			reads++
 			return CapabilityResult{Text: "La tarea STRAT-42 aparece abierta.", ResultCount: 1}, nil
 		},
 	}}
@@ -87,8 +170,11 @@ func TestReadOnlyActionNeverEmitsActionStarted(t *testing.T) {
 			t.Fatalf("read-only Jira emitted action_started: %+v", events)
 		}
 	}
-	if !strings.Contains(strings.ToLower(answer), "solo he consultado") || !strings.Contains(strings.ToLower(answer), "no he cambiado") {
-		t.Fatalf("read-only action answer must state no change was made: %q", answer)
+	if modelCalls != 0 || reads != 0 {
+		t.Fatalf("unsupported write request must stop before model or read-only tools: model calls=%d reads=%d", modelCalls, reads)
+	}
+	if !strings.Contains(strings.ToLower(answer), "solo tiene acceso de lectura") || strings.Contains(strings.ToLower(answer), "cread") {
+		t.Fatalf("answer must state the write capability is unavailable without implying success: %q", answer)
 	}
 }
 
@@ -113,8 +199,27 @@ func TestUnsupportedActionDoesNotAnnounceLookup(t *testing.T) {
 	if len(events) < 2 || events[0].Meaning != InteractionAction || events[len(events)-1] != (InteractionEvent{Kind: EventBlocked, Meaning: InteractionAction, Reason: BlockUnavailable}) {
 		t.Fatalf("unsupported action lifecycle = %+v", events)
 	}
-	if !strings.Contains(strings.ToLower(answer), "no tengo") {
+	if !strings.Contains(strings.ToLower(answer), "solo tiene acceso de lectura") {
 		t.Fatalf("answer should explain the unavailable action: %q", answer)
+	}
+}
+
+func TestPartialEmptyJiraResultIsNotReportedAsNoMatches(t *testing.T) {
+	s := New("", "", "", t.TempDir(), map[int64]bool{7: true})
+	s.Capabilities = []ReadCapability{{
+		Name:        "Jira",
+		Description: "tareas de Jira",
+		Match:       func(query string) bool { return strings.Contains(strings.ToLower(query), "jira") },
+		Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{Partial: true}, nil
+		},
+	}}
+	answer, err := s.Reply(context.Background(), 7, "Busca tareas en Jira")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.ToLower(answer), "incomplet") || strings.Contains(strings.ToLower(answer), "no he encontrado") {
+		t.Fatalf("partial empty result must not be rendered as a complete empty search: %q", answer)
 	}
 }
 
@@ -222,7 +327,7 @@ func TestSharedChatStreamingAndAuthentication(t *testing.T) {
 		if auth == "" && w.Code != 401 {
 			t.Fatal("missing auth accepted")
 		}
-		if auth != "" && (w.Code != 200 || !strings.Contains(w.Body.String(), `"content":"Ho"`) || !strings.Contains(w.Body.String(), `"content":"la"`) || !strings.Contains(w.Body.String(), "[DONE]")) {
+		if auth != "" && (w.Code != 200 || !strings.Contains(w.Body.String(), `"content":"Hola"`) || strings.Contains(w.Body.String(), `"content":"Ho"`) || !strings.Contains(w.Body.String(), "[DONE]")) {
 			t.Fatalf("stream response invalid: %d %q", w.Code, w.Body.String())
 		}
 	}
@@ -327,7 +432,7 @@ func TestSharedChatStreamingRendersInteractionBeforeAnswer(t *testing.T) {
 	s.Handler().ServeHTTP(result, request)
 	body := result.Body.String()
 	reaction := strings.Index(body, `"content":"🔍"`)
-	progress := strings.Index(body, `"content":"Déjame revisar Granola."`)
+	progress := strings.Index(body, `"content":"Voy a revisar lo tratado en las reuniones de Granola."`)
 	answer := strings.Index(body, `"content":"Resumen útil."`)
 	if result.Code != http.StatusOK || reaction < 0 || progress <= reaction || answer <= progress || !strings.Contains(body, "[DONE]") {
 		t.Fatalf("stream interaction order/status invalid: status=%d reaction=%d progress=%d answer=%d body=%q", result.Code, reaction, progress, answer, body)
@@ -357,7 +462,7 @@ func TestSharedChatNonStreamingProgressOnlyWhenLookupStarts(t *testing.T) {
 		if err := json.Unmarshal(result.Body.Bytes(), &response); err != nil {
 			t.Fatal(err)
 		}
-		if len(response.Choices) != 1 || !strings.Contains(response.Choices[0].Message.Content, "🔍") || !strings.Contains(response.Choices[0].Message.Content, "Déjame revisar Jira.") || !strings.Contains(response.Choices[0].Message.Content, "Hay dos tareas importantes.") {
+		if len(response.Choices) != 1 || !strings.Contains(response.Choices[0].Message.Content, "🔍") || !strings.Contains(response.Choices[0].Message.Content, "Voy a contrastar estados y vencimientos en Jira.") || !strings.Contains(response.Choices[0].Message.Content, "Hay dos tareas importantes.") {
 			t.Fatalf("non-streaming lookup response missing source feedback: %q", result.Body.String())
 		}
 	})
@@ -389,8 +494,8 @@ func TestSharedChatNonStreamingProgressOnlyWhenLookupStarts(t *testing.T) {
 		}}
 		result := performOpenWebUIChat(t, s, "Cierra la tarea STRAT-42 en Jira", false)
 		body := result.Body.String()
-		if !strings.Contains(body, "👍") || !strings.Contains(body, "Buscando en Jira; esta conexión solo permite consultar.") || !strings.Contains(body, "No he cambiado nada; solo he consultado Jira") {
-			t.Fatalf("read-only action feedback is missing or claims a write: %q", body)
+		if !strings.Contains(body, "👍") || !strings.Contains(body, "solo tiene acceso de lectura") || strings.Contains(body, "Buscando en Jira") || strings.Contains(body, "STRAT-42 sigue abierta") {
+			t.Fatalf("unsupported Jira write must stop before lookup and explain read-only access: %q", body)
 		}
 	})
 
@@ -783,6 +888,42 @@ func TestMeetingTaskQuestionRoutesToGranolaAndJira(t *testing.T) {
 	}
 }
 
+func TestMultiSourceSynthesisRequiresSpecificEvidenceToLinkTasks(t *testing.T) {
+	var systemPrompt string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Messages []Turn `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Messages) == 0 {
+			t.Fatal("synthesis request has no system instructions")
+		}
+		systemPrompt = body.Messages[0].Content
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"No hay un enlace comprobable entre las fuentes."}}]}`)
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), nil)
+	capabilities := []ReadCapability{
+		{Name: "Granola", Description: "reuniones", Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{Text: "Reunión Proyecto Atlas: Laura revisará el presupuesto.", ResultCount: 1}, nil
+		}},
+		{Name: "Jira", Description: "incidencias", Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{Text: "AT-42 Proyecto Atlas: presupuesto pendiente; asignada a Laura.", ResultCount: 1}, nil
+		}},
+	}
+	_, _, _, err := s.answerFromCapabilities(context.Background(), "¿Qué quedó asignado?", "¿Qué quedó asignado?", capabilities, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"misma clave explícita de Jira", "tarea, acción y responsable", "persona, proyecto o fecha común no basta", "por separado"} {
+		if !strings.Contains(systemPrompt, required) {
+			t.Errorf("synthesis prompt omits correlation rule %q: %s", required, systemPrompt)
+		}
+	}
+}
+
 func TestMeetingSummaryRoutesToGranolaWhenNoTaskIntentIsPresent(t *testing.T) {
 	const question = "Resúmeme las reuniones de esta mañana y las decisiones que tomamos."
 	const source = "Notas de Granola: planificación · Acordamos mantener el calendario actual."
@@ -813,6 +954,47 @@ func TestMeetingSummaryRoutesToGranolaWhenNoTaskIntentIsPresent(t *testing.T) {
 	answer, err := s.Reply(context.Background(), 7, question)
 	if err != nil || answer != summary || modelCalls != 1 || sourceReader.granolaCalls != 1 || sourceReader.jiraCalls != 0 {
 		t.Fatalf("answer=%q model=%d Granola=%d Jira=%d err=%v", answer, modelCalls, sourceReader.granolaCalls, sourceReader.jiraCalls, err)
+	}
+}
+
+func TestGranolaDirectAnswerGetsExecutiveSynthesis(t *testing.T) {
+	const question = "Resume ejecutivamente la reunión y sus decisiones."
+	const source = "Granola: Se habló del lanzamiento. Se acordó retrasarlo una semana; Laura confirmará la nueva fecha el viernes."
+	const summary = "Se acordó retrasar el lanzamiento una semana. Laura confirmará la nueva fecha el viernes."
+	var modelCalls int
+	var systemPrompt, modelInput string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		modelCalls++
+		var body struct {
+			Messages []Turn `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.Messages) == 0 {
+			t.Fatal("synthesis request has no messages")
+		}
+		systemPrompt = body.Messages[0].Content
+		for _, message := range body.Messages {
+			modelInput += message.Content + "\n"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": summary}}}})
+	}))
+	defer upstream.Close()
+	s := New(upstream.URL, "key", "instructions", t.TempDir(), nil)
+	capabilities := []ReadCapability{{
+		Name: "Granola", Description: "notas de reuniones",
+		Read: func(context.Context, string) (CapabilityResult, error) {
+			return CapabilityResult{Text: source, ResultCount: 1, DirectAnswer: true}, nil
+		},
+	}}
+
+	answer, _, _, err := s.answerFromCapabilities(context.Background(), question, question, capabilities, nil, nil, nil, nil)
+	if err != nil || answer != summary || modelCalls != 1 {
+		t.Fatalf("answer=%q model calls=%d err=%v; want synthesized answer", answer, modelCalls, err)
+	}
+	if !strings.Contains(modelInput, source) || !strings.Contains(systemPrompt, "síntesis ejecutiva") || !strings.Contains(systemPrompt, "no reproduzcas literalmente") {
+		t.Fatalf("model did not receive the source and executive-synthesis instructions: %q", modelInput)
 	}
 }
 

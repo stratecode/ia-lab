@@ -1,6 +1,7 @@
 package secretary
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"time"
@@ -9,12 +10,23 @@ import (
 const approvedKnowledgeLimit = 5
 
 func (s *Service) relevantKnowledge(operatorID int64, query string, at time.Time) ([]KnowledgeItem, error) {
-	if s.Learning == nil {
+	if s.Learning == nil && s.Identity == nil {
 		return nil, nil
 	}
-	items, err := s.Learning.ListKnowledge(operatorID, KnowledgeApproved)
-	if err != nil {
-		return nil, err
+	var items []KnowledgeItem
+	if s.Learning != nil {
+		local, err := s.Learning.ListKnowledge(operatorID, KnowledgeApproved)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, local...)
+	}
+	if s.Identity != nil {
+		remote, err := s.Identity.ApprovedKnowledge(context.Background(), operatorID)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, remote...)
 	}
 	terms := memoryTerms(query)
 	type ranked struct {

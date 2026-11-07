@@ -1,0 +1,189 @@
+---
+- name: Reversible principal model canary for Gemma 4 E2B
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    principal_model_state: lfm
+    gemma_model_path: /srv/ai-lab/llama.cpp/models/gemma-4-E2B-it-Q4_0.gguf
+    gemma_model_url: https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_0.gguf
+    gemma_model_sha256: 8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52
+    lfm_model_path: /srv/ai-lab/llama.cpp/models/LFM2.5-1.2B-Instruct-Q4_0.gguf
+    router_presets_path: /etc/llama.cpp/models.ini
+    router_presets_backup_path: /etc/llama.cpp/models.ini.pre-gemma-canary
+    required_memory_headroom_bytes: 6442450944
+
+  tasks:
+    - name: Validate requested state
+      ansible.builtin.assert:
+        that:
+          - principal_model_state in ['gemma', 'lfm']
+        fail_msg: Set principal_model_state to gemma or lfm.
+
+    - name: Confirm the existing inference router is active
+      ansible.builtin.command: systemctl is-active llama-cpp-main.service
+      changed_when: false
+
+    - name: Read principal service memory limit
+      ansible.builtin.command: systemctl show llama-cpp-main.service --property=MemoryMax --value
+      register: principal_service_memory_max
+      changed_when: false
+      when: principal_model_state == 'gemma'
+
+    - name: Read principal service current memory
+      ansible.builtin.command: systemctl show llama-cpp-main.service --property=MemoryCurrent --value
+      register: principal_service_memory_current
+      changed_when: false
+      when: principal_model_state == 'gemma'
+
+    - name: Read aggregate inference slice memory limit
+      ansible.builtin.command: systemctl show llama-cpp.slice --property=MemoryMax --value
+      register: aggregate_memory_max
+      changed_when: false
+      when: principal_model_state == 'gemma'
+
+    - name: Read aggregate inference slice current memory
+      ansible.builtin.command: systemctl show llama-cpp.slice --property=MemoryCurrent --value
+      register: aggregate_memory_current
+      changed_when: false
+      when: principal_model_state == 'gemma'
+
+    - name: Require six GiB headroom at both resource boundaries
+      ansible.builtin.assert:
+        that:
+          - principal_service_memory_max.stdout | int - principal_service_memory_current.stdout | int >= required_memory_headroom_bytes
+          - aggregate_memory_max.stdout | int - aggregate_memory_current.stdout | int >= required_memory_headroom_bytes
+        fail_msg: Gemma canary requires at least 6 GiB free in both the router service and aggregate inference slice.
+      when: principal_model_state == 'gemma'
+
+    - name: Read existing router presets
+      ansible.builtin.slurp:
+        src: "{{ router_presets_path }}"
+      register: router_presets
+
+    - name: Require the known main, Qwen, and BGE model layout
+      ansible.builtin.assert:
+        that:
+          - "'[main]' in (router_presets.content | b64decode)"
+          - "'[qwen-eval]' in (router_presets.content | b64decode)"
+          - "'[bge-m3]' in (router_presets.content | b64decode)"
+          - "lfm_model_path in (router_presets.content | b64decode) or gemma_model_path in (router_presets.content | b64decode)"
+        fail_msg: Router presets differ from the expected live layout; refusing to replace the principal model.
+
+    - name: Inspect existing LFM rollback snapshot
+      ansible.builtin.stat:
+        path: "{{ router_presets_backup_path }}"
+      register: router_presets_backup
+
+    - name: Read existing LFM rollback snapshot
+      ansible.builtin.slurp:
+        src: "{{ router_presets_backup_path }}"
+      register: existing_router_presets_backup
+      when: router_presets_backup.stat.exists
+
+    - name: Validate any existing rollback snapshot
+      ansible.builtin.assert:
+        that:
+          - "lfm_model_path in (existing_router_presets_backup.content | b64decode)"
+          - "'[qwen-eval]' in (existing_router_presets_backup.content | b64decode)"
+          - "'[bge-m3]' in (existing_router_presets_backup.content | b64decode)"
+        fail_msg: Existing rollback snapshot is not the expected LFM router configuration.
+      when: router_presets_backup.stat.exists
+
+    - name: Preserve the current router presets for rollback
+      ansible.builtin.copy:
+        src: "{{ router_presets_path }}"
+        dest: "{{ router_presets_backup_path }}"
+        remote_src: true
+        force: false
+        owner: root
+        group: root
+        mode: "0644"
+      when: principal_model_state == 'gemma' and not router_presets_backup.stat.exists
+
+    - name: Download pinned Gemma weights and verify SHA-256
+      ansible.builtin.get_url:
+        url: "{{ gemma_model_url }}"
+        dest: "{{ gemma_model_path }}"
+        checksum: "sha256:{{ gemma_model_sha256 }}"
+        owner: llama-cpp
+        group: llama-cpp
+        mode: "0644"
+        timeout: 900
+        force: false
+      when: principal_model_state == 'gemma'
+
+    - name: Route the main preset to Gemma without changing other presets
+      ansible.builtin.replace:
+        path: "{{ router_presets_path }}"
+        regexp: "(?m)^model = {{ lfm_model_path | regex_escape }}$"
+        replace: "model = {{ gemma_model_path }}"
+      register: gemma_preset
+      when: principal_model_state == 'gemma'
+
+    - name: Disable Gemma thinking for concise principal replies
+      ansible.builtin.blockinfile:
+        path: "{{ router_presets_path }}"
+        insertafter: "^model = {{ gemma_model_path | regex_escape }}$"
+        marker: "; {mark} Gemma canary response mode"
+        block: |
+          chat-template-kwargs = {"enable_thinking":false}
+      register: gemma_response_mode
+      when: principal_model_state == 'gemma'
+
+    - name: Require the LFM rollback snapshot
+      ansible.builtin.assert:
+        that:
+          - router_presets_backup.stat.exists
+        fail_msg: Cannot roll back because the original router preset snapshot is missing.
+      when: principal_model_state == 'lfm'
+
+    - name: Restore the original LFM router presets
+      ansible.builtin.copy:
+        src: "{{ router_presets_backup_path }}"
+        dest: "{{ router_presets_path }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      register: restored_lfm_preset
+      when: principal_model_state == 'lfm'
+
+    - name: Restart only the existing principal router service
+      ansible.builtin.systemd:
+        name: llama-cpp-main.service
+        state: restarted
+        daemon_reload: false
+      when: >-
+        (principal_model_state == 'gemma' and (gemma_preset.changed or gemma_response_mode.changed)) or
+        (principal_model_state == 'lfm' and restored_lfm_preset.changed)
+
+    - name: Wait for the principal router health endpoint
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/health
+        status_code: 200
+        return_content: true
+      register: principal_health
+      retries: 60
+      delay: 5
+      until: principal_health.status == 200
+
+    - name: Wait for all existing model aliases and the selected principal to load
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/v1/models
+        status_code: 200
+        return_content: true
+      register: router_models
+      retries: 60
+      delay: 5
+      until: >-
+        router_models.status == 200 and
+        ['main', 'qwen-eval', 'bge-m3'] | difference(router_models.json.data | map(attribute='id') | list) | length == 0 and
+        (router_models.json.data | selectattr('id', 'equalto', 'main') | map(attribute='status.value') | first | default('')) == 'loaded'
+
+    - name: Confirm the selected principal model path and unchanged evaluation models
+      ansible.builtin.assert:
+        that:
+          - "(gemma_model_path if principal_model_state == 'gemma' else lfm_model_path) in (router_models.json.data | selectattr('id', 'equalto', 'main') | map(attribute='status.args') | first | join(' '))"
+          - "(router_models.json.data | selectattr('id', 'equalto', 'qwen-eval') | map(attribute='status.value') | first) == 'loaded'"
+          - "(router_models.json.data | selectattr('id', 'equalto', 'bge-m3') | map(attribute='status.value') | first) == 'loaded'"

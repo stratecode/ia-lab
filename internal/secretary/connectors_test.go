@@ -66,6 +66,62 @@ func TestGranolaMCPKeepsReadOnlyToolsAndRejectsJiraTools(t *testing.T) {
 	}
 }
 
+func TestGranolaListHandlesRequiredFirstPageCursor(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		required []string
+		wantErr  bool
+	}{
+		{"cursor", []string{"cursor"}, false},
+		{"unknown required input", []string{"cursor", "tenant"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req struct {
+					ID     int    `json:"id"`
+					Method string `json:"method"`
+					Params struct {
+						Name      string         `json:"name"`
+						Arguments map[string]any `json:"arguments"`
+					} `json:"params"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Error(err)
+					return
+				}
+				switch req.Method {
+				case "initialize":
+					io.WriteString(w, `{"result":{"protocolVersion":"2025-03-26"}}`)
+				case "notifications/initialized":
+					w.WriteHeader(http.StatusAccepted)
+				case "tools/list":
+					json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"tools": []any{
+						map[string]any{"name": "list_meetings", "inputSchema": map[string]any{"type": "object", "required": tc.required, "properties": map[string]any{"cursor": map[string]any{"type": "string"}}}},
+						map[string]any{"name": "get_meetings", "inputSchema": map[string]any{"type": "object", "required": []string{"meeting_ids"}}},
+					}}})
+				case "tools/call":
+					calls++
+					if req.Params.Name != "list_meetings" || req.Params.Arguments["cursor"] != "" || req.Params.Arguments["time_range"] != "last_7_days" {
+						t.Errorf("invalid first page request: %+v", req.Params)
+					}
+					io.WriteString(w, `{"result":{"content":[{"type":"text","text":"<meetings_data count=\"0\"></meetings_data>"}]}}`)
+				}
+			}))
+			defer server.Close()
+			c := &Connectors{Config: ConnectorConfig{Granola: OAuthConfig{ServerURL: server.URL, AccessToken: "secret"}}, Client: server.Client(), StateDir: t.TempDir(), allowTestHTTP: true}
+			result, err := c.GranolaResult(context.Background())
+			if tc.wantErr {
+				if err == nil || calls != 0 {
+					t.Fatalf("unknown required argument was accepted: calls=%d err=%v", calls, err)
+				}
+			} else if err != nil || calls != 1 || result.ResultCount != 0 {
+				t.Fatalf("first page failed: calls=%d result=%+v err=%v", calls, result, err)
+			}
+		})
+	}
+}
+
 func TestConnectorDestinationsAndPartialCoverage(t *testing.T) {
 	c := &Connectors{Config: ConnectorConfig{Jira: JiraRESTConfig{AccessToken: "secret"}}}
 	if _, err := c.Jira(context.Background()); err == nil {
@@ -166,6 +222,67 @@ func TestJiraUsesRESTJQLInsteadOfMCP(t *testing.T) {
 	}
 }
 
+func TestQueryJiraPageFollowsNextPageToken(t *testing.T) {
+	var tokens []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			NextPageToken string `json:"nextPageToken"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		tokens = append(tokens, body.NextPageToken)
+		w.Header().Set("Content-Type", "application/json")
+		if body.NextPageToken == "" {
+			_, _ = io.WriteString(w, `{"issues":[{"key":"PMI-1","fields":{"summary":"primera"}}],"nextPageToken":"cursor-2","isLast":false}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"issues":[{"key":"PMI-2","fields":{"summary":"segunda"}}],"isLast":true}`)
+	}))
+	defer server.Close()
+	c := &Connectors{
+		Config: ConnectorConfig{Jira: JiraRESTConfig{AccessToken: "service-token", CloudID: "cloud-1"}},
+		Client: server.Client(), allowTestHTTP: true, jiraAPIBase: server.URL,
+	}
+	got, err := c.queryJiraPage(context.Background(), `project = "PMI"`, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Issues) != 2 || got.Issues[0].Key != "PMI-1" || got.Issues[1].Key != "PMI-2" {
+		t.Fatalf("query returned only first page: %#v", got.Issues)
+	}
+	if len(tokens) != 2 || tokens[0] != "" || tokens[1] != "cursor-2" {
+		t.Fatalf("page tokens = %#v", tokens)
+	}
+	if !got.IsLast || got.Partial || got.PageCount != 2 {
+		t.Fatalf("complete page metadata = %+v", got)
+	}
+}
+
+func TestQueryJiraPageMarksRepeatedCursorPartialAndDeduplicatesIssues(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			NextPageToken string `json:"nextPageToken"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		_, _ = io.WriteString(w, `{"issues":[{"key":"PMI-1","fields":{"summary":"única"}}],"nextPageToken":"cursor-loop","isLast":false}`)
+	}))
+	defer server.Close()
+	c := &Connectors{
+		Config: ConnectorConfig{Jira: JiraRESTConfig{AccessToken: "service-token", CloudID: "cloud-1"}},
+		Client: server.Client(), allowTestHTTP: true, jiraAPIBase: server.URL,
+	}
+	got, err := c.queryJiraPage(context.Background(), `project = "PMI"`, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Partial || got.IsLast || got.PageCount != 2 || len(got.Issues) != 1 {
+		t.Fatalf("repeated cursor should produce one issue and incomplete coverage: %+v", got)
+	}
+}
+
 func TestJiraPersonalSearchRequiresConfiguredOperatorIdentity(t *testing.T) {
 	called := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +337,18 @@ func TestCompileJiraJQLUsesSafeIssueAndTaskFilters(t *testing.T) {
 	}
 }
 
+func TestJiraExactIssueReturnsFieldsWithoutModelSynthesis(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"issues":[{"key":"PMI-46","fields":{"summary":"Migración del Core y retirada de PAYERS","status":{"name":"Waiting"},"assignee":{"displayName":"Valentina Lagos"},"duedate":null}}]}`)
+	}))
+	defer server.Close()
+	connectors := &Connectors{Config: ConnectorConfig{Jira: JiraRESTConfig{AccessToken: "service-token", CloudID: "cloud-1"}}, Client: server.Client(), allowTestHTTP: true, jiraAPIBase: server.URL}
+	result, err := connectors.JiraQueryResult(context.Background(), "Quiero que cierres PMI-46")
+	if err != nil || !result.DirectAnswer || !strings.Contains(result.Text, "Waiting") || !strings.Contains(result.Text, "sin vencimiento") {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
 func TestGranolaQueryPassesQuestionAndPreservesCitation(t *testing.T) {
 	const query = "¿Qué decisiones y responsables aparecen en Stonecare el 14 de octubre?"
 	var gotQuery string
@@ -264,7 +393,7 @@ func TestGranolaQueryPassesQuestionAndPreservesCitation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotQuery != query || result.DirectAnswer || !strings.Contains(result.Text, "Iris revisa") || strings.Contains(result.Text, "respuesta orientativa") {
+	if gotQuery != query || !result.DirectAnswer || !strings.Contains(result.Text, "Iris revisa") || !strings.Contains(result.Text, "[Abrir nota de Granola]") || strings.Contains(result.Text, "respuesta orientativa") {
 		t.Fatalf("query=%q result=%+v", gotQuery, result)
 	}
 	if result.ResultCount != 1 || len(result.Evidence) != 1 || result.Evidence[0].ID != "meeting-1" || result.Evidence[0].URL != "https://notes.granola.ai/d/meeting-1" {
@@ -328,8 +457,8 @@ func TestGranolaQueryUsesCitedMeetingNotesInsteadOfGeneratedAnswer(t *testing.T)
 	if queryCalls != 1 || detailCalls != 1 {
 		t.Fatalf("query calls=%d detail calls=%d, want one each", queryCalls, detailCalls)
 	}
-	if result.DirectAnswer {
-		t.Fatal("provider-generated query answer must not be treated as source-of-truth")
+	if !result.DirectAnswer {
+		t.Fatal("Granola query output must bypass a second unconstrained synthesis pass")
 	}
 	if !strings.Contains(result.Text, "Paula, Alba") || !strings.Contains(result.Text, "(Fran)") || strings.Contains(result.Text, "Fran debía enviar las imágenes") || strings.Contains(result.Text, "private transcript omitted") {
 		t.Fatalf("result did not use only the cited note summary: %q", result.Text)

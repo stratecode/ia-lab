@@ -72,6 +72,12 @@ func interactionProgressText(event InteractionEvent) string {
 		if event.Meaning == InteractionAction {
 			return "Buscando en " + source + "; esta conexión solo permite consultar."
 		}
+		switch source {
+		case "Jira":
+			return "Voy a contrastar estados y vencimientos en Jira."
+		case "Granola":
+			return "Voy a revisar lo tratado en las reuniones de Granola."
+		}
 		return "Déjame revisar " + source + "."
 	case EventWorkDelayed:
 		stage := strings.TrimSpace(event.Stage)

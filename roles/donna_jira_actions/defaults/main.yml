@@ -1,0 +1,7 @@
+donna_jira_actions_listen: 127.0.0.1:8094
+donna_jira_actions_state: /var/lib/donna-jira-actions/actions.json
+donna_jira_actions_cloud_id: "{{ lookup('env', 'DONNA_JIRA_CLOUD_ID') }}"
+donna_jira_actions_write_token: "{{ lookup('env', 'DONNA_JIRA_WRITE_TOKEN') }}"
+donna_jira_actions_service_token: "{{ lookup('env', 'DONNA_JIRA_ACTION_SERVICE_TOKEN') }}"
+donna_jira_actions_project_keys: "{{ lookup('env', 'DONNA_JIRA_ALLOWED_PROJECTS') }}"
+donna_jira_actions_issue_types: "{{ lookup('env', 'DONNA_JIRA_ALLOWED_ISSUE_TYPES') }}"

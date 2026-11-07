@@ -1,0 +1,6 @@
+---
+- name: Deploy Donna identity mapping service
+  hosts: all
+  become: true
+  roles:
+    - donna_identity

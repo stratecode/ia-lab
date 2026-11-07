@@ -20,6 +20,10 @@ import (
 )
 
 func main() {
+	debugEnabled, err := parseDebugEnabled(os.Getenv("LAB_DEBUG_ENABLED"))
+	if err != nil {
+		log.Fatal("invalid debug setting")
+	}
 	listen := env("LAB_SECRETARY_LISTEN", "127.0.0.1:8082")
 	host, _, err := net.SplitHostPort(listen)
 	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
@@ -45,6 +49,35 @@ func main() {
 		log.Fatal("instructions file required")
 	}
 	service := secretary.New(env("LAB_SECRETARY_UPSTREAM", "http://127.0.0.1:8081"), os.Getenv("LAB_SECRETARY_MODEL_KEY"), string(instructions), env("STATE_DIRECTORY", "/var/lib/lab-secretary"), allowed)
+	identityURL, identityToken := strings.TrimSpace(os.Getenv("LAB_IDENTITY_URL")), strings.TrimSpace(os.Getenv("LAB_IDENTITY_TOKEN"))
+	if identityURL != "" || identityToken != "" {
+		if identityURL == "" || len(identityToken) < 32 {
+			log.Fatal("valid identity service URL and token required")
+		}
+		service.Identity = &secretary.IdentityClient{BaseURL: identityURL, Token: identityToken}
+	}
+	intentMode := strings.TrimSpace(os.Getenv("LAB_INTENT_MODE"))
+	if intentMode != "" && intentMode != "shadow" && intentMode != "enabled" {
+		log.Fatal("invalid intent mode")
+	}
+	if intentMode != "" {
+		intentURL := strings.TrimSpace(os.Getenv("LAB_INTENT_URL"))
+		intentToken := strings.TrimSpace(os.Getenv("LAB_INTENT_TOKEN"))
+		if intentURL == "" || intentToken == "" {
+			log.Fatal("intent URL and token required")
+		}
+		service.Intent = &secretary.IntentHTTPClient{URL: intentURL, Token: intentToken}
+		service.IntentMode = intentMode
+	}
+	jiraActionsURL := strings.TrimSpace(os.Getenv("LAB_DONNA_JIRA_ACTIONS_URL"))
+	jiraActionsToken := strings.TrimSpace(os.Getenv("LAB_DONNA_JIRA_ACTIONS_TOKEN"))
+	if jiraActionsURL != "" || jiraActionsToken != "" {
+		if jiraActionsURL == "" || len(jiraActionsToken) < 32 {
+			log.Fatal("Jira action service URL and private token required")
+		}
+		service.JiraActions = &secretary.JiraActionsClient{BaseURL: jiraActionsURL, Token: jiraActionsToken, HTTPClient: &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	}
+	service.SetDiagnosticsEnabled(debugEnabled)
 	qwenUpstream := strings.TrimSpace(os.Getenv("LAB_SECRETARY_QWEN_UPSTREAM"))
 	qwenKey := os.Getenv("LAB_SECRETARY_QWEN_MODEL_KEY")
 	if qwenUpstream != "" || qwenKey != "" {
@@ -83,6 +116,22 @@ func main() {
 		log.Fatal("valid secretary progress delay required")
 	}
 	bot := &secretary.Bot{Base: "https://api.telegram.org", Token: os.Getenv("LAB_TELEGRAM_BOT_TOKEN"), Client: &http.Client{Timeout: 40 * time.Second}, Service: service, Metrics: service.VoiceMetrics(), VoiceMaxDuration: voiceMaxDuration, ProgressDelay: progressDelay, OnEvent: func(event string) { log.Print(event) }}
+	granolaNotificationToken := strings.TrimSpace(os.Getenv("LAB_GRANOLA_NOTIFICATION_TOKEN"))
+	granolaOperatorValue := strings.TrimSpace(os.Getenv("LAB_GRANOLA_OPERATOR_ID"))
+	if granolaNotificationToken != "" || granolaOperatorValue != "" {
+		operatorID, err := strconv.ParseInt(granolaOperatorValue, 10, 64)
+		if err != nil || operatorID <= 0 || !allowed[operatorID] || len(granolaNotificationToken) < 32 {
+			log.Fatal("valid Granola notification settings required")
+		}
+		store, err := secretary.OpenGranolaNotificationStore(service.StateDir)
+		if err != nil {
+			log.Fatal("Granola notification store unavailable")
+		}
+		service.GranolaNotificationToken = granolaNotificationToken
+		service.GranolaOperatorID = operatorID
+		service.GranolaNotifications = store
+		service.GranolaBot = bot
+	}
 	if transcriptionEnabled && !configureVoiceInput(bot, true, env("LAB_WHISPER_URL", ""), env("LAB_PIPER_URL", ""), env("LAB_FFMPEG_BINARY", "/usr/bin/ffmpeg")) {
 		log.Print("secretary_transcription_disabled_missing_whisper_endpoint")
 	}
@@ -123,6 +172,19 @@ func main() {
 	}
 }
 
+func parseDebugEnabled(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return false, nil
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("debug setting must be true or false")
+	}
+}
+
 func parseLearningRetention(traceDays, candidateDays string) (secretary.LearningRetention, error) {
 	parse := func(raw string, fallback int) (int, error) {
 		if strings.TrimSpace(raw) == "" {
@@ -149,17 +211,16 @@ type telegramMode string
 
 const (
 	telegramModeDisabled telegramMode = "disabled"
-	telegramModePolling  telegramMode = "polling"
 	telegramModeWebhook  telegramMode = "webhook"
 )
 
 func parseTelegramMode(value string) (telegramMode, error) {
 	if value == "" {
-		return telegramModePolling, nil
+		return telegramModeWebhook, nil
 	}
 	mode := telegramMode(strings.TrimSpace(value))
 	switch mode {
-	case telegramModeDisabled, telegramModePolling, telegramModeWebhook:
+	case telegramModeDisabled, telegramModeWebhook:
 		return mode, nil
 	default:
 		return "", fmt.Errorf("unsupported Telegram mode %q", value)
@@ -203,16 +264,11 @@ func configureTelegram(mode string, mux *http.ServeMux, bot *secretary.Bot, queu
 	switch parsed {
 	case telegramModeDisabled:
 		return func(context.Context) error { return nil }, nil
-	case telegramModePolling:
-		if bot == nil {
-			return nil, errors.New("Telegram bot is required in polling mode")
-		}
-		return bot.Run, nil
 	case telegramModeWebhook:
 		if mux == nil || bot == nil || queue == nil || webhookSecret == "" {
 			return nil, errors.New("webhook mode requires an HTTP mux, bot, queue, and secret")
 		}
-		mux.Handle("/telegram/webhook", secretary.TelegramWebhook{Queue: queue, Secret: webhookSecret})
+		mux.Handle("/telegram/webhook", bot.Service.TelegramWebhook(queue, webhookSecret))
 		return func(ctx context.Context) error { return bot.RunWebhookWorker(ctx, queue) }, nil
 	default:
 		return nil, errors.New("unsupported Telegram mode")

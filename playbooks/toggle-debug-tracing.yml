@@ -1,0 +1,89 @@
+---
+- name: Toggle detailed diagnostics without redeploying the model
+  hosts: lab
+  become: true
+  pre_tasks:
+    - name: Validate the global debug flag
+      ansible.builtin.assert:
+        that:
+          - lab_debug_enabled_raw in ['true', 'false']
+        fail_msg: "LAB_DEBUG_ENABLED must be exactly true or false."
+
+    - name: Inspect current application artifacts
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../dist/{{ item }}-linux-amd64"
+      loop:
+        - lab-secretary
+        - llm-telemetry
+      delegate_to: localhost
+      become: false
+      register: built_applications
+
+    - name: Inspect secretary environment file
+      ansible.builtin.stat:
+        path: /etc/lab-secretary/secretary.env
+      register: secretary_env
+
+    - name: Inspect telemetry systemd unit
+      ansible.builtin.stat:
+        path: /etc/systemd/system/llm-telemetry.service
+      register: telemetry_unit
+
+    - name: Require installed secretary and telemetry services
+      ansible.builtin.assert:
+        that:
+          - built_applications.results[0].stat.exists
+          - built_applications.results[1].stat.exists
+          - secretary_env.stat.exists
+          - telemetry_unit.stat.exists
+        fail_msg: "Build the current applications and install Donna and llm-telemetry before toggling detailed diagnostics."
+
+  roles:
+    - lab_debug_tracing
+
+  tasks:
+    - name: Install the current Donna binary
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../dist/lab-secretary-linux-amd64"
+        dest: /usr/local/bin/lab-secretary
+        mode: "0755"
+      notify: Restart Donna
+
+    - name: Install the current telemetry binary
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../dist/llm-telemetry-linux-amd64"
+        dest: /usr/local/bin/llm-telemetry
+        mode: "0755"
+      notify: Restart telemetry
+
+    - name: Set detailed diagnostics for Donna
+      ansible.builtin.lineinfile:
+        path: /etc/lab-secretary/secretary.env
+        regexp: '^LAB_DEBUG_ENABLED='
+        line: "LAB_DEBUG_ENABLED={{ 'true' if lab_debug_enabled | bool else 'false' }}"
+        mode: "0600"
+      no_log: true
+      diff: false
+      notify: Restart Donna
+
+    - name: Set detailed diagnostics for the telemetry proxy
+      ansible.builtin.lineinfile:
+        path: /etc/systemd/system/llm-telemetry.service
+        regexp: '^ExecStart=/usr/local/bin/llm-telemetry '
+        line: "ExecStart=/usr/local/bin/llm-telemetry --listen 127.0.0.1:{{ llm_telemetry_port }} --upstream http://127.0.0.1:{{ (llama_cpp_instances | first).port }} --model {{ llm_telemetry_model_label }}{{ ' --trace-dir /var/lib/llm-telemetry' if lab_debug_enabled | bool else '' }}"
+      notify: Restart telemetry
+
+    - name: Apply the service changes
+      ansible.builtin.meta: flush_handlers
+
+  handlers:
+    - name: Restart Donna
+      ansible.builtin.systemd:
+        name: lab-secretary
+        state: restarted
+
+    - name: Restart telemetry
+      ansible.builtin.systemd:
+        name: llm-telemetry
+        daemon_reload: true
+        state: restarted
