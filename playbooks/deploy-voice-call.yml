@@ -19,6 +19,14 @@
     whisper_call_port: 8185
     piper_port: 8084
     whisper_audio_ctx: 768
+    # Measured on 2026-11-07: 4 threads 5.5 s, 8 threads 3.0 s, 12 threads 2.9 s per short clip
+    # (the lab has 8 cores), with identical accuracy.
+    whisper_threads: 8
+    whisper_cpu_quota: 800%
+    # Each request starts compute threads on top of the HTTP pool; with 8 threads the old
+    # TasksMax=64 was exceeded and whisper-server aborted ("terminate called without an
+    # active exception"), so the limit is raised with the thread count.
+    whisper_tasks_max: 256
     # ggml-small-q5_1.bin (about 3 s per clip) or ggml-base-q5_1.bin (about 1 s,
     # less robust to noise and accents). Swap with -e whisper_call_model=ggml-base-q5_1.bin
     whisper_call_model: ggml-small-q5_1.bin
@@ -33,8 +41,28 @@
     open_webui_dir: /srv/ai-lab/open-webui
     open_webui_env: /srv/ai-lab/open-webui/open-webui.env
     secretary_port: 8082
-    voice_vocabulary: "Conversación en español con Donna, la secretaria personal de Fran. Palabras: Jira, Granola, Donna, PMI, STRAT, sprint, backlog, Valentina, Gonzalo, Gustavo."
+    voice_vocabulary: "Conversación en español con Donna, la secretaria personal de Fran. Palabras: Jira, Granola, Donna, PMI, STRAT, sprint, backlog, spike, Valentina, Gonzalo, Gustavo, Futurbay, CryptoPocket, VirtuaBroker, SiteWatchman, Cocosi."
   tasks:
+    - name: Give the full-window Whisper the measured thread count and CPU share
+      ansible.builtin.replace:
+        path: "{{ whisper_unit }}"
+        regexp: "{{ item.regexp }}"
+        replace: "{{ item.replace }}"
+      loop:
+        - { regexp: "--threads [0-9]+", replace: "--threads {{ whisper_threads }}" }
+        - { regexp: "CPUQuota=[0-9]+%", replace: "CPUQuota={{ whisper_cpu_quota }}" }
+        - { regexp: "TasksMax=[0-9]+", replace: "TasksMax={{ whisper_tasks_max }}" }
+      loop_control:
+        label: "{{ item.replace }}"
+      register: main_whisper_tuned
+
+    - name: Reload systemd and restart the full-window Whisper when its unit changed
+      ansible.builtin.systemd:
+        name: lab-whisper
+        state: restarted
+        daemon_reload: true
+      when: main_whisper_tuned.changed
+
     - name: Read the existing Whisper unit
       ansible.builtin.slurp:
         src: "{{ whisper_unit }}"

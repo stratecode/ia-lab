@@ -15,10 +15,10 @@ lab_whisper_model_sha256: ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc
 lab_whisper_model_size_bytes: 190085487
 lab_whisper_host: 127.0.0.1
 lab_whisper_port: 8083
-lab_whisper_threads: 4
+lab_whisper_threads: 8
 lab_whisper_build_jobs: 4
 lab_whisper_memory_max: 2G
-lab_whisper_cpu_quota: 400%
+lab_whisper_cpu_quota: 800%
 lab_whisper_user: lab-whisper
 
 lab_piper_package: "piper-tts[http]==1.8.0"

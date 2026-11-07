@@ -1,0 +1,8 @@
+{
+  "20261107-200212.250": {"text": "¿Qué tengo pendiente en Jira?", "critical": ["jira"]},
+  "20261107-200225.976": {"text": "Dame detalles de la STRAT ciento sesenta y seis.", "critical": ["strat", "166"]},
+  "20261107-200238.656": {"text": "¿Cómo van Valentina y Gonzalo con sus tareas?", "critical": ["valentina", "gonzalo", "tareas"]},
+  "20261107-200252.766": {"text": "¿Qué dijo Gustavo en la reunión de Granola de ayer?", "critical": ["gustavo", "granola", "reunion"]},
+  "20261107-200325.871": {"text": "Dime el estado de la PMI sesenta y siete.", "critical": ["pmi", "67"]},
+  "20261107-200340.355": {"text": "Gracias, Donna, eso es todo por hoy.", "critical": ["gracias", "donna"]}
+}

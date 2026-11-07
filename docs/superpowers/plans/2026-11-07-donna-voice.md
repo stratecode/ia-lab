@@ -25,7 +25,8 @@ hechas en el lab ese mismo día.
 **Comprobado:** síntesis y reconocimiento de extremo a extremo en el host (audio WebM/Opus
 como lo envía el navegador); el botón de leer en voz alta de Open WebUI llama a nuestra
 síntesis; la configuración de los dos motores consta en Open WebUI.
-**Sin comprobar:** una conversación real con micrófono, porque el navegador automatizado no
+**Medido después con voz real:** ver [docs/voice-recognition-measurement-2026-11-07.md](../../voice-recognition-measurement-2026-11-07.md): `small` con vocabulario, 8 hilos, 3,0 s por clip corto y 4,7 % de error de palabras.
+**Sin comprobar:** una conversación real en el modo llamada del navegador, porque el navegador automatizado no
 puede hablar. Hace falta una prueba tuya con voz real.
 
 **Cómo probarlo:** en `chat.stratecode.com`, abre un chat y pulsa el botón de llamada (el
