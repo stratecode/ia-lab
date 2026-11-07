@@ -1,0 +1,228 @@
+{
+  "suite_version": "1.0",
+  "run_date": "2026-10-17",
+  "scoring_method": "Manual review of final visible responses against v1 case rubrics; no model-as-judge. Provisional comparative rubric; score differences of 1-2 points are not significant.",
+  "maximum_score": 40,
+  "case_order": [
+    "01-code-group-open-hours",
+    "02-constraint-scheduling",
+    "03-multi-step-time-budget",
+    "04-action-extraction-json",
+    "05-long-context-retrieval",
+    "06-conversation-follow-up-memory",
+    "07-strict-json-plan",
+    "08-ambiguous-person-resolution",
+    "09-executive-synthesis-grounded",
+    "10-versatile-audience-adaptation"
+  ],
+  "models": [
+    {
+      "alias": "qwen-eval",
+      "score": 33,
+      "case_scores": [
+        4,
+        4,
+        4,
+        2,
+        4,
+        3,
+        4,
+        3,
+        3,
+        2
+      ]
+    },
+    {
+      "alias": "qwen35-4b",
+      "score": 31,
+      "case_scores": [
+        2,
+        3,
+        4,
+        3,
+        4,
+        2,
+        4,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "alias": "qwen35-9b",
+      "score": 31,
+      "case_scores": [
+        4,
+        3,
+        4,
+        2,
+        4,
+        3,
+        3,
+        2,
+        2,
+        4
+      ]
+    },
+    {
+      "alias": "gemma4-e4b",
+      "score": 30,
+      "case_scores": [
+        4,
+        4,
+        4,
+        3,
+        4,
+        2,
+        2,
+        1,
+        3,
+        3
+      ]
+    },
+    {
+      "alias": "lfm-2.6b",
+      "score": 29,
+      "case_scores": [
+        0,
+        4,
+        4,
+        3,
+        4,
+        3,
+        4,
+        0,
+        3,
+        4
+      ]
+    },
+    {
+      "alias": "qwen25-7b-q4_0",
+      "score": 25,
+      "case_scores": [
+        3,
+        1,
+        4,
+        2,
+        3,
+        3,
+        3,
+        1,
+        3,
+        2
+      ]
+    },
+    {
+      "alias": "ministral3-3b",
+      "score": 25,
+      "case_scores": [
+        4,
+        4,
+        2,
+        2,
+        2,
+        2,
+        2,
+        0,
+        4,
+        3
+      ]
+    },
+    {
+      "alias": "gemma4-e2b",
+      "score": 24,
+      "case_scores": [
+        2,
+        4,
+        4,
+        2,
+        1,
+        3,
+        2,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "alias": "granite4-micro",
+      "score": 23,
+      "case_scores": [
+        3,
+        4,
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        4,
+        4
+      ]
+    },
+    {
+      "alias": "phi4-mini",
+      "score": 23,
+      "case_scores": [
+        1,
+        3,
+        4,
+        2,
+        4,
+        3,
+        2,
+        2,
+        1,
+        1
+      ]
+    },
+    {
+      "alias": "smollm3-3b",
+      "score": 23,
+      "case_scores": [
+        2,
+        4,
+        1,
+        2,
+        2,
+        2,
+        4,
+        0,
+        2,
+        4
+      ]
+    },
+    {
+      "alias": "main",
+      "score": 16,
+      "case_scores": [
+        1,
+        1,
+        2,
+        2,
+        1,
+        0,
+        4,
+        0,
+        3,
+        2
+      ]
+    },
+    {
+      "alias": "qwen35-2b",
+      "score": 15,
+      "case_scores": [
+        2,
+        1,
+        2,
+        2,
+        1,
+        3,
+        2,
+        0,
+        1,
+        1
+      ]
+    }
+  ]
+}
