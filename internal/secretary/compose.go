@@ -81,6 +81,9 @@ func compactJiraSummary(issues []jiraIssue, now time.Time, subject string, sampl
 	if body == "" || body == "No hay incidencias abiertas." {
 		return body
 	}
+	if rec := recommendation(issues, now); rec != "" {
+		body += " " + rec
+	}
 	return body + " ¿Detallo alguna?"
 }
 
@@ -207,14 +210,14 @@ func conversationalAck(text string) (string, bool) {
 		}
 		return false
 	}
-	pick := func(options ...string) string { return options[len(normalized)%len(options)] }
+	now := time.Now()
 	switch {
 	case has("gracias"):
-		return pick("De nada.", "Para eso estoy.", "A ti."), true
+		return ackReply(ackThanks, normalized, now), true
 	case has("adios") || has("hasta"):
-		return pick("Hasta luego.", "¡Hasta pronto!", "Aquí estaré."), true
+		return ackReply(ackFarewell, normalized, now), true
 	default:
-		return pick("Perfecto.", "Hecho.", "Vale."), true
+		return ackReply(ackConfirm, normalized, now), true
 	}
 }
 
