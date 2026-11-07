@@ -180,7 +180,7 @@ func compactJiraBody(issues []jiraIssue, now time.Time, subject string, sampleFu
 // wantsFullListing reports whether the operator asked for the complete list
 // instead of the usual short summary.
 func wantsFullListing(question string) bool {
-	return containsAny(normalizedIntentText(question), "detalle", "detalla", "todas", "todos", "lista", "listado", "completo", "completa", "enumera")
+	return containsAny(normalizedIntentText(question), "detalle", "detalla", "lista", "listado", "completo", "completa", "enumera")
 }
 
 var conversationalAckWords = map[string]bool{

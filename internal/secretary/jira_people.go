@@ -24,6 +24,21 @@ var jiraPeoplePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:tareas|pendientes|incidencias)\s+(?:de|asignadas a|asignados a)\s+([^?!.;]+)`),
 	regexp.MustCompile(`(?i)\b(?:en qué|en que)\s+(?:está|esta)\s+trabajando(?:\s+hoy)?\s+([^?!.;]+)`),
 }
+
+// Proper-name lists as people dictate them: "Valentina y Gonzalo", "tanto Valentina
+// como Gonzalo", "Valentina Lagos, Gonzalo". Only capitalised words count, so
+// ordinary sentences are never read as a list of people.
+const jiraNameList = `(\p{Lu}[\p{L}'-]*(?:\s+\p{Lu}[\p{L}'-]*)?(?:(?:\s*,\s*|\s+y\s+|\s+e\s+|\s+como\s+)\p{Lu}[\p{L}'-]*(?:\s+\p{Lu}[\p{L}'-]*)?)*)`
+
+// jiraConversationalPeoplePatterns need a task word in the sentence (checked in
+// jiraPeople), because "tanto Pedro como Ana" alone says nothing about Jira.
+var jiraConversationalPeoplePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i:tareas|pendientes|incidencias)\s+(?i:tienen|tiene|llevan|lleva)\s+(?i:en curso|en proceso|abiertas?|asignadas?)?[,\s]*(?i:tanto\s+|ambos\s+)?` + jiraNameList),
+	regexp.MustCompile(`(?i:tanto|ambos)[,\s]+` + jiraNameList),
+	regexp.MustCompile(`(?i:en qué|en que)\s+(?i:están|estan|está|esta)\s+(?i:trabajando\s+)?` + jiraNameList),
+	regexp.MustCompile(`(?i:qué|que)\s+(?i:está haciendo|esta haciendo|están haciendo|estan haciendo|hace|hacen)\s+` + jiraNameList),
+}
+
 var jiraPersonName = regexp.MustCompile(`^[\p{L}][\p{L} .'-]{1,79}$`)
 var jiraProjectInText = regexp.MustCompile(`(?i)\bproyecto\s+([A-Z][A-Z0-9]{1,15})\b`)
 
@@ -64,7 +79,7 @@ func jiraPeople(query string) []string {
 		if len(match) == 0 {
 			continue
 		}
-		parts := regexp.MustCompile(`(?i)\s+y\s+|,`).Split(match[1], -1)
+		parts := regexp.MustCompile(`(?i)\s+y\s+|\s+como\s+|,`).Split(match[1], -1)
 		if len(parts) > 4 {
 			return nil
 		}
@@ -77,6 +92,33 @@ func jiraPeople(query string) []string {
 			names = append(names, name)
 		}
 		return names
+	}
+	return jiraConversationalPeople(query)
+}
+
+// jiraConversationalPeople reads the looser phrasings, but only when the sentence is
+// about work (a task word is present).
+func jiraConversationalPeople(query string) []string {
+	normalized := normalizedIntentText(query)
+	if !containsAny(normalized, "tarea", "pendiente", "incidencia", "trabaj", "en curso", "haciendo") {
+		return nil
+	}
+	for _, pattern := range jiraConversationalPeoplePatterns {
+		match := pattern.FindStringSubmatch(query)
+		if len(match) < 2 {
+			continue
+		}
+		var names []string
+		for _, part := range regexp.MustCompile(`(?i)\s+y\s+|\s+e\s+|\s+como\s+|,`).Split(match[1], -1) {
+			name := strings.Trim(strings.TrimSpace(part), " ?!.,;:")
+			if name == "" || !jiraPersonName.MatchString(name) {
+				return nil
+			}
+			names = append(names, name)
+		}
+		if len(names) > 0 && len(names) <= 4 {
+			return names
+		}
 	}
 	return nil
 }

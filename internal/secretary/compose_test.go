@@ -103,6 +103,10 @@ func TestWantsFullListing(t *testing.T) {
 	if !wantsFullListing("dame la lista completa de tareas") || wantsFullListing("qué tengo pendiente") {
 		t.Error("full listing detection is wrong")
 	}
+	// "todas" is ordinary Spanish, not a request for the long format.
+	if wantsFullListing("revisa todas las tareas en curso de Valentina") {
+		t.Error("\"todas las tareas\" must not force the full listing")
+	}
 }
 
 func TestResponseWordsMetricUsesBoundedIntent(t *testing.T) {
@@ -188,5 +192,38 @@ func TestMoreFillerQuestionsAreStripped(t *testing.T) {
 	in := "Gracias. Todo anotado. ¿Necesitas que te ayude con algún detalle específico?"
 	if got := polishAnswer(in); strings.Contains(got, "detalle específico") || !strings.Contains(got, "Todo anotado") {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestSpokenPeopleQuestionsReachJira(t *testing.T) {
+	cases := map[string][]string{
+		"Me gustaría que revisaras todas las tareas que tengo en curso y que me digas qué tareas tienen en curso, tanto Valentina como Gonzalo.": {"Valentina", "Gonzalo"},
+		"Hola, Donna. Esto es una prueba. Dime qué tareas tienen en cursora, y, como tanto, Valentina como Gonzalo.":                             {"Valentina", "Gonzalo"},
+		"Qué tareas tienen en curso Valentina y Gonzalo": {"Valentina", "Gonzalo"},
+		"¿En qué están trabajando Valentina y Gonzalo?":  {"Valentina", "Gonzalo"},
+		"Qué está haciendo Gonzalo con sus tareas":       {"Gonzalo"},
+		"dime las tareas de Valentina y Gonzalo":         {"Valentina", "Gonzalo"},
+	}
+	for query, want := range cases {
+		got := jiraPeople(query)
+		if len(got) != len(want) {
+			t.Errorf("jiraPeople(%q) = %v, want %v", query, got, want)
+			continue
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("jiraPeople(%q) = %v, want %v", query, got, want)
+			}
+		}
+	}
+	for _, query := range []string{
+		"Tanto Pedro como Ana vinieron a la reunión de ayer",
+		"Estuvimos hablando con Valentina y Gonzalo sobre el viaje",
+		"Hoy hace sol, tanto en Madrid como en Sevilla",
+		"qué tareas tienen en curso los equipos",
+	} {
+		if got := jiraPeople(query); len(got) != 0 {
+			t.Errorf("%q must not be read as people: %v", query, got)
+		}
 	}
 }
