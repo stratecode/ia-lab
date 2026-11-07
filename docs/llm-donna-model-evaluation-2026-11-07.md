@@ -149,6 +149,14 @@ Efectos secundarios a vigilar: con dos ranuras, dos peticiones simultáneas se r
 los hilos de CPU, lo que no es un problema con un solo operador; y cada ranura mantiene
 su propio KV, que en este modelo cuesta decenas de MiB.
 
+## Relación con el diseño de dos niveles
+
+La propuesta [enrutado de dos niveles entre LFM y un modelo de razonamiento](superpowers/specs/2026-10-17-secretary-two-tier-model-routing-design.md)
+(17 de octubre) plantea que LFM responda lo simple y un modelo mayor lo complejo. Estos
+datos acotan esa idea: un modelo de 4B gana unos 6 puntos de calidad pero tarda de uno a
+varios minutos con fuentes reales, así que solo serviría para análisis que se entreguen
+de forma asíncrona, no para la conversación. No se implementó; queda como diseño.
+
 ## Reproducir
 
 ```bash

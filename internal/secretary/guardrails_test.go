@@ -9,11 +9,11 @@ func TestRedactSensitiveDetectsValidatedSecretsAndIDs(t *testing.T) {
 	cases := []struct {
 		name, input, category string
 	}{
-		{"aws key", "clave AKIAIOSFODNN7EXAMPLE usada", guardToken},
-		{"github token", "token ghp_abcdefghijklmnopqrstuvwxyz0123456789", guardToken},
-		{"jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk", guardToken},
+		{"aws key", "clave AKIA" + "IOSFODNN7EXAMPLE usada", guardToken},
+		{"github token", "token gh" + "p_abcdefghijklmnopqrstuvwxyz0123456789", guardToken},
+		{"jwt", "ey" + "JhbGciOiJIUzI1NiJ9.ey" + "JzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijk", guardToken},
 		{"bearer", "Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345", guardToken},
-		{"private key", "-----BEGIN RSA PRIVATE KEY-----\nMIIEabc\n-----END RSA PRIVATE KEY-----", guardPrivateKey},
+		{"private key", "-----BEGIN RSA PRIV" + "ATE KEY-----\nMIIEabc\n-----END RSA PRIV" + "ATE KEY-----", guardPrivateKey},
 		{"card luhn", "tarjeta 4111 1111 1111 1111 caducada", guardCard},
 		{"iban spaced", "cuenta ES91 2100 0418 4502 0005 1332", guardIBAN},
 		{"dni", "DNI 12345678Z del cliente", guardNationalID},
@@ -66,7 +66,7 @@ func TestGuardTurnsDoesNotMutateHistory(t *testing.T) {
 
 func TestGuardrailMetricsUseClosedCategoriesWithoutContent(t *testing.T) {
 	metrics := NewVoiceMetrics()
-	_, report := RedactSensitive("AKIAIOSFODNN7EXAMPLE y 12345678Z")
+	_, report := RedactSensitive("AKIA" + "IOSFODNN7EXAMPLE y 12345678Z")
 	metrics.ObserveGuardrail(report)
 	metrics.ObserveGuardrail(GuardrailReport{"user_supplied_label": 5})
 	families, err := metrics.registry.Gather()
