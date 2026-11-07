@@ -1,0 +1,77 @@
+# Remove model files that the live router presets do not reference.
+#
+# The list below was produced by a dry run on 2026-11-07 and is explicit on
+# purpose: nothing is removed unless it is named here. Every file came from a
+# pinned source and can be downloaded again (see benchmarks/llm-capabilities/v1/
+# isolated-models.json, benchmarks/donna-eval/results-2026-11-07/sha256.txt and
+# playbooks/switch-principal-gemma-canary.yml).
+#
+# The play refuses to run if any listed file is referenced by the router presets.
+- name: Remove unused model files from the lab host
+  hosts: lab
+  become: true
+  vars:
+    presets_path: /etc/llama.cpp/models.ini
+    router_url: http://127.0.0.1:8080
+    remove_files:
+      - /srv/ai-lab/llama.cpp/models/gemma-4-E2B-it-Q4_0.gguf
+      - /srv/ai-lab/llama.cpp/models/gemma-4-E4B-it-Q4_K_M.gguf
+      - /srv/ai-lab/llama.cpp/models/LFM2.5-2.6B-Q4_K_M.gguf
+      - /srv/ai-lab/llama.cpp/models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+      - /srv/ai-lab/llama.cpp/models/Qwen3.5-4B-Q4_K_M.gguf
+      - /srv/ai-lab/llama.cpp/models/qwen2.5-7b-instruct-q4_0-00001-of-00002.gguf
+      - /srv/ai-lab/llama.cpp/models/qwen2.5-7b-instruct-q4_0-00002-of-00002.gguf
+      - /srv/ai-lab/llama.cpp/models/benchmark-2026-10-16/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf
+      - /srv/ai-lab/llama.cpp/models/benchmark-2026-10-16/SmolLM3-3B-Q4_K_M.gguf
+      - /srv/ai-lab/llama.cpp/models/benchmark-2026-10-16/Qwen3.5-4B-Q4_K_M.gguf
+      - /srv/ai-lab/llama.cpp/models/benchmark-2026-10-16/gemma-4-E2B-it-Q4_K_M.gguf
+      - /srv/ai-lab/llama.cpp/models/benchmark-2026-10-16/Phi-4-mini-instruct-Q4_K_M.gguf
+      - /srv/ai-lab/llama.cpp/models/benchmark-2026-10-16/granite-4.0-micro-Q4_K_M.gguf
+      - /srv/ai-lab/llama.cpp/models/benchmark-2026-10-16/Qwen3.5-2B-Q4_K_M.gguf
+      - /srv/ai-lab/llama.cpp/models/benchmark-2026-10-16/Qwen3.5-9B-Q4_K_M.gguf
+      - /srv/ai-lab/llama.cpp/models/benchmark-2026-10-16/gemma-4-E4B-it-Q4_K_M.gguf
+    keep_files:
+      - /srv/ai-lab/llama.cpp/models/LFM2.5-1.2B-Instruct-Q4_0.gguf
+      - /srv/ai-lab/llama.cpp/models/Qwen3-4B-Q4_K_M.gguf
+      - /srv/ai-lab/llama.cpp/models/bge-m3-Q8_0.gguf
+  tasks:
+    - name: Read the live router presets
+      ansible.builtin.slurp:
+        src: "{{ presets_path }}"
+      register: presets
+
+    - name: Refuse to continue if a file to remove is in use, or one to keep is not
+      ansible.builtin.assert:
+        that:
+          - (presets.content | b64decode) is not search(item)
+        fail_msg: "{{ item }} is referenced by the router presets."
+      loop: "{{ remove_files }}"
+
+    - name: Confirm the files in use are listed by the presets
+      ansible.builtin.assert:
+        that:
+          - (presets.content | b64decode) is search(item)
+      loop: "{{ keep_files }}"
+
+    - name: Remove the unused model files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ remove_files }}"
+
+    - name: Remove the evaluation directory when it is empty
+      ansible.builtin.command: rmdir /srv/ai-lab/llama.cpp/models/benchmark-2026-10-16
+      register: rmdir
+      failed_when: false
+      changed_when: rmdir.rc == 0
+
+    - name: Confirm the router is still healthy and the kept models exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ keep_files }}"
+      register: kept
+      failed_when: not kept.stat.exists
+
+    - name: Check the router answers
+      ansible.builtin.shell: "systemctl is-active llama-cpp-main && curl -s -m 5 {{ router_url }}/health"
+      changed_when: false
