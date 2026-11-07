@@ -26,6 +26,10 @@ func (r ActionResult) permitsSuccessClaim() bool {
 }
 
 var externalWriteClaim = regexp.MustCompile(`\b(?:he|hemos|se ha|acabo de|ya esta|ya quedo|esta|quedo)\s+(?:cread[oa]|actualizad[oa]|cerrad[oa]|borrad[oa]|eliminad[oa]|enviad[oa]|asignad[oa]|movid[oa]|agendad[oa]|programad[oa]|registrad[oa]|publicad[oa]|desplegad[oa]|hecho|crear|enviar|actualizar)\b`)
+
+// firstPersonWriteClaim catches present-tense claims such as "Creo la tarea",
+// which the perfect-tense pattern above does not see.
+var firstPersonWriteClaim = regexp.MustCompile(`\b(?:creo|actualizo|cierro|borro|elimino|envio|asigno|muevo|agendo|programo)\s+(?:la|el|una|un)\s+(?:tarea|incidencia|ticket|correo|email|mensaje|evento)\b`)
 var passiveWriteClaim = regexp.MustCompile(`\b(?:tarea|incidencia|ticket|correo|email|mensaje|evento)\s+(?:cread[oa]|actualizad[oa]|cerrad[oa]|borrad[oa]|eliminad[oa]|enviad[oa]|asignad[oa]|movid[oa]|agendad[oa]|programad[oa])\b`)
 var externalWriteCommand = regexp.MustCompile(`(?:^|\s)(?:puedes|podrias)\s+(?:encargarte\s+de\s+)?(?:crear|actualizar|cerrar|borrar|eliminar|enviar|asignar|mover|agendar|programar)\b|(?:^|\s)(?:quiero|necesito)\s+que\s+(?:crees|actualices|cierres|borres|elimines|envies|asignes|muevas|agendes|programes)\b`)
 var externalWriteObject = regexp.MustCompile(`\b(?:crear|crees|actualizar|actualices|cerrar|cierres|borrar|borres|eliminar|elimines|enviar|envies|asignar|asignes|mover|muevas|agendar|agendes|programar|programes)\s+(?:(?:un|una|el|la)\s+)?(?:nueva?\s+)?(?:tarea|incidencia|ticket|correo|email|mensaje|evento)\b`)
@@ -69,6 +73,13 @@ func offersExternalWrite(answer string) bool {
 
 func claimsUnverifiedWrite(answer string) bool {
 	normalized := normalizedIntentText(answer)
+	for _, location := range firstPersonWriteClaim.FindAllStringIndex(normalized, -1) {
+		prefix := strings.Fields(normalized[:location[0]])
+		if len(prefix) > 0 && (prefix[len(prefix)-1] == "no" || prefix[len(prefix)-1] == "nunca" || prefix[len(prefix)-1] == "tampoco") {
+			continue
+		}
+		return true
+	}
 	for _, location := range externalWriteClaim.FindAllStringIndex(normalized, -1) {
 		prefix := strings.Fields(normalized[:location[0]])
 		if len(prefix) > 0 && (prefix[len(prefix)-1] == "no" || prefix[len(prefix)-1] == "nunca") {

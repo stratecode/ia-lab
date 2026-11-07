@@ -233,6 +233,10 @@ var fillerMarkers = []string{
 	"podrias confirmar si necesitas",
 	"avisame para profundizar",
 	"no dudes en avisarme",
+	"necesitas que te ayude",
+	"algun detalle especifico",
+	"en que mas puedo",
+	"necesitas algo mas",
 }
 
 // polishAnswer drops generic filler sentences from a model answer. It never

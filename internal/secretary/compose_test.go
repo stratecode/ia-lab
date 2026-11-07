@@ -170,3 +170,23 @@ func TestCompactJiraPersonIsOneShortLine(t *testing.T) {
 		t.Errorf("person line must be short and without its own offer: %s", got)
 	}
 }
+
+func TestPresentTenseWriteClaimsAreBlockedAndNegationsAreNot(t *testing.T) {
+	for _, claim := range []string{"Creo la tarea: revisar el informe del cliente.", "Perfecto. Envío el correo a Gonzalo ahora.", "Actualizo la incidencia y la cierro."} {
+		if !claimsUnverifiedWrite(claim) {
+			t.Errorf("claim not detected: %q", claim)
+		}
+	}
+	for _, fine := range []string{"No puedo crear la tarea; solo leo Jira.", "La tarea PMI-77 sigue en curso.", "Te dejo el texto para crear la tarea tú mismo.", "No creo la tarea porque no tengo acceso de escritura."} {
+		if claimsUnverifiedWrite(fine) {
+			t.Errorf("false positive: %q", fine)
+		}
+	}
+}
+
+func TestMoreFillerQuestionsAreStripped(t *testing.T) {
+	in := "Gracias. Todo anotado. ¿Necesitas que te ayude con algún detalle específico?"
+	if got := polishAnswer(in); strings.Contains(got, "detalle específico") || !strings.Contains(got, "Todo anotado") {
+		t.Errorf("got %q", got)
+	}
+}

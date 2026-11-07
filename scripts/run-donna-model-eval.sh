@@ -9,6 +9,8 @@ MODELS=/srv/ai-lab/llama.cpp/models
 SERVER=/opt/llama.cpp/build/bin/llama-server
 PORT=8190
 CTX=${CTX:-36864}
+CONTEXT_SIZES=${CONTEXT_SIZES:-4096,8192,16384,32768}
+DEPTHS=${DEPTHS:-0.2,0.8}
 HF=https://huggingface.co
 THINK_OFF='{"enable_thinking":false}'
 
@@ -47,7 +49,7 @@ while IFS='|' read -r alias file path kwargs; do
   done
   curl -fs "http://127.0.0.1:$PORT/health" >/dev/null || { log "server for $alias did not start"; journalctl -u donna-eval-server -n 20 --no-pager | tee -a "$OUT/run.log"; continue; }
 
-  args=(--base "http://127.0.0.1:$PORT" --alias "$alias" --instructions "$BASE/repo/skills/secretary-core/instructions.md" --out "$OUT/$alias.jsonl")
+  args=(--base "http://127.0.0.1:$PORT" --alias "$alias" --instructions "$BASE/repo/skills/secretary-core/instructions.md" --out "$OUT/$alias.jsonl" --context-sizes "$CONTEXT_SIZES" --depths "$DEPTHS")
   [ -n "$kwargs" ] && args+=(--template-kwargs "$kwargs")
   nice -n 10 python3 "$BASE/repo/scripts/benchmark-donna-models.py" "${args[@]}" 2>&1 | tee -a "$OUT/run.log" || log "benchmark for $alias failed"
   {
