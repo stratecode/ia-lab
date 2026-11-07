@@ -1,0 +1,152 @@
+- name: Require the built Donna identity service artifact
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/../dist/donna-identity-linux-amd64"
+  delegate_to: localhost
+  become: false
+  register: donna_identity_artifact
+
+- name: Assert the Donna identity service artifact exists
+  ansible.builtin.assert:
+    that:
+      - donna_identity_artifact.stat.exists
+      - donna_identity_artifact.stat.isreg
+    fail_msg: "Run scripts/build-donna-identity.sh before deployment."
+
+- name: Check that the shared secretary is installed
+  ansible.builtin.stat:
+    path: /etc/systemd/system/lab-secretary.service
+  register: donna_identity_secretary_unit
+
+- name: Require the shared secretary before adding its identity client
+  ansible.builtin.assert:
+    that:
+      - donna_identity_secretary_unit.stat.exists
+    fail_msg: "Deploy lab-secretary before deploying Donna identity mappings."
+
+- name: Create Donna identity configuration directory
+  ansible.builtin.file:
+    path: /etc/donna-identity
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Generate private identity service token once
+  ansible.builtin.shell:
+    cmd: |
+      umask 077
+      openssl rand -hex 32 > /etc/donna-identity/service-token
+    creates: /etc/donna-identity/service-token
+  no_log: true
+
+- name: Enforce identity service token permissions
+  ansible.builtin.file:
+    path: /etc/donna-identity/service-token
+    state: file
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Read private identity service token
+  ansible.builtin.slurp:
+    src: /etc/donna-identity/service-token
+  register: donna_identity_token_file
+  no_log: true
+
+- name: Install Donna identity binary
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../dist/donna-identity-linux-amd64"
+    dest: /usr/local/bin/donna-identity
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart Donna identity
+
+- name: Install private identity service environment
+  ansible.builtin.copy:
+    dest: /etc/donna-identity/service.env
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      DONNA_IDENTITY_LISTEN_ADDR=127.0.0.1:8092
+      DONNA_IDENTITY_STATE_DIR=/var/lib/donna-identity
+      DONNA_IDENTITY_SERVICE_TOKEN={{ donna_identity_token_file.content | b64decode | trim }}
+  no_log: true
+  notify: Restart Donna identity
+
+- name: Install private secretary client environment
+  ansible.builtin.copy:
+    dest: /etc/lab-secretary/identity.env
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      LAB_IDENTITY_URL=http://127.0.0.1:8092
+      LAB_IDENTITY_TOKEN={{ donna_identity_token_file.content | b64decode | trim }}
+  no_log: true
+  notify: Restart lab secretary
+
+- name: Install Donna identity systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/donna-identity.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Donna guided identity mapping service
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      DynamicUser=yes
+      StateDirectory=donna-identity
+      StateDirectoryMode=0700
+      EnvironmentFile=/etc/donna-identity/service.env
+      ExecStart=/usr/local/bin/donna-identity
+      Restart=always
+      RestartSec=5
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      ProtectHome=yes
+      PrivateTmp=yes
+      UMask=0077
+      MemoryMax=64M
+      RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart Donna identity
+
+- name: Add private identity client environment to secretary unit
+  ansible.builtin.lineinfile:
+    path: /etc/systemd/system/lab-secretary.service
+    line: EnvironmentFile=/etc/lab-secretary/identity.env
+    insertafter: '^EnvironmentFile=/etc/lab-secretary/connectors.env$'
+    state: present
+  notify: Restart lab secretary
+
+- name: Apply identity service and client configuration
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start Donna identity service
+  ansible.builtin.systemd:
+    name: donna-identity
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Verify Donna identity service health
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8092/healthz
+    status_code: 200
+  register: donna_identity_health
+  until: donna_identity_health.status == 200
+  retries: 10
+  delay: 2
+
+- name: Verify secretary health after identity client activation
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8082/health
+    status_code: 200

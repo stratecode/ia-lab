@@ -85,6 +85,7 @@ Docker 29 con el almacén de imágenes de containerd: cAdvisor v0.51 y v0.53 fal
 SAI (`category=power`, repetición cada 30 min): `UPSOnBattery`, `UPSLowBattery`, `UPSReplaceBattery`, `UPSOverload`, `UPSInputVoltageAbnormal`, `UPSMonitoringDown`.
 Salud: `SystemdUnitFailed`, `SmartDiskUnhealthy`, `OOMKillDetected`, `RootFilesystemFillingUp`, `LabSecretaryDown`, `LLMTelemetryDown`, `TextfileCollectorStale`.
 Contenedores: `ContainerNotRunning`, `ExpectedContainerMissing` (grafana, open-webui), `ContainerUnhealthy`, `ContainerRestarting`, `ContainerMemoryHigh`, `DockerExporterDown`.
+Las cuatro alertas por contenedor individual excluyen `srl-*` y `opensearch-*`: pertenecen al proyecto externo de pruebas y sus contenedores `*-setup` terminan normalmente. El exportador sigue recogiendo sus métricas; `DockerExporterDown` y las alertas de los contenedores propios del lab siguen activas.
 Certificados: `CertExpiringSoon` (<21 d), `CertExpiryCritical` (<7 d), `CertProbeFailed`, `CertMetricsStale`.
 Latido: `Watchdog` → un mensaje silencioso cada 24 h; si un día no llega, algo de la cadena (Prometheus, Alertmanager o el servidor) está caído.
 

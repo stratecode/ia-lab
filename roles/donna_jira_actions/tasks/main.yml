@@ -1,0 +1,145 @@
+- name: Require private Jira and action-service credentials
+  ansible.builtin.assert:
+    that:
+      - donna_jira_actions_cloud_id | length > 0
+      - donna_jira_actions_write_token | length >= 32
+      - donna_jira_actions_service_token | length >= 32
+      - donna_jira_actions_write_token != donna_jira_actions_service_token
+      - donna_jira_actions_project_keys | length > 0
+      - donna_jira_actions_issue_types | length > 0
+      - donna_jira_actions_listen.startswith('127.0.0.1:') or donna_jira_actions_listen.startswith('[::1]:')
+      - donna_jira_actions_state.startswith('/var/lib/donna-jira-actions/')
+    fail_msg: "Provide separate OAuth write and action-service tokens; the Jira service must listen only on loopback."
+  no_log: true
+
+- name: Require the built Jira action-service artifact
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/../dist/donna-jira-actions-linux-amd64"
+  delegate_to: localhost
+  become: false
+  register: donna_jira_actions_artifact
+
+- name: Assert the Jira action-service artifact exists
+  ansible.builtin.assert:
+    that:
+      - donna_jira_actions_artifact.stat.exists
+      - donna_jira_actions_artifact.stat.isreg
+    fail_msg: "Build dist/donna-jira-actions-linux-amd64 before deployment."
+  delegate_to: localhost
+  become: false
+
+- name: Create Jira action-service configuration directory
+  ansible.builtin.file:
+    path: /etc/donna-jira-actions
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Install the restricted Jira action-service binary
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../dist/donna-jira-actions-linux-amd64"
+    dest: /usr/local/bin/donna-jira-actions
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart donna Jira actions
+
+- name: Install private Jira OAuth and service credentials
+  ansible.builtin.copy:
+    dest: /etc/donna-jira-actions/secret.env
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      DONNA_JIRA_ACTION_LISTEN={{ donna_jira_actions_listen }}
+      DONNA_JIRA_CLOUD_ID={{ donna_jira_actions_cloud_id }}
+      DONNA_JIRA_WRITE_TOKEN={{ donna_jira_actions_write_token }}
+      DONNA_JIRA_ACTION_SERVICE_TOKEN={{ donna_jira_actions_service_token }}
+      DONNA_JIRA_ALLOWED_PROJECTS={{ donna_jira_actions_project_keys }}
+      DONNA_JIRA_ALLOWED_ISSUE_TYPES={{ donna_jira_actions_issue_types }}
+      DONNA_JIRA_ACTION_STATE={{ donna_jira_actions_state }}
+  no_log: true
+  notify: Restart donna Jira actions
+
+- name: Install Jira action-service systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/donna-jira-actions.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Donna restricted Jira task actions
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      DynamicUser=yes
+      StateDirectory=donna-jira-actions
+      StateDirectoryMode=0700
+      EnvironmentFile=/etc/donna-jira-actions/secret.env
+      ExecStart=/usr/local/bin/donna-jira-actions
+      Restart=always
+      RestartSec=5
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      ProtectHome=yes
+      PrivateTmp=yes
+      UMask=0077
+      MemoryMax=128M
+      RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart donna Jira actions
+
+- name: Require the base Secretary service before deploying Jira actions
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ lab_secretary_port }}/health"
+    status_code: 200
+  when: not ansible_check_mode
+
+- name: Configure Secretary to use the private Jira action service
+  ansible.builtin.blockinfile:
+    path: /etc/lab-secretary/secretary.env
+    marker: "# {mark} DONNA JIRA ACTION CLIENT"
+    block: |
+      LAB_DONNA_JIRA_ACTIONS_URL=http://127.0.0.1:8094
+      LAB_DONNA_JIRA_ACTIONS_TOKEN={{ donna_jira_actions_service_token }}
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart lab secretary
+
+- name: Install Donna Jira Action function source for Open WebUI admin import
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../roles/open_webui/files/donna_jira_actions.py"
+    dest: /srv/ai-lab/open-webui/donna_jira_actions.py
+    owner: root
+    group: root
+    mode: "0644"
+  when: open_webui_enabled | default(false) | bool
+
+- name: Apply Jira service and Secretary changes
+  ansible.builtin.meta: flush_handlers
+  when: not ansible_check_mode
+
+- name: Enable Donna Jira action-service
+  ansible.builtin.systemd:
+    name: donna-jira-actions
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+
+- name: Verify Donna Jira action-service health
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ donna_jira_actions_listen.split(':')[-1] }}/healthz"
+    status_code: 200
+  register: donna_jira_actions_health
+  retries: 15
+  delay: 2
+  until: donna_jira_actions_health.status == 200
+  when: not ansible_check_mode

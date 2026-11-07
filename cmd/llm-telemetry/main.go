@@ -20,6 +20,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:8081", "Loopback bind address")
 	upstream := flag.String("upstream", "http://127.0.0.1:8080", "llama.cpp loopback upstream")
 	model := flag.String("model", "Qwen3.5-4B-Q4_K_M", "Fixed model label; never derived from user input")
+	traceDir := flag.String("trace-dir", "", "Private directory for fsynced inference checkpoints")
 	flag.Parse()
 	host, _, err := net.SplitHostPort(*listen)
 	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
@@ -29,7 +30,9 @@ func main() {
 	if err != nil || target.User != nil || target.Scheme != "http" || net.ParseIP(target.Hostname()) == nil || !net.ParseIP(target.Hostname()).IsLoopback() || (target.Path != "" && target.Path != "/") || target.RawQuery != "" {
 		log.Fatal("upstream must be a loopback HTTP origin without credentials")
 	}
-	server := &http.Server{Addr: *listen, Handler: llmtelemetry.New(target, *model, prometheus.NewRegistry()), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
+	proxy := llmtelemetry.New(target, *model, prometheus.NewRegistry())
+	proxy.SetTraceDir(*traceDir)
+	server := &http.Server{Addr: *listen, Handler: proxy, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go func() {

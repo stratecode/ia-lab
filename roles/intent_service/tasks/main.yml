@@ -1,0 +1,136 @@
+---
+- name: Require an external intent-service release artifact
+  ansible.builtin.assert:
+    that:
+      - intent_service_binary | length > 0
+      - intent_service_sha256 is match('^[0-9a-f]{64}$')
+      - intent_service_profile | length > 0
+    fail_msg: "Set LAB_INTENT_BINARY, LAB_INTENT_SHA256 and LAB_INTENT_PROFILE to a verified external release."
+
+- name: Check the local intent-service artifact
+  ansible.builtin.stat:
+    path: "{{ intent_service_binary }}"
+    checksum_algorithm: sha256
+  register: intent_service_artifact
+  delegate_to: localhost
+  become: false
+
+- name: Verify the release checksum
+  ansible.builtin.assert:
+    that:
+      - intent_service_artifact.stat.exists
+      - intent_service_artifact.stat.checksum == intent_service_sha256
+
+- name: Create intent-service configuration directory
+  ansible.builtin.file:
+    path: /etc/lab-intent-service
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Generate a private shared client token on the host
+  ansible.builtin.shell:
+    cmd: |
+      umask 077
+      token="$(openssl rand -hex 32)"
+      printf 'INTENT_CLIENT_TOKEN=%s\nLAB_INTENT_TOKEN=%s\n' "$token" "$token" > /etc/lab-intent-service/client.env
+    creates: /etc/lab-intent-service/client.env
+  no_log: true
+
+- name: Enforce client token permissions
+  ansible.builtin.file:
+    path: /etc/lab-intent-service/client.env
+    owner: root
+    group: root
+    mode: "0600"
+  when: not ansible_check_mode
+
+- name: Install versioned server-owned capability profiles
+  ansible.builtin.copy:
+    src: "{{ intent_service_profile }}"
+    dest: /etc/lab-intent-service/profiles.json
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart intent service
+
+- name: Create versioned intent-service release directory
+  ansible.builtin.file:
+    path: "/opt/lab-intent-service/releases/{{ intent_service_sha256 }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install pinned intent-service binary
+  ansible.builtin.copy:
+    src: "{{ intent_service_binary }}"
+    dest: "/opt/lab-intent-service/releases/{{ intent_service_sha256 }}/intent-service"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart intent service
+
+- name: Point current release at the pinned artifact
+  ansible.builtin.file:
+    src: "/opt/lab-intent-service/releases/{{ intent_service_sha256 }}/intent-service"
+    dest: /usr/local/bin/lab-intent-service
+    state: link
+    force: true
+  notify: Restart intent service
+  when: not ansible_check_mode
+
+- name: Install loopback intent-service unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/lab-intent-service.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Shared intent interpretation API
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      DynamicUser=yes
+      EnvironmentFile=/etc/lab-intent-service/client.env
+      Environment=INTENT_LISTEN=127.0.0.1:8091
+      Environment=INTENT_CONFIG_FILE=/etc/lab-intent-service/profiles.json
+      ExecStart=/usr/local/bin/lab-intent-service
+      Restart=always
+      RestartSec=5
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      ProtectHome=yes
+      PrivateTmp=yes
+      RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+      MemoryMax=64M
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart intent service
+
+- name: Apply intent-service changes
+  ansible.builtin.meta: flush_handlers
+  when: not ansible_check_mode
+
+- name: Enable intent service
+  ansible.builtin.systemd:
+    name: lab-intent-service
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+
+- name: Verify intent-service health
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8091/health
+    status_code: 200
+    return_content: true
+  register: intent_service_health
+  retries: 5
+  delay: 2
+  until: intent_service_health.status == 200
+  when: not ansible_check_mode

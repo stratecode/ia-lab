@@ -1,0 +1,6 @@
+---
+- name: Deploy Donna's restricted Jira task-action service
+  hosts: lab
+  become: true
+  roles:
+    - donna_jira_actions

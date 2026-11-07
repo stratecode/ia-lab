@@ -170,11 +170,13 @@ func memoryDateRange(query string, now time.Time) memoryPeriod {
 	return period
 }
 
-func (s *Service) relevantMemories(user int64, query string, recentIfEmpty bool) ([]conversationMemory, error) {
-	return s.relevantMemoriesAt(user, "", query, recentIfEmpty, time.Now())
-}
-
-func (s *Service) relevantMemoriesAt(user int64, channel, query string, recentIfEmpty bool, now time.Time) ([]conversationMemory, error) {
+func (s *Service) relevantMemoriesAt(user int64, channel, conversation, query string, recentIfEmpty bool, now time.Time) ([]conversationMemory, error) {
+	channel = strings.TrimSpace(channel)
+	conversation = strings.TrimSpace(conversation)
+	if channel == "" || conversation == "" {
+		return nil, errors.New("conversation memory requires a channel and conversation scope")
+	}
+	scope := conversationDigest(channel, conversation)
 	period := memoryDateRange(query, now)
 	paths := make([]string, 0, 31)
 	firstDay := period.Start.In(madridLocation())
@@ -205,7 +207,7 @@ func (s *Service) relevantMemoriesAt(user int64, channel, query string, recentIf
 			if entry.At.IsZero() || entry.At.Before(period.Start) || !entry.At.Before(period.End) {
 				continue
 			}
-			if channel != "" && entry.Channel != "" && entry.Channel != channel {
+			if entry.Channel != channel || entry.Conversation != scope {
 				continue
 			}
 			entryTerms := make(map[string]bool)

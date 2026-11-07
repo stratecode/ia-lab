@@ -114,3 +114,15 @@ func TestTelegramAcknowledgementVariesBetweenRequests(t *testing.T) {
 		t.Fatalf("consecutive acknowledgements should vary, got %q twice", first)
 	}
 }
+
+func TestLookupProgressDescribesTheActualSourceWork(t *testing.T) {
+	for _, tt := range []struct{ source, want string }{
+		{"Jira", "Voy a contrastar estados y vencimientos en Jira."},
+		{"Granola", "Voy a revisar lo tratado en las reuniones de Granola."},
+	} {
+		got := interactionProgressText(InteractionEvent{Kind: EventLookupStarted, Meaning: InteractionLookup, Source: tt.source})
+		if got != tt.want {
+			t.Errorf("%s: got %q, want %q", tt.source, got, tt.want)
+		}
+	}
+}

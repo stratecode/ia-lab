@@ -1,3 +1,9 @@
+- name: Validate the global debug flag
+  ansible.builtin.assert:
+    that:
+      - lab_debug_enabled_raw in ['true', 'false']
+    fail_msg: "LAB_DEBUG_ENABLED must be exactly true or false."
+
 - name: Require existing operator credentials
   ansible.builtin.assert:
     that:
@@ -5,15 +11,40 @@
       - orchestrator_telegram_allowed_users | length > 0
       - (llama_cpp_instances | first).api_key | length > 0
       - qwen_eval_api_key | length >= 32
-      - lab_secretary_telegram_mode in ['disabled', 'polling', 'webhook']
+      - lab_secretary_telegram_mode in ['disabled', 'webhook']
       - lab_secretary_progress_delay_seconds | int >= 1
       - lab_secretary_progress_delay_seconds | int <= 120
       - lab_secretary_trace_retention_days | int >= 1
       - lab_secretary_trace_retention_days | int <= 3650
       - lab_secretary_candidate_retention_days | int >= 1
       - lab_secretary_candidate_retention_days | int <= 3650
+      - (lab_secretary_intent_mode | default('')) in ['', 'shadow', 'enabled']
     fail_msg: "Telegram credentials and a principal model key are required."
   no_log: true
+
+- name: Reject stale secretary artifacts with the retired reception API
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - >-
+        import pathlib, sys;
+        payload = pathlib.Path(sys.argv[1]).read_bytes();
+        assert b'getUpdates' not in payload,
+        'Stale secretary artifact: rebuild the webhook-only binary before deployment'
+      - "{{ playbook_dir }}/../dist/lab-secretary-linux-amd64"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false
+
+- name: Require the independent intent service before enabling Donna integration
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8091/health
+    status_code: 200
+  when:
+    - (lab_secretary_intent_mode | default('')) != ''
+    - not ansible_check_mode
 
 - name: Verify legacy orchestrator is stopped
   ansible.builtin.command: systemctl is-active orchestrator
@@ -76,9 +107,12 @@
       LAB_SECRETARY_VOICE_ENABLED={{ 'true' if lab_secretary_voice_enabled | bool else 'false' }}
       LAB_SECRETARY_VOICE_MAX_DURATION_SECONDS={{ lab_secretary_voice_max_duration_seconds }}
       LAB_SECRETARY_PROGRESS_DELAY_SECONDS={{ lab_secretary_progress_delay_seconds }}
+      LAB_DEBUG_ENABLED={{ 'true' if lab_debug_enabled | bool else 'false' }}
       LAB_SECRETARY_TRACE_RETENTION_DAYS={{ lab_secretary_trace_retention_days }}
       LAB_SECRETARY_CANDIDATE_RETENTION_DAYS={{ lab_secretary_candidate_retention_days }}
       LAB_SECRETARY_MODEL_LABEL={{ lab_secretary_model_label }}
+      LAB_INTENT_MODE={{ lab_secretary_intent_mode | default('') }}
+      LAB_INTENT_URL=http://127.0.0.1:8091
       LAB_WHISPER_URL={{ lab_whisper_url }}
       LAB_PIPER_URL={{ lab_piper_url if lab_secretary_voice_enabled | bool else '' }}
       LAB_FFMPEG_BINARY=/usr/bin/ffmpeg
@@ -110,6 +144,8 @@
       StateDirectoryMode=0700
       EnvironmentFile=/etc/lab-secretary/secretary.env
       EnvironmentFile=/etc/lab-secretary/connectors.env
+      {% if (lab_secretary_intent_mode | default('')) != '' %}EnvironmentFile=/etc/lab-intent-service/client.env
+      {% endif %}
       {% if lab_secretary_telegram_mode == 'webhook' %}EnvironmentFile=/etc/lab-secretary/telegram-webhook.env
       {% endif %}
       ExecStart=/usr/local/bin/lab-secretary

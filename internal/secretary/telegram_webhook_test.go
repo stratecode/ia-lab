@@ -52,6 +52,28 @@ func TestTelegramWebhookRejectsInvalidRequests(t *testing.T) {
 	}
 }
 
+func TestTelegramWebhookDoesNotWriteDetailedTraceWhenDiagnosticsDisabled(t *testing.T) {
+	stateDir := t.TempDir()
+	queue, err := OpenTelegramUpdateQueue(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := New("", "", "", stateDir, nil)
+	service.SetDiagnosticsEnabled(false)
+	handler := service.TelegramWebhook(queue, "correct-secret")
+	req := httptest.NewRequest(http.MethodPost, "/telegram/webhook", strings.NewReader(`{"update_id":42}`))
+	req.Header.Set("X-Telegram-Bot-Api-Secret-Token", "correct-secret")
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status %d, want %d", res.Code, http.StatusOK)
+	}
+	path := filepath.Join(stateDir, "diagnostics", "conversation-steps.jsonl")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("detailed diagnostics file exists with debug disabled: %v", err)
+	}
+}
+
 func TestFileUpdateQueuePersistsAndDeduplicatesAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
 	update := Update{ID: 41, Message: &Message{ID: 9, From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Text: "hola"}}
@@ -218,5 +240,24 @@ func TestTelegramWebhookWorkerRetriesAfterRestart(t *testing.T) {
 	accepted, err := queue.Enqueue(update)
 	if err != nil || accepted {
 		t.Fatalf("completed retry replay accepted=%v err=%v", accepted, err)
+	}
+}
+
+func TestWebhookUpdatesRejectUnauthorizedUsersAndGroupChatsBeforeExecution(t *testing.T) {
+	apiCalls := 0
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalls++
+		t.Error("unauthorized update reached Telegram API")
+	}))
+	defer api.Close()
+	service := New("http://127.0.0.1:1", "key", "instructions", t.TempDir(), map[int64]bool{7: true})
+	bot := &Bot{Base: api.URL, Token: "secret", Client: api.Client(), Service: service}
+	for _, message := range []Message{{From: User{ID: 8}, Chat: Chat{ID: 8, Type: "private"}, Text: "hola"}, {From: User{ID: 7}, Chat: Chat{ID: 99, Type: "group"}, Text: "hola"}} {
+		if err := bot.processUpdate(context.Background(), Update{ID: 42, Message: &message}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if apiCalls != 0 {
+		t.Fatalf("unexpected API calls: %d", apiCalls)
 	}
 }

@@ -9,7 +9,7 @@ monitoring and VPN. Start a new chat at `https://chat.stratecode.com` and use
 Open WebUI volume. See [Principal model operation](principal-model-operation.md).
 
 The shared secretary now fronts Open WebUI. `/status`, `/jira`, `/reuniones` and
-`/resumen` are deterministic source commands. Telegram polling runs on the lab
+`/resumen` are deterministic source commands. Telegram webhook reception runs on the lab
 with private-chat allowlisting; voice notes use local CPU Whisper when the
 tracked voice-input flag is enabled. Telegram currently responds to voice notes
 with text, not audio. For authorized routed requests, Telegram reacts to the
@@ -18,6 +18,11 @@ source before its answer. Open WebUI renders the same feedback in its response
 stream. Both channels send at most one stage-aware delay update after 30 seconds;
 fast replies skip generic acknowledgements. These signals do not claim an action
 was executed: connected capabilities remain read-only.
+Jira task proposals are implemented locally as a separate confirmation flow.
+They are not activated on the host until the Jira action service is deployed
+and the Open WebUI Action is imported and bound to Donna. Task creation and
+source-linked comments require an explicit confirmation; time tracking is
+deferred to a later phase. See [secretary operation](secretary-operation.md).
 Piper remains configured but is not used for replies. WhatsApp and Slack remain future adapters. See
 [secretary operation](secretary-operation.md). The orchestrator and Codex gateway remain retired.
 The remainder of this guide is historical control-plane reference; its model
@@ -696,9 +701,12 @@ Full operator behavior, views, and keybindings live in:
 
 ## Deployment boundary
 
-The lab owns inference, chat, monitoring and private access. Oráculo and
-SRL/OpenSearch are separate projects and are no longer deployed here. See
-[Lab-only operation](lab-only-operation.md) for retirement and data recovery.
+The lab repository owns inference, chat, monitoring and private access. Oráculo
+and SRL/OpenSearch are separate projects, outside this repository's deployment
+playbooks. SRL/OpenSearch test containers were running on the host on 27 October
+2026; their alerts are excluded from lab container monitoring. See
+[Lab-only operation](lab-only-operation.md) for the historical retirement and
+data recovery procedure.
 
 ## Research mode notes
 

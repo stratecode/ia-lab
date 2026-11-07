@@ -187,6 +187,23 @@
     - monitor_tls_mode == "letsencrypt"
     - monitor_letsencrypt_challenge == "dns-route53"
 
+- name: Ensure the Granola webhook ingress snippet directory exists
+  ansible.builtin.file:
+    path: /etc/nginx/snippets
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install a disabled Granola webhook ingress snippet when absent
+  ansible.builtin.copy:
+    dest: /etc/nginx/snippets/donna-granola-webhook.conf
+    content: "return 404;\n"
+    owner: root
+    group: root
+    mode: "0644"
+    force: false
+
 - name: Select nginx certificate paths
   ansible.builtin.set_fact:
     monitor_nginx_ssl_certificate: >-
@@ -286,6 +303,12 @@
               proxy_set_header Host $host;
               proxy_set_header X-Forwarded-Proto $scheme;
           }
+
+          # BEGIN ANSIBLE MANAGED DONNA GRANOLA WEBHOOK INGRESS
+          location = /webhooks/granola {
+              include /etc/nginx/snippets/donna-granola-webhook.conf;
+          }
+          # END ANSIBLE MANAGED DONNA GRANOLA WEBHOOK INGRESS
 
           location / {
               return 404;

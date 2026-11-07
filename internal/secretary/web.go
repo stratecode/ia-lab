@@ -176,7 +176,7 @@ func readWebPage(ctx context.Context, rawURL string, client *http.Client) (Capab
 	}
 	request.Header.Set("Accept", "text/html, application/xhtml+xml, text/plain;q=0.9")
 	request.Header.Set("User-Agent", sharedWebUserAgent)
-	response, err := client.Do(request)
+	response, err := conversationHTTP(ctx, client, request, "web.fetch")
 	if err != nil {
 		return CapabilityResult{}, fmt.Errorf("no he podido leer el enlace")
 	}

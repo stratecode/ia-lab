@@ -37,6 +37,8 @@ type VoiceMetrics struct {
 	memoryHits       prometheus.Histogram
 	traceWriteError  prometheus.Counter
 	maintenanceError prometheus.Counter
+	guardrail        *prometheus.CounterVec
+	responseWords    *prometheus.HistogramVec
 }
 
 func NewVoiceMetrics() *VoiceMetrics {
@@ -84,9 +86,41 @@ func NewVoiceMetrics() *VoiceMetrics {
 			Name: "lab_secretary_learning_maintenance_errors_total",
 			Help: "Private learning retention cleanup failures.",
 		}),
+		guardrail: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "lab_secretary_guardrail_redactions_total",
+			Help: "Sensitive values redacted before text left the service, by closed category. Never carries the redacted content.",
+		}, []string{"category"}),
+		responseWords: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "lab_secretary_response_words",
+			Help:    "Words in final secretary answers by bounded intent. Used to keep answers short.",
+			Buckets: []float64{5, 10, 20, 30, 45, 60, 90, 130, 200, 400},
+		}, []string{"intent"}),
 	}
-	registry.MustRegister(metrics.phaseDuration, metrics.phaseCalls, metrics.requestDuration, metrics.interactions, metrics.interactionTime, metrics.memoryRetrieval, metrics.memoryHits, metrics.traceWriteError, metrics.maintenanceError)
+	registry.MustRegister(metrics.phaseDuration, metrics.phaseCalls, metrics.requestDuration, metrics.interactions, metrics.interactionTime, metrics.memoryRetrieval, metrics.memoryHits, metrics.traceWriteError, metrics.maintenanceError, metrics.guardrail, metrics.responseWords)
+	for _, category := range guardrailCategories {
+		metrics.guardrail.WithLabelValues(category)
+	}
 	return metrics
+}
+
+// ObserveResponseWords records the length of a final answer without its text.
+func (m *VoiceMetrics) ObserveResponseWords(intent string, words int) {
+	if m == nil || words < 0 {
+		return
+	}
+	m.responseWords.WithLabelValues(boundedInteractionIntent(intent)).Observe(float64(words))
+}
+
+// ObserveGuardrail records redaction counts using only the closed category set.
+func (m *VoiceMetrics) ObserveGuardrail(report GuardrailReport) {
+	if m == nil {
+		return
+	}
+	for _, category := range guardrailCategories {
+		if n := report[category]; n > 0 {
+			m.guardrail.WithLabelValues(category).Add(float64(n))
+		}
+	}
 }
 
 func (m *VoiceMetrics) ObserveInteraction(intent, capability, outcome string, duration time.Duration) {

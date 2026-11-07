@@ -54,6 +54,8 @@ type InteractionTrace struct {
 	Channel         string              `json:"channel"`
 	ConversationRef string              `json:"conversation_ref"`
 	Intent          string              `json:"intent"`
+	RouteDecision   string              `json:"route_decision,omitempty"`
+	FallbackReason  string              `json:"fallback_reason,omitempty"`
 	Meaning         string              `json:"meaning"`
 	Outcome         string              `json:"outcome"`
 	TotalDuration   time.Duration       `json:"total_duration"`

@@ -11,13 +11,12 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 )
 
 type User struct {
@@ -38,10 +37,30 @@ type Message struct {
 	Chat  Chat   `json:"chat"`
 	Text  string `json:"text"`
 	Voice *Voice `json:"voice,omitempty"`
+	Audio *Voice `json:"audio,omitempty"`
 }
-type Update struct {
-	ID      int64    `json:"update_id"`
+
+type CallbackQuery struct {
+	ID      string   `json:"id"`
+	From    User     `json:"from"`
 	Message *Message `json:"message"`
+	Data    string   `json:"data"`
+}
+
+func (m *Message) audioFile() *Voice {
+	if m == nil {
+		return nil
+	}
+	if m.Voice != nil {
+		return m.Voice
+	}
+	return m.Audio
+}
+
+type Update struct {
+	ID            int64          `json:"update_id"`
+	Message       *Message       `json:"message"`
+	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
 }
 
 func (s *Service) Permitted(m Message) bool {
@@ -49,17 +68,17 @@ func (s *Service) Permitted(m Message) bool {
 }
 
 type Bot struct {
-	Base, Token      string
-	Client           *http.Client
-	Service          *Service
-	OnEvent          func(string)
-	Speech           SpeechProcessor
-	Audio            AudioConverter
-	Metrics          *VoiceMetrics
+	Base, Token          string
+	Client               *http.Client
+	Service              *Service
+	OnEvent              func(string)
+	Speech               SpeechProcessor
+	Audio                AudioConverter
+	Metrics              *VoiceMetrics
 	TranscriptionEnabled bool
-	VoiceMaxDuration time.Duration
-	ProgressDelay    time.Duration
-	acknowledgements atomic.Uint64
+	VoiceMaxDuration     time.Duration
+	ProgressDelay        time.Duration
+	acknowledgements     atomic.Uint64
 }
 
 var telegramAcknowledgements = [...]string{
@@ -119,14 +138,16 @@ const (
 
 var telegramFilePathSegment = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 
-func (b *Bot) call(ctx context.Context, method string, payload any, out any) error {
+func (b *Bot) call(ctx context.Context, method string, payload any, out any) (returnErr error) {
+	done := conversationStep(ctx, "telegram."+method)
+	defer func() { done(returnErr) }()
 	data, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, "POST", b.Base+"/bot"+b.Token+"/"+method, bytes.NewReader(data))
 	if err != nil {
 		return errors.New("invalid Telegram endpoint")
 	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := b.Client.Do(req)
+	res, err := conversationHTTP(ctx, b.Client, req, "telegram."+method)
 	if err != nil {
 		return errors.New("Telegram transport unavailable")
 	}
@@ -151,19 +172,171 @@ func (b *Bot) event(name string) {
 		b.OnEvent(name)
 	}
 }
+
+const telegramAnswerChunkRunes = 700
+
 func (b *Bot) send(ctx context.Context, chat int64, text string) error {
-	runes := []rune(text)
-	for len(runes) > 0 {
-		n := len(runes)
-		if n > 3500 {
-			n = 3500
-		}
-		if err := b.call(ctx, "sendMessage", map[string]any{"chat_id": chat, "text": telegramHTML(string(runes[:n])), "parse_mode": "HTML"}, nil); err != nil {
+	for _, message := range splitTelegramMessages(text) {
+		if err := b.call(ctx, "sendMessage", map[string]any{"chat_id": chat, "text": telegramHTML(message), "parse_mode": "HTML"}, nil); err != nil {
 			return err
 		}
-		runes = runes[n:]
 	}
 	return nil
+}
+
+func splitTelegramMessages(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	if len([]rune(text)) <= telegramAnswerChunkRunes {
+		return []string{text}
+	}
+
+	var units []string
+	for _, paragraph := range strings.Split(text, "\n\n") {
+		if len([]rune(paragraph)) <= telegramAnswerChunkRunes {
+			units = append(units, paragraph)
+			continue
+		}
+		for _, line := range strings.Split(paragraph, "\n") {
+			if len([]rune(line)) <= telegramAnswerChunkRunes {
+				units = append(units, line)
+				continue
+			}
+			units = append(units, splitTelegramLongLine(line)...)
+		}
+	}
+
+	var messages []string
+	current := ""
+	for _, unit := range units {
+		unit = strings.TrimSpace(unit)
+		if unit == "" {
+			continue
+		}
+		if current == "" {
+			current = unit
+			continue
+		}
+		joined := current + "\n\n" + unit
+		if len([]rune(joined)) <= telegramAnswerChunkRunes {
+			current = joined
+			continue
+		}
+		messages = append(messages, current)
+		current = unit
+	}
+	if current != "" {
+		messages = append(messages, current)
+	}
+	return balanceTelegramBoldMarkers(messages)
+}
+
+func balanceTelegramBoldMarkers(messages []string) []string {
+	balanced := make([]string, len(messages))
+	open := false
+	for i, message := range messages {
+		prefix := ""
+		if open {
+			prefix = "**"
+		}
+		state := open
+		for remaining := message; ; {
+			marker := strings.Index(remaining, "**")
+			if marker < 0 {
+				break
+			}
+			state = !state
+			remaining = remaining[marker+2:]
+		}
+		suffix := ""
+		if state {
+			suffix = "**"
+		}
+		balanced[i] = prefix + message + suffix
+		open = state
+	}
+	return balanced
+}
+
+func splitTelegramLongLine(line string) []string {
+	runes := []rune(line)
+	var sentences []string
+	start := 0
+	for i, r := range runes {
+		if r != '.' && r != '?' && r != '!' {
+			continue
+		}
+		if i+1 < len(runes) && !unicode.IsSpace(runes[i+1]) {
+			continue
+		}
+		if sentence := strings.TrimSpace(string(runes[start : i+1])); sentence != "" {
+			sentences = append(sentences, sentence)
+		}
+		start = i + 1
+	}
+	if tail := strings.TrimSpace(string(runes[start:])); tail != "" {
+		sentences = append(sentences, tail)
+	}
+
+	var chunks []string
+	current := ""
+	for _, sentence := range sentences {
+		if len([]rune(sentence)) > telegramAnswerChunkRunes {
+			if current != "" {
+				chunks = append(chunks, current)
+				current = ""
+			}
+			chunks = append(chunks, splitTelegramWords(sentence)...)
+			continue
+		}
+		joined := sentence
+		if current != "" {
+			joined = current + " " + sentence
+		}
+		if len([]rune(joined)) <= telegramAnswerChunkRunes {
+			current = joined
+			continue
+		}
+		chunks = append(chunks, current)
+		current = sentence
+	}
+	if current != "" {
+		chunks = append(chunks, current)
+	}
+	return chunks
+}
+
+func splitTelegramWords(text string) []string {
+	var chunks []string
+	current := ""
+	for _, word := range strings.Fields(text) {
+		joined := word
+		if current != "" {
+			joined = current + " " + word
+		}
+		if len([]rune(joined)) <= telegramAnswerChunkRunes {
+			current = joined
+			continue
+		}
+		if current != "" {
+			chunks = append(chunks, current)
+		}
+		current = word
+		if len([]rune(current)) > telegramAnswerChunkRunes {
+			runes := []rune(current)
+			for len(runes) > telegramAnswerChunkRunes {
+				chunks = append(chunks, string(runes[:telegramAnswerChunkRunes]))
+				runes = runes[telegramAnswerChunkRunes:]
+			}
+			current = string(runes)
+		}
+	}
+	if current != "" {
+		chunks = append(chunks, current)
+	}
+	return chunks
 }
 
 // telegramHTML supports the bold Markdown emitted by the secretary and escapes
@@ -192,18 +365,26 @@ func telegramHTML(text string) string {
 	return out.String()
 }
 
-// processUpdate is shared by polling and webhook delivery so both transports
-// apply the same private-chat allowlist, text, and voice behavior.
-func (b *Bot) processUpdate(ctx context.Context, update Update) error {
+// processUpdate applies authorization, text and voice handling to queued updates.
+func (b *Bot) processUpdate(ctx context.Context, update Update) (returnErr error) {
+	ctx = withConversationTrace(ctx, b.Service.diagnostics, fmt.Sprintf("telegram-%d", update.ID))
+	done := conversationStep(ctx, "telegram.process")
+	defer func() { done(returnErr) }()
+	if update.CallbackQuery != nil {
+		return b.processJiraCallback(ctx, update.CallbackQuery)
+	}
+	authDone := conversationStep(ctx, "authorization")
 	if update.Message == nil || !b.Service.Permitted(*update.Message) {
+		authDone(errors.New("rejected"))
 		b.event("telegram_rejected")
 		return nil
 	}
+	authDone(nil)
 	m := update.Message
-	if m.Voice != nil {
+	if m.audioFile() != nil {
 		tracker := b.progressTracker(ctx, m.Chat.ID)
 		defer tracker.Close()
-		tracker.SetStage("descargando la nota de voz")
+		tracker.SetStage("descargando el audio")
 		if err := b.processVoiceWithProgress(ctx, m, tracker); err != nil {
 			b.event("telegram_voice_error")
 			return err
@@ -211,12 +392,25 @@ func (b *Bot) processUpdate(ctx context.Context, update Update) error {
 		return nil
 	}
 	if strings.TrimSpace(m.Text) == "" {
-		if err := b.send(ctx, m.Chat.ID, "Por ahora recibo texto. La voz se incorporará después."); err != nil {
+		if err := b.send(ctx, m.Chat.ID, "Aún no puedo leer este tipo de archivo. Envíame una nota de voz o escribe el texto."); err != nil {
 			b.event("telegram_send_error")
 			return err
 		}
 		b.event("telegram_reply_sent")
 		return nil
+	}
+	if b.Service.JiraActions != nil {
+		principal := JiraActionPrincipal{OperatorID: m.From.ID, Channel: "telegram", ConversationID: strconv.FormatInt(m.Chat.ID, 10)}
+		proposal, handled, err := b.Service.ClarifyJiraTaskProposal(ctx, principal, m.Text)
+		if handled {
+			if err != nil {
+				return b.send(ctx, m.Chat.ID, "No he podido continuar la propuesta de Jira. No he escrito nada.")
+			}
+			if proposal.Preview != nil {
+				return b.sendJiraActionPreview(ctx, m.Chat.ID, *proposal.Preview)
+			}
+			return b.send(ctx, m.Chat.ID, proposal.Message)
+		}
 	}
 	_ = b.call(ctx, "sendChatAction", map[string]any{"chat_id": m.Chat.ID, "action": "typing"}, nil)
 	observer, tracker := b.interactionObserver(ctx, m.Chat.ID, m.ID)
@@ -239,6 +433,7 @@ func (b *Bot) RunWebhookWorker(ctx context.Context, queue TelegramUpdateQueue) e
 	if queue == nil {
 		return errors.New("Telegram update queue is required")
 	}
+	go b.runTimerScheduler(ctx)
 	for ctx.Err() == nil {
 		update, err := queue.Next(ctx)
 		if err != nil {
@@ -251,7 +446,8 @@ func (b *Bot) RunWebhookWorker(ctx context.Context, queue TelegramUpdateQueue) e
 			}
 			continue
 		}
-		if err := b.processUpdate(ctx, update); err != nil {
+		updateCtx := withConversationTrace(ctx, b.Service.diagnostics, fmt.Sprintf("telegram-%d", update.ID))
+		if err := b.processUpdate(updateCtx, update); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -260,7 +456,10 @@ func (b *Bot) RunWebhookWorker(ctx context.Context, queue TelegramUpdateQueue) e
 			}
 			continue
 		}
-		if err := queue.Complete(update.ID); err != nil {
+		queueDone := conversationStep(updateCtx, "queue.complete")
+		completeErr := queue.Complete(update.ID)
+		queueDone(completeErr)
+		if completeErr != nil {
 			b.event("telegram_queue_error")
 			if !waitTelegramRetry(ctx) {
 				return nil
@@ -279,58 +478,6 @@ func waitTelegramRetry(ctx context.Context) bool {
 	case <-timer.C:
 		return true
 	}
-}
-
-func (b *Bot) Run(ctx context.Context) error {
-	var me struct {
-		ID int64 `json:"id"`
-	}
-	if err := b.call(ctx, "getMe", map[string]any{}, &me); err != nil {
-		return err
-	}
-	var webhook struct {
-		URL string `json:"url"`
-	}
-	if err := b.call(ctx, "getWebhookInfo", map[string]any{}, &webhook); err != nil {
-		return err
-	}
-	if webhook.URL != "" {
-		return errors.New("existing webhook must be reviewed before polling")
-	}
-	state := filepath.Join(b.Service.StateDir, "offset.json")
-	var offset int64
-	if data, err := os.ReadFile(state); err == nil {
-		if json.Unmarshal(data, &offset) != nil {
-			return errors.New("invalid polling state")
-		}
-	} else if !os.IsNotExist(err) {
-		return errors.New("cannot read polling state")
-	}
-	b.event("telegram_ready")
-	go b.runTimerScheduler(ctx)
-	for ctx.Err() == nil {
-		var updates []Update
-		err := b.call(ctx, "getUpdates", map[string]any{"offset": offset, "timeout": 25, "allowed_updates": []string{"message"}}, &updates)
-		if err != nil {
-			b.event("telegram_poll_error: " + err.Error())
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-time.After(3 * time.Second):
-				continue
-			}
-		}
-		for _, update := range updates {
-			// Checkpoint before execution: no automatic replay of a reply after restart.
-			// A crash during inference can lose this update; the operator must resend.
-			offset = update.ID + 1
-			if err := atomicJSON(state, offset); err != nil {
-				return errors.New("cannot persist polling offset")
-			}
-			_ = b.processUpdate(ctx, update)
-		}
-	}
-	return nil
 }
 
 func (b *Bot) processVoice(ctx context.Context, message *Message) error {
@@ -358,40 +505,40 @@ func (b *Bot) processVoiceWithProgress(ctx context.Context, message *Message, tr
 			b.Metrics.ObserveRequest(requestResult, time.Since(requestStarted))
 		}
 	}()
-	if message == nil || message.Voice == nil || !b.Service.Permitted(*message) {
+	if message == nil || message.audioFile() == nil || !b.Service.Permitted(*message) {
 		return errors.New("unauthorized voice message")
 	}
 	if !b.TranscriptionEnabled {
 		requestResult = VoiceResultError
-		return errors.New("voice handling is disabled")
+		return b.sendVoiceFallback(ctx, message.Chat.ID, "La transcripción de audio está desactivada ahora mismo. Envíame el texto.", errors.New("voice handling is disabled"))
 	}
 	if b.Speech == nil || b.Audio == nil {
 		requestResult = VoiceResultError
-		return errors.New("voice response is unavailable")
+		return b.sendVoiceFallback(ctx, message.Chat.ID, "No puedo transcribir el audio ahora mismo. Envíame el texto.", errors.New("voice response is unavailable"))
 	}
-	voice := message.Voice
+	voice := message.audioFile()
 	maxDuration := b.VoiceMaxDuration
 	if maxDuration <= 0 {
 		maxDuration = 120 * time.Second
 	}
 	if voice.FileID == "" || voice.Duration <= 0 || time.Duration(voice.Duration) > maxDuration/time.Second || voice.FileSize < 0 || voice.FileSize > maxTelegramFileBytes {
 		requestResult = VoiceResultError
-		return errors.New("invalid or oversized Telegram voice metadata")
+		return b.sendVoiceFallback(ctx, message.Chat.ID, "No he podido procesar ese audio. Envíame una nota de voz más corta o escribe el texto.", errors.New("invalid or oversized Telegram audio metadata"))
 	}
-	tracker.SetStage("descargando la nota de voz")
+	tracker.SetStage("descargando el audio")
 	var file struct {
 		FilePath string `json:"file_path"`
 	}
 	if err := b.call(ctx, "getFile", map[string]any{"file_id": voice.FileID}, &file); err != nil {
-		return errors.New("telegram voice download failed")
+		return b.sendVoiceFallback(ctx, message.Chat.ID, "No he podido descargar el audio de Telegram. Reenvíalo o escríbeme la consulta.", errors.New("telegram voice download failed"))
 	}
 	fileURL, err := telegramFileURL(b.Base, b.Token, file.FilePath)
 	if err != nil {
-		return errors.New("telegram voice download failed")
+		return b.sendVoiceFallback(ctx, message.Chat.ID, "No he podido descargar el audio de Telegram. Reenvíalo o escríbeme la consulta.", errors.New("telegram voice download failed"))
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
 	if err != nil {
-		return errors.New("telegram voice download failed")
+		return b.sendVoiceFallback(ctx, message.Chat.ID, "No he podido descargar el audio de Telegram. Reenvíalo o escríbeme la consulta.", errors.New("telegram voice download failed"))
 	}
 	client := *b.Client
 	baseURL, _ := url.Parse(b.Base)
@@ -401,25 +548,29 @@ func (b *Bot) processVoiceWithProgress(ctx context.Context, message *Message, tr
 		}
 		return nil
 	}
-	response, err := client.Do(request)
+	downloadDone := conversationStep(ctx, "audio.download")
+	response, err := conversationHTTP(ctx, &client, request, "audio.download")
+	downloadDone(err)
 	if err != nil {
-		return errors.New("telegram voice download failed")
+		return b.sendVoiceFallback(ctx, message.Chat.ID, "No he podido descargar el audio de Telegram. Reenvíalo o escríbeme la consulta.", errors.New("telegram voice download failed"))
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK || response.ContentLength > maxTelegramFileBytes {
-		return errors.New("telegram voice download failed")
+		return b.sendVoiceFallback(ctx, message.Chat.ID, "No he podido descargar el audio de Telegram. Reenvíalo o escríbeme la consulta.", errors.New("telegram voice download failed"))
 	}
 	ogg, err := io.ReadAll(io.LimitReader(response.Body, maxTelegramFileBytes+1))
 	if len(ogg) > maxTelegramFileBytes {
 		requestResult = VoiceResultError
-		return errors.New("Telegram voice exceeds the size limit")
+		return b.sendVoiceFallback(ctx, message.Chat.ID, "El audio supera el límite de tamaño. Envíame una nota más corta o escribe el texto.", errors.New("Telegram audio exceeds the size limit"))
 	}
 	if err != nil || len(ogg) == 0 {
-		return errors.New("telegram voice download failed")
+		return b.sendVoiceFallback(ctx, message.Chat.ID, "No he podido descargar el audio de Telegram. Reenvíalo o escríbeme la consulta.", errors.New("telegram voice download failed"))
 	}
 	sttStarted := time.Now()
 	tracker.SetStage("transcribiendo la nota de voz")
+	convertDone := conversationStep(ctx, "audio.convert")
 	wav, sttErr := b.Audio.ToWAV(ctx, ogg)
+	convertDone(sttErr)
 	if sttErr != nil {
 		b.observeVoicePhase(ctx, VoicePhaseSTT, sttStarted, sttErr)
 		requestResult = voiceMetricResult(sttErr)
@@ -428,7 +579,9 @@ func (b *Bot) processVoiceWithProgress(ctx context.Context, message *Message, tr
 		b.observeVoicePhase(ctx, VoicePhaseTelegramSend, sendStarted, sendErr)
 		return sendErr
 	}
+	transcribeDone := conversationStep(ctx, "audio.transcribe")
 	transcript, sttErr := b.Speech.Transcribe(ctx, wav)
+	transcribeDone(sttErr)
 	if sttErr == nil && strings.TrimSpace(transcript) == "" {
 		sttErr = errors.New("empty speech transcript")
 	}
@@ -454,6 +607,13 @@ func (b *Bot) processVoiceWithProgress(ctx context.Context, message *Message, tr
 	sendErr := b.send(ctx, message.Chat.ID, answer)
 	b.observeVoicePhase(ctx, VoicePhaseTelegramSend, sendStarted, sendErr)
 	return sendErr
+}
+
+func (b *Bot) sendVoiceFallback(ctx context.Context, chat int64, message string, cause error) error {
+	if err := b.send(ctx, chat, message); err != nil {
+		return err
+	}
+	return cause
 }
 
 func (b *Bot) interactionObserver(ctx context.Context, chat, messageID int64) (InteractionObserver, *interactionProgressTracker) {

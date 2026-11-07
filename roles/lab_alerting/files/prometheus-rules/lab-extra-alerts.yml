@@ -2,7 +2,7 @@ groups:
   - name: lab-containers
     rules:
       - alert: ContainerNotRunning
-        expr: docker_container_running == 0
+        expr: docker_container_running{name!~"srl-.*|opensearch-.*"} == 0
         for: 2m
         labels: {severity: warning, category: containers}
         annotations:
@@ -16,19 +16,19 @@ groups:
           summary: "Falta un contenedor esperado (grafana u open-webui)"
           description: "El contenedor no existe en Docker, no solo está parado."
       - alert: ContainerUnhealthy
-        expr: docker_container_healthy == 0
+        expr: docker_container_healthy{name!~"srl-.*|opensearch-.*"} == 0
         for: 3m
         labels: {severity: warning, category: containers}
         annotations:
           summary: "Contenedor no saludable: {{ $labels.name }}"
       - alert: ContainerRestarting
-        expr: increase(docker_container_restart_count[15m]) > 2
+        expr: increase(docker_container_restart_count{name!~"srl-.*|opensearch-.*"}[15m]) > 2
         labels: {severity: warning, category: containers}
         annotations:
           summary: "Contenedor reiniciándose en bucle: {{ $labels.name }}"
           description: "{{ $value | printf \"%.0f\" }} reinicios en 15 min."
       - alert: ContainerMemoryHigh
-        expr: docker_container_memory_percent > 80
+        expr: docker_container_memory_percent{name!~"srl-.*|opensearch-.*"} > 80
         for: 10m
         labels: {severity: warning, category: containers}
         annotations:

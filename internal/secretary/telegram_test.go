@@ -6,8 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -86,7 +84,7 @@ func TestTelegramRendersInteractionReactionAndProgress(t *testing.T) {
 		case "sendMessage":
 			var text string
 			_ = json.Unmarshal(request.payload["text"], &text)
-			if strings.Contains(text, "Déjame revisar Jira.") {
+			if strings.Contains(text, "Voy a contrastar estados y vencimientos en Jira.") {
 				progressIndex = i
 			}
 			if strings.Contains(text, "Hay dos tareas importantes.") {
@@ -344,8 +342,8 @@ func TestVoiceDisabledDoesNotDownloadOrCallInference(t *testing.T) {
 	if err := bot.processVoice(context.Background(), message); err == nil {
 		t.Fatal("disabled voice should be rejected")
 	}
-	if state.getFileCalls != 0 || state.downloads != 0 || speech.transCalls != 0 || state.modelCalls != 0 || len(state.textReplies) != 0 || state.voiceReplies != 0 {
-		t.Fatalf("disabled voice triggered work or sent a different modality: state=%+v speech=%d", state, speech.transCalls)
+	if state.getFileCalls != 0 || state.downloads != 0 || speech.transCalls != 0 || state.modelCalls != 0 || len(state.textReplies) != 1 || !strings.Contains(state.textReplies[0], "desactivada") || state.voiceReplies != 0 {
+		t.Fatalf("disabled transcription should send a clear text fallback without processing audio: state=%+v speech=%d", state, speech.transCalls)
 	}
 }
 
@@ -369,8 +367,8 @@ func TestVoiceRejectsOversizedAndOverDurationUpdates(t *testing.T) {
 			if speech.transCalls != 0 || state.modelCalls != 0 || state.voiceReplies != 0 {
 				t.Fatalf("rejected voice triggered inference: state=%+v speech calls=%d", state, speech.transCalls)
 			}
-			if len(state.textReplies) != 0 {
-				t.Fatalf("rejected voice sent a text reply: %+v", state)
+			if len(state.textReplies) != 1 || !strings.Contains(state.textReplies[0], "audio") {
+				t.Fatalf("rejected voice should explain the audio limit: %+v", state)
 			}
 		})
 	}
@@ -394,6 +392,35 @@ func TestVoiceTranscribesAndRepliesWithTextOnly(t *testing.T) {
 	}
 	if len(state.parseModes) != 1 || state.parseModes[0] != "HTML" {
 		t.Fatalf("Telegram reply did not enable safe Markdown rendering: %v", state.parseModes)
+	}
+}
+
+func TestTelegramAudioAttachmentIsTranscribedAndRepliesWithText(t *testing.T) {
+	bot, speech, audio, state := newVoiceTestBot(t, voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg-input"), fileSize: 9, duration: 4})
+	var update Update
+	raw := `{"update_id":8,"message":{"message_id":42,"from":{"id":7},"chat":{"id":7,"type":"private"},"audio":{"file_id":"file-1","duration":4,"file_size":9}}}`
+	if err := json.Unmarshal([]byte(raw), &update); err != nil {
+		t.Fatal(err)
+	}
+	if err := bot.processUpdate(context.Background(), update); err != nil {
+		t.Fatal(err)
+	}
+	if speech.transCalls != 1 || audio.toWAVCalls != 1 || state.modelCalls != 1 || len(state.textReplies) != 1 {
+		t.Fatalf("Telegram audio attachment was not transcribed and answered: state=%+v speech=%+v audio=%+v", state, speech, audio)
+	}
+	if strings.TrimSpace(state.textReplies[0]) == "" || state.voiceReplies != 0 {
+		t.Fatalf("audio attachment should receive one written answer: %+v", state)
+	}
+}
+
+func TestVoiceDownloadFailureSendsUsefulTextInsteadOfSilence(t *testing.T) {
+	bot, _, _, state := newVoiceTestBot(t, voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg"), fileSize: 3, duration: 3, apiFailure: "getFile"})
+	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: 3, FileSize: 3}}
+	if err := bot.processUpdate(context.Background(), Update{Message: message}); err == nil {
+		t.Fatal("failed Telegram download should remain observable to the caller")
+	}
+	if len(state.textReplies) != 1 || !strings.Contains(state.textReplies[0], "Reenvíalo") {
+		t.Fatalf("failed download should tell the user how to recover instead of staying silent: %+v", state.textReplies)
 	}
 }
 
@@ -448,86 +475,118 @@ func TestTelegramTextEscapesHTMLAndRendersBoldMarkdown(t *testing.T) {
 	}
 }
 
+func TestTelegramSendKeepsShortReplyInOneMessage(t *testing.T) {
+	var messages []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		messages = append(messages, payload.Text)
+		_, _ = io.WriteString(w, `{"ok":true,"result":{}}`)
+	}))
+	defer server.Close()
+	bot := &Bot{Base: server.URL, Token: "test", Client: server.Client()}
+	if err := bot.send(context.Background(), 7, "Respuesta breve."); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0] != "Respuesta breve." {
+		t.Fatalf("short reply emitted %d messages: %#v", len(messages), messages)
+	}
+}
+
+func TestTelegramSendSplitsLongAnswersAtNaturalBoundaries(t *testing.T) {
+	var messages []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		messages = append(messages, payload.Text)
+		_, _ = io.WriteString(w, `{"ok":true,"result":{}}`)
+	}))
+	defer server.Close()
+	bot := &Bot{Base: server.URL, Token: "test", Client: server.Client()}
+	first := strings.Repeat("á", 420)
+	second := strings.Repeat("ñ", 420)
+	text := first + "\n\n" + second
+	if err := bot.send(context.Background(), 7, text); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[0] != first || messages[1] != second {
+		t.Fatalf("long answer was not split at the paragraph boundary: %d messages", len(messages))
+	}
+	for _, message := range messages {
+		if len([]rune(message)) > 700 {
+			t.Fatalf("message chunk has %d runes, limit is 700", len([]rune(message)))
+		}
+	}
+}
+
+func TestTelegramSendSplitsLongParagraphWithoutBreakingUnicode(t *testing.T) {
+	var messages []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		messages = append(messages, payload.Text)
+		_, _ = io.WriteString(w, `{"ok":true,"result":{}}`)
+	}))
+	defer server.Close()
+	bot := &Bot{Base: server.URL, Token: "test", Client: server.Client()}
+	if err := bot.send(context.Background(), 7, strings.Repeat("Esto es una frase corta. ", 40)); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) < 2 {
+		t.Fatalf("long paragraph remained a single message (%d runes)", len([]rune(messages[0])))
+	}
+	for _, message := range messages {
+		if len([]rune(message)) > 700 {
+			t.Fatalf("invalid message chunk (%d runes): %q", len([]rune(message)), message)
+		}
+	}
+}
+
+func TestTelegramSendPreservesBoldAcrossMessageBoundaries(t *testing.T) {
+	var messages []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		messages = append(messages, payload.Text)
+		_, _ = io.WriteString(w, `{"ok":true,"result":{}}`)
+	}))
+	defer server.Close()
+	bot := &Bot{Base: server.URL, Token: "test", Client: server.Client()}
+	if err := bot.send(context.Background(), 7, "**"+strings.Repeat("dato ", 150)+"**"); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) < 2 {
+		t.Fatalf("long bold answer was not split: %d messages", len(messages))
+	}
+	for _, message := range messages {
+		if !strings.HasPrefix(message, "<b>") || !strings.HasSuffix(message, "</b>") || strings.Contains(message, "**") {
+			t.Fatalf("bold markdown was broken across messages: %q", message)
+		}
+	}
+}
+
 func TestVoiceTransportErrorsNeverContainBotToken(t *testing.T) {
 	bot, _, _, _ := newVoiceTestBot(t, voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg"), fileSize: 3, duration: 3, apiFailure: "getFile"})
 	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: 3, FileSize: 3}}
 	err := bot.processVoice(context.Background(), message)
 	if err == nil || strings.Contains(err.Error(), "secret-token") {
 		t.Fatalf("unsafe Telegram voice error: %v", err)
-	}
-}
-
-func TestPollingPersistsOffsetRejectsOtherUsersAndDeliversReply(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	modelCalls := 0
-	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		modelCalls++
-		io.WriteString(w, `{"choices":[{"message":{"content":"Respuesta real"}}]}`)
-	}))
-	defer model.Close()
-	polls, rejected := 0, 0
-	var sent []string
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch strings.TrimPrefix(r.URL.Path, "/botsecret/") {
-		case "getMe":
-			io.WriteString(w, `{"ok":true,"result":{"id":1}}`)
-		case "getWebhookInfo":
-			io.WriteString(w, `{"ok":true,"result":{"url":""}}`)
-		case "getUpdates":
-			polls++
-			if polls == 1 {
-				io.WriteString(w, `{"ok":true,"result":[{"update_id":10,"message":{"from":{"id":8},"chat":{"id":8,"type":"private"},"text":"No"}},{"update_id":11,"message":{"from":{"id":7},"chat":{"id":99,"type":"group"},"text":"No"}},{"update_id":12,"message":{"from":{"id":7},"chat":{"id":7,"type":"private"},"text":"Hola"}}]}`)
-			} else {
-				var body struct {
-					Offset int64 `json:"offset"`
-				}
-				json.NewDecoder(r.Body).Decode(&body)
-				if body.Offset != 13 {
-					t.Errorf("checkpoint not used: %d", body.Offset)
-				}
-				io.WriteString(w, `{"ok":true,"result":[]}`)
-				cancel()
-			}
-		case "sendMessage":
-			var body struct {
-				ChatID int64  `json:"chat_id"`
-				Text   string `json:"text"`
-			}
-			json.NewDecoder(r.Body).Decode(&body)
-			if body.ChatID != 7 {
-				t.Errorf("unexpected delivery: %+v", body)
-			}
-			sent = append(sent, body.Text)
-			io.WriteString(w, `{"ok":true,"result":{}}`)
-		case "sendChatAction":
-			io.WriteString(w, `{"ok":true,"result":true}`)
-		default:
-			t.Errorf("unexpected operation %s", r.URL.Path)
-			w.WriteHeader(404)
-		}
-	}))
-	defer api.Close()
-	dir := t.TempDir()
-	s := New(model.URL, "key", "instructions", dir, map[int64]bool{7: true})
-	b := Bot{Base: api.URL, Token: "secret", Client: api.Client(), Service: s, OnEvent: func(event string) {
-		if event == "telegram_rejected" {
-			rejected++
-		}
-	}}
-	if err := b.Run(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if len(sent) != 1 || sent[0] != "Respuesta real" || modelCalls != 1 || rejected != 2 {
-		t.Fatalf("sent %v model %d rejected %d", sent, modelCalls, rejected)
-	}
-	raw, err := os.ReadFile(filepath.Join(dir, "offset.json"))
-	if err != nil || string(raw) != "13" {
-		t.Fatalf("offset %s %v", raw, err)
-	}
-	stat, _ := os.Stat(filepath.Join(dir, "telegram-7.json"))
-	if stat.Mode().Perm() != 0600 {
-		t.Fatal("private history permissions")
 	}
 }
 

@@ -1,0 +1,114 @@
+---
+- name: Persist deeper inference checkpoints for a controlled reproduction
+  hosts: lab
+  become: true
+  vars:
+    allowed_telemetry_sha256:
+      - 0a6f7de109042ed4e9d26dbbf9a36a16469e85cf8b9fc20fa5c525052fd89d50
+      - 35337e2637be379f70327b3cf3b6ec537610713f6cc1278fb76f83c7043ba574
+    observer_unit_content: |
+      [Unit]
+      Description=Durable llama.cpp decode and compute checkpoints
+      After=llama-cpp-main.service
+      Wants=llama-cpp-main.service
+
+      [Service]
+      Type=simple
+      ExecStart=/usr/bin/python3 /usr/local/sbin/lab-native-inference-trace
+      Restart=on-failure
+      RestartSec=3
+      LimitMEMLOCK=infinity
+      TimeoutStopSec=10
+
+      [Install]
+      WantedBy=multi-user.target
+  pre_tasks:
+    - name: Inspect the built telemetry artifact
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../dist/llm-telemetry-linux-amd64"
+        checksum_algorithm: sha256
+      delegate_to: localhost
+      become: false
+      register: built_telemetry
+
+    - name: Inspect the deployed telemetry artifact
+      ansible.builtin.stat:
+        path: /usr/local/bin/llm-telemetry
+        checksum_algorithm: sha256
+      register: deployed_telemetry
+
+    - name: Inspect the native observer unit
+      ansible.builtin.stat:
+        path: /etc/systemd/system/lab-native-inference-trace.service
+        checksum_algorithm: sha256
+      register: observer_unit
+
+    - name: Reject unexpected concurrent changes
+      ansible.builtin.assert:
+        that:
+          - built_telemetry.stat.exists
+          - deployed_telemetry.stat.checksum in (allowed_telemetry_sha256 + [built_telemetry.stat.checksum])
+          - not observer_unit.stat.exists or observer_unit.stat.checksum == (observer_unit_content | hash('sha256'))
+        fail_msg: The live telemetry binary or observer unit changed; inspect before replacing it.
+
+    - name: Verify the installed native probe symbols
+      ansible.builtin.shell: |
+        set -eu
+        nm -D /opt/llama.cpp/build/bin/libllama.so.0 | grep -q ' llama_decode$'
+        nm -D /opt/llama.cpp/build/bin/libggml-base.so.0 | grep -q ' ggml_backend_sched_graph_compute_async$'
+        command -v bpftrace
+      args:
+        executable: /bin/bash
+      changed_when: false
+      check_mode: false
+      when: lab_debug_enabled | bool
+
+  roles:
+    - llm_telemetry
+
+  tasks:
+    - name: Install the sampled native observer
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../scripts/trace-llama-native.py"
+        dest: /usr/local/sbin/lab-native-inference-trace
+        owner: root
+        group: root
+        mode: "0750"
+      when: lab_debug_enabled | bool
+
+    - name: Install the native observer service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/lab-native-inference-trace.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ observer_unit_content }}"
+      when: lab_debug_enabled | bool
+
+    - name: Enable the native observer
+      ansible.builtin.systemd:
+        name: lab-native-inference-trace
+        daemon_reload: true
+        enabled: true
+        state: started
+      when: lab_debug_enabled | bool
+
+    - name: Confirm the observer is running
+      ansible.builtin.command: systemctl is-active lab-native-inference-trace
+      register: observer_active
+      changed_when: false
+      check_mode: false
+      retries: 10
+      delay: 2
+      until: observer_active.stdout == 'active'
+      when: lab_debug_enabled | bool
+
+    - name: Stop the native observer when global debug is disabled
+      ansible.builtin.systemd:
+        name: lab-native-inference-trace
+        daemon_reload: true
+        enabled: false
+        state: stopped
+      when:
+        - not (lab_debug_enabled | bool)
+        - observer_unit.stat.exists

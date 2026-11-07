@@ -1,0 +1,207 @@
+---
+- name: Validate private Granola event configuration
+  ansible.builtin.assert:
+    that:
+      - lab_granola_api_key | length >= 20
+      - lab_granola_webhook_secret | length == 0 or lab_granola_webhook_secret is match('^whsec_[A-Za-z0-9+/=_-]+$')
+      - lab_granola_notification_token | length >= 32
+      - lab_granola_operator_id | int > 0
+      - lab_granola_operator_id in (orchestrator_telegram_allowed_users | string).split(',') | map('trim') | list
+      - lab_granola_webhook_url is match('^https://[^/]+/webhooks/granola$')
+    fail_msg: "Granola API, webhook, private notification, operator, and public HTTPS settings are required."
+  no_log: true
+
+- name: Verify event service artifact exists on the controller
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/../dist/donna-granola-events-linux-amd64"
+  delegate_to: localhost
+  become: false
+  register: donna_granola_events_artifact
+  run_once: true
+
+- name: Require built Granola event service
+  ansible.builtin.assert:
+    that: donna_granola_events_artifact.stat.exists
+    fail_msg: "Build dist/donna-granola-events-linux-amd64 before deployment."
+  run_once: true
+
+- name: Verify updated secretary artifact exists on the controller
+  ansible.builtin.stat:
+    path: "{{ playbook_dir }}/../dist/lab-secretary-linux-amd64"
+  delegate_to: localhost
+  become: false
+  register: donna_granola_secretary_artifact
+  run_once: true
+
+- name: Require updated secretary artifact
+  ansible.builtin.assert:
+    that: donna_granola_secretary_artifact.stat.exists
+    fail_msg: "Build dist/lab-secretary-linux-amd64 with scripts/build-donna-granola-events.sh before deployment."
+  run_once: true
+
+- name: Create private Granola event configuration directory
+  ansible.builtin.file:
+    path: /etc/donna-granola-events
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Install Donna Granola event service binary
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../dist/donna-granola-events-linux-amd64"
+    dest: /usr/local/bin/donna-granola-events
+    owner: root
+    group: root
+    mode: "0755"
+    backup: true
+  notify: Restart Donna Granola events
+
+- name: Install secretary binary with the authenticated Granola notification endpoint
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../dist/lab-secretary-linux-amd64"
+    dest: /usr/local/bin/lab-secretary
+    owner: root
+    group: root
+    mode: "0755"
+    backup: true
+  notify: Restart lab secretary
+
+- name: Install private Granola event credentials
+  ansible.builtin.copy:
+    dest: /etc/donna-granola-events/service.env
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      LAB_DONNA_GRANOLA_LISTEN=127.0.0.1:{{ lab_granola_events_port }}
+      LAB_GRANOLA_WEBHOOK_SECRET={{ lab_granola_webhook_secret }}
+      LAB_GRANOLA_API_KEY={{ lab_granola_api_key }}
+      LAB_GRANOLA_NOTIFICATION_TOKEN={{ lab_granola_notification_token }}
+      LAB_GRANOLA_OPERATOR_ID={{ lab_granola_operator_id }}
+      LAB_GRANOLA_SECRETARY_URL=http://127.0.0.1:{{ lab_secretary_port }}
+  no_log: true
+  notify: Restart Donna Granola events
+
+- name: Install Donna Granola event systemd unit
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/donna-granola-events.service
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Donna Granola generated-note event processor
+      After=network-online.target lab-secretary.service
+      Wants=network-online.target lab-secretary.service
+
+      [Service]
+      DynamicUser=yes
+      StateDirectory=donna-granola-events
+      StateDirectoryMode=0700
+      EnvironmentFile=/etc/donna-granola-events/service.env
+      ExecStart=/usr/local/bin/donna-granola-events
+      Restart=always
+      RestartSec=5
+      NoNewPrivileges=yes
+      ProtectSystem=strict
+      ProtectHome=yes
+      PrivateTmp=yes
+      UMask=0077
+      MemoryMax=64M
+      RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart Donna Granola events
+
+- name: Configure authenticated Granola notification channel in lab-secretary
+  ansible.builtin.copy:
+    dest: /etc/lab-secretary/granola-notification.env
+    owner: root
+    group: root
+    mode: "0600"
+    content: |
+      LAB_GRANOLA_NOTIFICATION_TOKEN={{ lab_granola_notification_token }}
+      LAB_GRANOLA_OPERATOR_ID={{ lab_granola_operator_id }}
+  no_log: true
+  notify: Restart lab secretary
+
+- name: Install private secretary notification systemd drop-in
+  ansible.builtin.file:
+    path: /etc/systemd/system/lab-secretary.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure secretary Granola notification systemd drop-in
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/lab-secretary.service.d/granola-notifications.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Service]
+      EnvironmentFile=/etc/lab-secretary/granola-notification.env
+  notify: Restart lab secretary
+
+- name: Add the public callback route to the assistant HTTPS virtual host
+  ansible.builtin.replace:
+    path: /etc/nginx/sites-available/monitor.conf
+    regexp: '(?s)(location = /oauth/granola/callback \{.*?\})(?:\r?\n(?:[ \t]*\r?\n)*[ \t]*# BEGIN ANSIBLE MANAGED DONNA GRANOLA WEBHOOK INGRESS.*?# END ANSIBLE MANAGED DONNA GRANOLA WEBHOOK INGRESS[ \t]*)?\r?\n(?:[ \t]*\r?\n)*(?=[ \t]*location / \{\s*return 404;)'
+    replace: |
+      \1
+          # BEGIN ANSIBLE MANAGED DONNA GRANOLA WEBHOOK INGRESS
+          location = /webhooks/granola {
+              include /etc/nginx/snippets/donna-granola-webhook.conf;
+          }
+          # END ANSIBLE MANAGED DONNA GRANOLA WEBHOOK INGRESS
+  notify: Reload nginx
+
+- name: Install public Granola webhook reverse proxy location
+  ansible.builtin.copy:
+    dest: /etc/nginx/snippets/donna-granola-webhook.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      limit_except POST { deny all; }
+      if ($args != "") { return 400; }
+      client_max_body_size 32k;
+      proxy_pass http://127.0.0.1:{{ lab_granola_events_port }}/webhooks/granola;
+      proxy_set_header Host $host;
+      proxy_set_header X-Forwarded-Proto $scheme;
+      proxy_set_header X-Real-IP $remote_addr;
+      proxy_request_buffering on;
+      proxy_connect_timeout 2s;
+      proxy_read_timeout 10s;
+      proxy_send_timeout 10s;
+  notify: Reload nginx
+
+- name: Verify nginx configuration before applying ingress changes
+  ansible.builtin.command: nginx -t
+  check_mode: false
+  changed_when: false
+
+- name: Apply Granola service, secretary, and ingress changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable Donna Granola event service
+  ansible.builtin.systemd:
+    name: donna-granola-events
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+
+- name: Verify Donna Granola event service health
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ lab_granola_events_port }}/healthz"
+    status_code: 200
+  register: donna_granola_health
+  until: donna_granola_health.status == 200
+  retries: 10
+  delay: 2
+  when: not ansible_check_mode
+

@@ -1,13 +1,57 @@
 # Principal model operation
 
+## Current llama.cpp router (October 22, 2026)
+
+The running host uses one llama.cpp router on `127.0.0.1:8080`. Its `/models`
+listing contains three loaded presets: `main`, `qwen-eval`, and `bge-m3`.
+`bge-m3` is an embeddings model: call `/v1/embeddings` with
+`"model": "bge-m3"`; it returns 1024-dimensional dense vectors and cannot
+answer chat requests. The Open WebUI chat selector continues to offer the two
+chat models only.
+
+The BGE-M3 file is `bge-m3-Q8_0.gguf` (634,553,760 bytes) from
+[GPUStack's GGUF conversion](https://huggingface.co/gpustack/bge-m3-GGUF/tree/2d48f1737679ad900d5c26c5aad5410e9c70fdca),
+derived from [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3). Its pinned
+SHA-256 is `950f4a8e5e19477a6d3c26d2f162233c20002c601f75e4b002e3239997821167`.
+It lives at `/srv/ai-lab/llama.cpp/models/bge-m3-Q8_0.gguf`. The preset enables
+embedding mode and CLS pooling with 8,192 tokens of context on CPU.
+
+To reproduce this addition on a host that already has the two-model router:
+
+```bash
+ansible-playbook -i inventory.yml \
+  -e 'ansible_host=stratecode.local ansible_user=stratecode' \
+  playbooks/publish-bge-m3.yml
+```
+
+The playbook verifies the two existing presets, downloads and checks the pinned
+GGUF, adds the third preset, sets the router's loaded-model limit to three, and
+checks a 1024-dimensional embedding. It does not read `.env` or vault secrets.
+The older `deploy-principal-model.yml` below still describes a single-model
+baseline and would replace the live router unit; reconcile that baseline before
+using it again on this host.
+
 Current approved increment, October 15, 2026: a personal work assistant starts
 with two selectable local models and a browser conversation. The later objective is work
 context, Jira/Granola/email access and simple everyday agents, with voice through
 Telegram, WhatsApp and Slack outside the lab VPN/LAN. The [secretary increment](secretary-operation.md)
 is deployed for Open WebUI and Telegram, including voice notes and read-only
-Jira/Granola integration support. Telegram currently uses polling. The dedicated assistant HTTPS vhost
-and DNS alias are deployed, but external TCP 443 probes time out, so webhook
-cutover remains gated on restoring external ingress.
+Jira/Granola integration support. Telegram uses the authenticated webhook at
+`https://assistant.stratecode.com/telegram/webhook`. On October 22, 2026,
+external probes reached TCP 443 and the HTTPS route, and Telegram reported the
+registered URL with no delivery error or pending updates at cutover.
+
+Detailed crash and inference tracing uses the single `LAB_DEBUG_ENABLED`
+boolean, default `false`. Activate it with
+`LAB_DEBUG_ENABLED=true ansible-playbook -i inventory.yml playbooks/toggle-debug-tracing.yml`,
+and deactivate it with the same command using `LAB_DEBUG_ENABLED=false`;
+first run `./scripts/build-orchestrator-go.sh` so the playbook can install the
+current Donna and telemetry binaries. The playbook updates those services and
+the installed host collectors without reconfiguring the model. Install the native observer once with
+`LAB_DEBUG_ENABLED=true ansible-playbook -i inventory.yml playbooks/deploy-deep-inference-trace.yml`.
+Basic service logs, aggregate metrics, persistent journald, and kdump/watchdog/RAS
+protections remain active with debug off. See
+[secretary diagnostics](secretary-operation.md#diagnóstico-detallado-de-conversaciones-e-inferencia).
 
 ## Configuration owned by this repository
 
@@ -21,6 +65,12 @@ cutover remains gated on restoring external ingress.
 - Service: `llama-cpp-main`, loopback port 8080, alias `main`.
 - CPU only, 8 inference and batch threads, one request slot, non-thinking Instruct
   model, context 16,384 tokens including input/output.
+- CPU boost is disabled on the host for a controlled stability trial after the
+  23 October shutdowns. `playbooks/disable-cpu-boost.yml` installs and enables
+  `lab-disable-cpu-boost.service` after the existing CPU tuning units. Verify
+  `/sys/devices/system/cpu/cpufreq/boost` reads `0` before chat tests. This
+  changes the host-wide frequency ceiling; the model and thread settings stay
+  the same. A real chat under this setting is still required to assess it.
 - Per-service MemoryMax 4 GiB. Aggregate ceiling 90% of host resources;
   zero reservation floor for this CPU-only profile. No VRAM/BIOS modification.
 - Open WebUI image pinned to [v0.12.2](https://github.com/open-webui/open-webui/releases/tag/v0.12.2),

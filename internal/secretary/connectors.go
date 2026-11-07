@@ -93,7 +93,7 @@ func (c *Connectors) access(ctx context.Context, config *OAuthConfig) error {
 	}
 	request, _ := http.NewRequestWithContext(ctx, "POST", config.TokenEndpoint, strings.NewReader(values.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	response, err := c.Client.Do(request)
+	response, err := conversationHTTP(ctx, c.Client, request, "oauth.refresh")
 	if err != nil {
 		return errors.New("OAuth refresh unavailable")
 	}
@@ -124,7 +124,20 @@ type mcpSession struct {
 	id               int
 }
 
-func (s *mcpSession) rpc(ctx context.Context, method string, params any, notification bool) (json.RawMessage, error) {
+func (s *mcpSession) rpc(ctx context.Context, method string, params any, notification bool) (rpcResult json.RawMessage, returnErr error) {
+	kind := "granola.rpc"
+	switch method {
+	case "initialize":
+		kind = "granola.initialize"
+	case "notifications/initialized":
+		kind = "granola.initialized"
+	case "tools/list":
+		kind = "granola.tools_list"
+	case "tools/call":
+		kind = "granola.tools_call"
+	}
+	done := conversationStep(ctx, kind)
+	defer func() { done(returnErr) }()
 	payload := map[string]any{"jsonrpc": "2.0", "method": method, "params": params}
 	if !notification {
 		s.id++
@@ -141,7 +154,7 @@ func (s *mcpSession) rpc(ctx context.Context, method string, params any, notific
 	if s.version != "" {
 		request.Header.Set("MCP-Protocol-Version", s.version)
 	}
-	response, err := s.owner.Client.Do(request)
+	response, err := conversationHTTP(ctx, s.owner.Client, request, kind)
 	if err != nil {
 		return nil, errors.New("MCP transport unavailable")
 	}
@@ -253,7 +266,10 @@ func (c *Connectors) Jira(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return formatJiraIssues("Jira · hasta 5 pendientes asignados a tu cuenta (muestra, no listado completo):", result.Issues), nil
+	if len(result.Issues) == 0 {
+		return "No tienes incidencias abiertas asignadas.", nil
+	}
+	return compactJiraSummary(result.Issues, time.Now(), "Tienes", len(result.Issues) >= 10 || result.Partial), nil
 }
 
 // JiraQueryResult compiles a natural-language request into a bounded JQL query,
@@ -262,6 +278,9 @@ func (c *Connectors) Jira(ctx context.Context) (string, error) {
 func (c *Connectors) JiraQueryResult(ctx context.Context, query string) (CapabilityResult, error) {
 	if c.Config.Jira.AccessToken == "" {
 		return CapabilityResult{}, errors.New("Jira no conectado")
+	}
+	if names := jiraPeople(query); len(names) > 0 {
+		return c.jiraPeopleResult(ctx, query, names)
 	}
 	jql, err := compileJiraJQL(query, c.Config.Jira.OperatorAccountID)
 	if err != nil {
@@ -281,28 +300,45 @@ func (c *Connectors) JiraQueryResult(ctx context.Context, query string) (Capabil
 	return CapabilityResult{
 		Text:        formatJiraIssues("Jira · incidencias encontradas mediante Jira REST/JQL:", result.Issues),
 		ResultCount: len(result.Issues), Evidence: evidence,
+		Compact:      jiraCompactFor(c.Config.Jira.OperatorAccountID, jql, result),
+		DirectAnswer: len(result.Issues) == 1 && strings.EqualFold(jiraIssueKeyMention.FindString(strings.ToUpper(query)), result.Issues[0].Key),
 	}, nil
 }
 
 type jiraSearchResponse struct {
-	Issues []struct {
-		Key    string `json:"key"`
-		Fields struct {
-			Summary string `json:"summary"`
-			Status  struct {
-				Name string `json:"name"`
-			} `json:"status"`
-			Assignee *struct {
-				DisplayName string `json:"displayName"`
-				AccountID   string `json:"accountId"`
-			} `json:"assignee"`
-			Due     string `json:"duedate"`
-			Updated string `json:"updated"`
-		} `json:"fields"`
-	} `json:"issues"`
+	Issues        []jiraIssue `json:"issues"`
+	NextPageToken string      `json:"nextPageToken"`
+	IsLast        bool        `json:"isLast"`
+	Partial       bool        `json:"-"`
+	PageCount     int         `json:"-"`
 }
 
-func (c *Connectors) queryJira(ctx context.Context, jql string) (jiraSearchResponse, error) {
+type jiraIssue struct {
+	Key    string `json:"key"`
+	Fields struct {
+		Summary string `json:"summary"`
+		Status  struct {
+			Name     string `json:"name"`
+			Category struct {
+				Key string `json:"key"`
+			} `json:"statusCategory"`
+		} `json:"status"`
+		Assignee *struct {
+			DisplayName string `json:"displayName"`
+			AccountID   string `json:"accountId"`
+		} `json:"assignee"`
+		Due     string `json:"duedate"`
+		Updated string `json:"updated"`
+	} `json:"fields"`
+}
+
+func (c *Connectors) queryJira(ctx context.Context, jql string) (output jiraSearchResponse, returnErr error) {
+	done := conversationStep(ctx, "jira.query")
+	defer func() { done(returnErr) }()
+	return c.queryJiraPage(ctx, jql, 10)
+}
+
+func (c *Connectors) queryJiraPage(ctx context.Context, jql string, limit int) (jiraSearchResponse, error) {
 	if c.Config.Jira.AccessToken == "" {
 		return jiraSearchResponse{}, errors.New("Jira no conectado")
 	}
@@ -318,45 +354,79 @@ func (c *Connectors) queryJira(ctx context.Context, jql string) (jiraSearchRespo
 		}
 	}
 	endpoint := base + "/ex/jira/" + url.PathEscape(cloudID) + "/rest/api/3/search/jql"
-	body, _ := json.Marshal(map[string]any{"jql": jql, "maxResults": 10, "fields": []string{"summary", "status", "assignee", "duedate", "updated"}})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return jiraSearchResponse{}, errors.New("Jira REST request rejected")
+	if limit < 1 || limit > 100 {
+		return jiraSearchResponse{}, errors.New("Jira result limit rejected")
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Config.Jira.AccessToken)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
 	client := c.Client
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return jiraSearchResponse{}, errors.New("Jira REST unavailable")
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return jiraSearchResponse{}, fmt.Errorf("Jira REST HTTP %d", resp.StatusCode)
-	}
-	var result jiraSearchResponse
-	payload, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err != nil {
-		return jiraSearchResponse{}, errors.New("invalid Jira REST response")
-	}
-	var envelope struct {
-		Issues json.RawMessage `json:"issues"`
-	}
-	if json.Unmarshal(payload, &envelope) != nil || len(envelope.Issues) == 0 || envelope.Issues[0] != '[' {
-		return jiraSearchResponse{}, errors.New("unexpected Jira REST response schema")
-	}
-	if err := json.Unmarshal(payload, &result); err != nil {
-		return jiraSearchResponse{}, errors.New("invalid Jira REST response")
-	}
-	for _, issue := range result.Issues {
-		if !jiraIssueKey.MatchString(issue.Key) {
-			return jiraSearchResponse{}, errors.New("Jira issue key missing or invalid")
+	result := jiraSearchResponse{}
+	token := ""
+	seenTokens := map[string]bool{}
+	seenIssueKeys := map[string]bool{}
+	const maxPages = 10
+	for page := 0; page < maxPages; page++ {
+		requestBody := map[string]any{"jql": jql, "maxResults": limit, "fields": []string{"summary", "status", "assignee", "duedate", "updated"}}
+		if token != "" {
+			requestBody["nextPageToken"] = token
 		}
+		body, _ := json.Marshal(requestBody)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			return jiraSearchResponse{}, errors.New("Jira REST request rejected")
+		}
+		req.Header.Set("Authorization", "Bearer "+c.Config.Jira.AccessToken)
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := conversationHTTP(ctx, client, req, "jira.query")
+		if err != nil {
+			return jiraSearchResponse{}, errors.New("Jira REST unavailable")
+		}
+		payload, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		resp.Body.Close()
+		if readErr != nil {
+			return jiraSearchResponse{}, errors.New("invalid Jira REST response")
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return jiraSearchResponse{}, fmt.Errorf("Jira REST HTTP %d", resp.StatusCode)
+		}
+		var envelope struct {
+			Issues json.RawMessage `json:"issues"`
+		}
+		if json.Unmarshal(payload, &envelope) != nil || len(envelope.Issues) == 0 || envelope.Issues[0] != '[' {
+			return jiraSearchResponse{}, errors.New("unexpected Jira REST response schema")
+		}
+		var current jiraSearchResponse
+		if err := json.Unmarshal(payload, &current); err != nil {
+			return jiraSearchResponse{}, errors.New("invalid Jira REST response")
+		}
+		for _, issue := range current.Issues {
+			if !jiraIssueKey.MatchString(issue.Key) {
+				return jiraSearchResponse{}, errors.New("Jira issue key missing or invalid")
+			}
+		}
+		for _, issue := range current.Issues {
+			if seenIssueKeys[issue.Key] {
+				continue
+			}
+			seenIssueKeys[issue.Key] = true
+			result.Issues = append(result.Issues, issue)
+		}
+		result.PageCount++
+		result.NextPageToken = current.NextPageToken
+		if current.IsLast {
+			result.IsLast = true
+			return result, nil
+		}
+		if current.NextPageToken == "" || seenTokens[current.NextPageToken] {
+			result.Partial = true
+			return result, nil
+		}
+		seenTokens[current.NextPageToken] = true
+		token = current.NextPageToken
 	}
+	result.Partial = true
 	return result, nil
 }
 
@@ -428,21 +498,20 @@ func jiraAssigneeJQL(operatorAccountID string, inProgress bool) (string, error) 
 	return `assignee = "` + operatorAccountID + `" AND ` + status + ` ORDER BY updated DESC`, nil
 }
 
-func formatJiraIssues(heading string, issues []struct {
-	Key    string `json:"key"`
-	Fields struct {
-		Summary string `json:"summary"`
-		Status  struct {
-			Name string `json:"name"`
-		} `json:"status"`
-		Assignee *struct {
-			DisplayName string `json:"displayName"`
-			AccountID   string `json:"accountId"`
-		} `json:"assignee"`
-		Due     string `json:"duedate"`
-		Updated string `json:"updated"`
-	} `json:"fields"`
-}) string {
+// jiraCompactFor builds the short rendering for list answers. A single issue is
+// left to the normal detailed answer path.
+func jiraCompactFor(operatorAccountID, jql string, result jiraSearchResponse) string {
+	if len(result.Issues) < 2 {
+		return ""
+	}
+	subject := "Hay"
+	if operatorAccountID != "" && strings.Contains(jql, operatorAccountID) {
+		subject = "Tienes"
+	}
+	return compactJiraSummary(result.Issues, time.Now(), subject, len(result.Issues) >= 10 || result.Partial)
+}
+
+func formatJiraIssues(heading string, issues []jiraIssue) string {
 	lines := []string{heading}
 	if len(issues) == 0 {
 		return heading + "\nLa consulta JQL no devolvió incidencias."
@@ -566,9 +635,9 @@ func (c *Connectors) GranolaQueryResult(ctx context.Context, query string) (Capa
 		if summary == "" {
 			return CapabilityResult{}, fmt.Errorf("Granola note %s has no readable summary", item.ID)
 		}
-		lines = append(lines, "Nota de reunión de Granola ("+item.ID+"):\n"+summary)
+		lines = append(lines, "Nota de reunión de Granola ("+item.ID+"):\n"+summary+"\nFuente: [Abrir nota de Granola]("+item.URL+")")
 	}
-	return CapabilityResult{Text: strings.Join(lines, "\n\n"), ResultCount: len(evidence), Evidence: evidence}, nil
+	return CapabilityResult{Text: strings.Join(lines, "\n\n"), ResultCount: len(evidence), Evidence: evidence, DirectAnswer: true}, nil
 }
 
 func (c *Connectors) GranolaResult(ctx context.Context) (CapabilityResult, error) {
@@ -602,18 +671,25 @@ func (c *Connectors) GranolaResult(ctx context.Context) (CapabilityResult, error
 	}
 	json.Unmarshal(raw, &tools)
 	found := map[string]bool{}
+	listArgs := map[string]any{"time_range": "last_7_days", "cursor": ""}
+	providedArgs := map[string]map[string]any{
+		"list_meetings": listArgs,
+		"get_meetings":  {"meeting_ids": []string{}},
+	}
 	for _, tool := range tools.Tools {
 		if tool.Name == "list_meetings" || tool.Name == "get_meetings" {
 			found[tool.Name] = true
-			if len(tool.Schema.Required) > 0 {
-				return CapabilityResult{}, fmt.Errorf("Granola %s schema needs explicit arguments", tool.Name)
+			for _, required := range tool.Schema.Required {
+				if _, supplied := providedArgs[tool.Name][required]; !supplied {
+					return CapabilityResult{}, fmt.Errorf("Granola %s schema needs explicit arguments", tool.Name)
+				}
 			}
 		}
 	}
 	if !found["list_meetings"] || !found["get_meetings"] {
 		return CapabilityResult{}, errors.New("Granola meeting summary tools unavailable")
 	}
-	raw, err = s.callTool(ctx, "list_meetings", map[string]any{"time_range": "last_7_days"})
+	raw, err = s.callTool(ctx, "list_meetings", listArgs)
 	if err != nil {
 		return CapabilityResult{}, err
 	}

@@ -248,8 +248,13 @@ func syncTelegramQueueDir(path string) error {
 }
 
 type TelegramWebhook struct {
-	Queue  TelegramUpdateQueue
-	Secret string
+	Queue       TelegramUpdateQueue
+	Secret      string
+	diagnostics *conversationLog
+}
+
+func (s *Service) TelegramWebhook(queue TelegramUpdateQueue, secret string) TelegramWebhook {
+	return TelegramWebhook{Queue: queue, Secret: secret, diagnostics: s.diagnostics}
 }
 
 func (h TelegramWebhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -288,9 +293,15 @@ func (h TelegramWebhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	if _, err := h.Queue.Enqueue(update); err != nil {
+	ctx := withConversationTrace(r.Context(), h.diagnostics, fmt.Sprintf("telegram-%d", update.ID))
+	conversationRecord(ctx, "webhook.authenticated", "ok", 0, 0, 0)
+	queueDone := conversationStep(ctx, "queue.persist")
+	_, enqueueErr := h.Queue.Enqueue(update)
+	queueDone(enqueueErr)
+	if enqueueErr != nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
+	conversationRecord(ctx, "webhook.ack", "ok", 0, http.StatusOK, 0)
 	w.WriteHeader(http.StatusOK)
 }

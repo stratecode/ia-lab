@@ -1,0 +1,8 @@
+---
+- name: Deploy Donna's Granola generated-note follow-ups
+  hosts: all
+  become: true
+  gather_facts: false
+  roles:
+    - donna_granola_events
+

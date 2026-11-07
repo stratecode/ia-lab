@@ -45,10 +45,17 @@ func TestCapabilitiesForIntentSelectsExpectedSources(t *testing.T) {
 		{name: "only Granola explicitly excludes Jira", query: "Solo Granola: dime una reunión reciente. No consultes Jira.", want: []string{"Granola"}},
 		{name: "meeting question excludes Jira without only wording", query: "¿Qué se dijo en una reunión reciente? No consultes Jira.", want: []string{"Granola"}},
 		{name: "only Jira explicitly excludes Granola", query: "Solo Jira: ¿qué estado tiene PMI-46? No consultes Granola.", want: []string{"Jira"}},
+		{name: "both sources excluded in one coordinated phrase", query: "Prueba sintética; no consultes Jira ni Granola. Resume estas notas inventadas.", want: nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			capabilities, ok, _ := routingServiceForTest().capabilitiesFor(tt.query, nil)
+			if tt.want == nil {
+				if ok || len(capabilities) != 0 {
+					t.Fatalf("capabilitiesFor(%q) = %v, %t; want no source route", tt.query, capabilityNames(capabilities), ok)
+				}
+				return
+			}
 			if !ok {
 				t.Fatalf("capabilitiesFor(%q) reported no route", tt.query)
 			}
@@ -60,6 +67,43 @@ func TestCapabilitiesForIntentSelectsExpectedSources(t *testing.T) {
 				t.Fatalf("capabilitiesFor(%q) = %v, want %v", tt.query, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestJiraPersonQuestionAndVerificationKeepUserProjectContext(t *testing.T) {
+	history := []Turn{
+		{Role: "user", Content: "Solo Granola: resume la daily."},
+		{Role: "assistant", Content: "Nota de Granola."},
+		{Role: "user", Content: "Solo Jira: consulta PMI-46."},
+		{Role: "assistant", Content: "PMI-46 verificado."},
+		{Role: "user", Content: "¿En qué está trabajando hoy Valentina?"},
+		{Role: "assistant", Content: "Valentina estabiliza el despliegue Oracle."},
+	}
+	for _, query := range []string{
+		"¿En qué está trabajando hoy Valentina?",
+		"Creo que te lo has inventado. Verifícalo directamente en Jira.",
+	} {
+		capabilities, matched, readQuery := routingServiceForTest().capabilitiesFor(query, history)
+		if !matched || !reflect.DeepEqual(capabilityNames(capabilities), []string{"Jira"}) {
+			t.Fatalf("capabilitiesFor(%q) = %v, %t; want Jira only", query, capabilityNames(capabilities), matched)
+		}
+		if !strings.Contains(readQuery, "Valentina") || !strings.Contains(readQuery, "PMI") || !strings.Contains(readQuery, "en curso") {
+			t.Errorf("read query lost user, project, or current-work scope: %q", readQuery)
+		}
+		if strings.Contains(strings.ToLower(readQuery), "oracle") {
+			t.Errorf("assistant-generated claim leaked into Jira query: %q", readQuery)
+		}
+	}
+}
+
+func TestValentinaCurrentWorkDefaultsToPMIWithoutChatHistory(t *testing.T) {
+	query := "Solo Jira: ¿qué tareas tiene Valentina en curso?"
+	capabilities, matched, readQuery := routingServiceForTest().capabilitiesFor(query, nil)
+	if !matched || !reflect.DeepEqual(capabilityNames(capabilities), []string{"Jira"}) {
+		t.Fatalf("capabilitiesFor(%q) = %v, %t; want Jira only", query, capabilityNames(capabilities), matched)
+	}
+	if !strings.Contains(readQuery, "Valentina") || !strings.Contains(readQuery, "Proyecto PMI") || !strings.Contains(readQuery, "en curso") {
+		t.Fatalf("read query lost Valentina's saved PMI scope: %q", readQuery)
 	}
 }
 
@@ -96,6 +140,39 @@ func TestMeetingFollowUpResolvesAnaphoraWithinRecentHistory(t *testing.T) {
 	}
 	if !strings.Contains(readQuery, "Stonecare del 14 de octubre") || !strings.Contains(readQuery, query) {
 		t.Fatalf("follow-up query lost its meeting anchor: %q", readQuery)
+	}
+}
+
+func TestCrossSourceAnaphoricFollowUpKeepsMeetingContextBesideExplicitJiraKey(t *testing.T) {
+	anchor := "Solo Granola: en la daily del 26 de octubre, ¿qué modelo de datos tenía que explicar Fran a Gonzalo y cuáles eran las dos tablas?"
+	query := "¿Eso está vinculado con PMI-46? Contrasta ambas fuentes."
+	history := []Turn{{Role: "user", Content: anchor}}
+	for i := 0; i < 2; i++ {
+		history = append(history, Turn{Role: "user", Content: "consulta intermedia sin referencia a reuniones"})
+	}
+	capabilities, ok, readQuery := routingServiceForTest().capabilitiesFor(query, history)
+	if !ok || !reflect.DeepEqual(capabilityNames(capabilities), []string{"Granola", "Jira"}) {
+		t.Fatalf("cross-source follow-up route = %v, %t; want Granola and Jira", capabilityNames(capabilities), ok)
+	}
+	if !strings.Contains(readQuery, "daily del 26 de octubre") || !strings.Contains(readQuery, "PMI-46") || !strings.Contains(readQuery, "dos tablas") {
+		t.Fatalf("follow-up lost meeting details or issue anchor: %q", readQuery)
+	}
+}
+
+func TestExplicitDailyFollowUpKeepsMeetingContextBesideExplicitJiraKey(t *testing.T) {
+	anchor := "Solo Granola: en la daily del 26 de octubre, ¿qué modelo de datos tenía que explicar Fran a Gonzalo y cuáles eran las dos tablas?"
+	query := "¿Puedes relacionar la acción de explicar a Gonzalo las dos tablas, mencionada en la daily del 26 de octubre, con PMI-46? Consulta ambas fuentes."
+	history := []Turn{
+		{Role: "user", Content: anchor},
+		{Role: "assistant", Content: "Fran debía explicar el modelo de datos."},
+		{Role: "user", Content: "¿Puedes relacionar la acción de explicar a Gonzalo las dos tablas, mencionada en la daily del 26 de octubre, con PMI-46?"},
+	}
+	capabilities, ok, readQuery := routingServiceForTest().capabilitiesFor(query, history)
+	if !ok || !reflect.DeepEqual(capabilityNames(capabilities), []string{"Granola", "Jira"}) {
+		t.Fatalf("explicit daily cross-source route = %v, %t; want Granola and Jira", capabilityNames(capabilities), ok)
+	}
+	if !strings.Contains(readQuery, "daily del 26 de octubre") || !strings.Contains(readQuery, "PMI-46") {
+		t.Fatalf("explicit daily comparison lost an anchor: %q", readQuery)
 	}
 }
 
