@@ -26,8 +26,8 @@ func TestHTTPVoiceClientTranscribePostsSpanishWAVAndParsesJSON(t *testing.T) {
 		if got := r.FormValue("language"); got != "es" {
 			t.Errorf("language = %q, want es", got)
 		}
-		if got := r.FormValue("response_format"); got != "json" {
-			t.Errorf("response_format = %q, want json", got)
+		if got := r.FormValue("response_format"); got != "verbose_json" {
+			t.Errorf("response_format = %q, want verbose_json (it carries the confidence)", got)
 		}
 		if got := r.FormValue("temperature"); got != "0" {
 			t.Errorf("temperature = %q, want 0", got)

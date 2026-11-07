@@ -9,8 +9,10 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeVoice struct {
@@ -193,5 +195,62 @@ func TestWAVDurationAndFastWhisperRouting(t *testing.T) {
 	}
 	if prompt != "vocabulario de prueba" {
 		t.Errorf("vocabulary prompt = %q", prompt)
+	}
+}
+
+func TestWhisperConfidenceAndNoiseLabels(t *testing.T) {
+	serve := func(body string) *HTTPVoiceClient {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, body) }))
+		t.Cleanup(server.Close)
+		return NewHTTPVoiceClient(server.URL, "http://127.0.0.1:1", nil)
+	}
+	ctx := context.Background()
+	if got, err := serve(`{"text":" que tengo pendiente","segments":[{"avg_logprob":-0.2,"no_speech_prob":0.0}]}`).Transcribe(ctx, testWAV(2)); err != nil || got != "que tengo pendiente" {
+		t.Errorf("confident clip = %q, %v", got, err)
+	}
+	_, err := serve(`{"text":" dame la fira ciento","segments":[{"avg_logprob":-1.4,"no_speech_prob":0.1},{"avg_logprob":-1.2,"no_speech_prob":0.1}]}`).Transcribe(ctx, testWAV(2))
+	var unsure *LowConfidenceError
+	if !errors.As(err, &unsure) || unsure.Transcript != "dame la fira ciento" {
+		t.Errorf("unsure clip must return its guess with a LowConfidenceError, got %v", err)
+	}
+	if _, err := serve(`{"text":" [Música]","segments":[{"avg_logprob":-0.01,"no_speech_prob":0.0}]}`).Transcribe(ctx, testWAV(2)); err == nil {
+		t.Error("a clip that Whisper labelled [Música] has no speech and must be an error")
+	}
+	if got, err := serve(`{"text":" [Música] hola Donna","segments":[{"avg_logprob":-0.3}]}`).Transcribe(ctx, testWAV(2)); err != nil || got != "hola Donna" {
+		t.Errorf("noise labels must be removed from real speech: %q, %v", got, err)
+	}
+}
+
+func TestVoiceCaptureIsOffByDefaultAndExpires(t *testing.T) {
+	dir := t.TempDir() + "/capture"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"text":"hola","segments":[{"avg_logprob":-0.2}]}`)
+	}))
+	defer server.Close()
+	client := NewHTTPVoiceClient(server.URL, "http://127.0.0.1:1", nil)
+	if _, err := client.Transcribe(context.Background(), testWAV(1)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Fatal("nothing may be stored unless a capture directory is configured")
+	}
+	client.CaptureDir = dir
+	if _, err := client.Transcribe(context.Background(), testWAV(1)); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 2 {
+		t.Fatalf("want one wav and one transcript, got %d entries", len(entries))
+	}
+	old := time.Now().Add(-25 * time.Hour)
+	for _, entry := range entries {
+		os.Chtimes(dir+"/"+entry.Name(), old, old)
+	}
+	if _, err := client.Transcribe(context.Background(), testWAV(1)); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ = os.ReadDir(dir)
+	if len(entries) != 2 {
+		t.Fatalf("captures older than a day must be removed, got %d entries", len(entries))
 	}
 }

@@ -11,7 +11,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -48,7 +51,10 @@ type HTTPVoiceClient struct {
 	FastWhisperURL string
 	// Vocabulary is sent to Whisper as its initial prompt so proper nouns such as
 	// Jira or team names are spelled correctly.
-	Vocabulary             string
+	Vocabulary string
+	// CaptureDir, when set, keeps each clip and its transcript for a day so the
+	// recogniser can be measured on the operator's real voice. Off by default.
+	CaptureDir             string
 	client                 *http.Client
 	maxSpeechResponseBytes int64
 }
@@ -77,7 +83,7 @@ func (c *HTTPVoiceClient) Transcribe(ctx context.Context, wav []byte) (string, e
 	}
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	if err := writer.WriteField("response_format", "json"); err != nil {
+	if err := writer.WriteField("response_format", "verbose_json"); err != nil {
 		return "", errors.New("speech transcription failed")
 	}
 	if err := writer.WriteField("temperature", "0"); err != nil {
@@ -127,16 +133,75 @@ func (c *HTTPVoiceClient) Transcribe(ctx context.Context, wav []byte) (string, e
 		return "", errors.New("speech transcription failed")
 	}
 	var result struct {
-		Text string `json:"text"`
+		Text     string `json:"text"`
+		Segments []struct {
+			AvgLogProb   float64 `json:"avg_logprob"`
+			NoSpeechProb float64 `json:"no_speech_prob"`
+		} `json:"segments"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
 		return "", errors.New("speech transcription failed")
 	}
-	transcript := strings.TrimSpace(result.Text)
+	transcript := cleanTranscript(result.Text)
+	meanLogProb := 0.0
+	for _, segment := range result.Segments {
+		meanLogProb += segment.AvgLogProb
+	}
+	if len(result.Segments) > 0 {
+		meanLogProb /= float64(len(result.Segments))
+	}
+	c.capture(wav, transcript, meanLogProb)
 	if transcript == "" {
 		return "", errors.New("speech transcription failed")
 	}
+	if len(result.Segments) > 0 && meanLogProb < lowConfidenceLogProb {
+		return transcript, &LowConfidenceError{Transcript: transcript, LogProb: meanLogProb}
+	}
 	return transcript, nil
+}
+
+// lowConfidenceLogProb is Whisper's own fallback threshold: below it the model is
+// guessing and acting on the text would be acting on noise.
+const lowConfidenceLogProb = -1.0
+
+// LowConfidenceError reports a transcript Whisper itself was unsure about. It
+// carries the best guess so the caller can show it and ask for a repeat.
+type LowConfidenceError struct {
+	Transcript string
+	LogProb    float64
+}
+
+func (e *LowConfidenceError) Error() string { return "low confidence speech transcript" }
+
+var bracketedNoise = regexp.MustCompile(`\[[^\]]*\]|\([^)]*(?:música|musica|aplausos|risas|ruido|silencio)[^)]*\)|♪+`)
+
+// cleanTranscript removes the labels Whisper invents for silence or noise, such as
+// "[Música]", and tidies the spaces. A clip with nothing else yields "".
+func cleanTranscript(text string) string {
+	text = bracketedNoise.ReplaceAllString(text, " ")
+	return strings.Join(strings.Fields(text), " ")
+}
+
+// capture stores a clip and its transcript when CaptureDir is set, and removes
+// captures older than a day. Failures are ignored: it must never affect a reply.
+func (c *HTTPVoiceClient) capture(wav []byte, transcript string, logProb float64) {
+	if c.CaptureDir == "" {
+		return
+	}
+	if err := os.MkdirAll(c.CaptureDir, 0o700); err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	if entries, err := os.ReadDir(c.CaptureDir); err == nil {
+		for _, entry := range entries {
+			if info, err := entry.Info(); err == nil && info.ModTime().Before(cutoff) {
+				_ = os.Remove(filepath.Join(c.CaptureDir, entry.Name()))
+			}
+		}
+	}
+	name := filepath.Join(c.CaptureDir, time.Now().Format("20060102-150405.000"))
+	_ = os.WriteFile(name+".wav", wav, 0o600)
+	_ = os.WriteFile(name+".txt", []byte(fmt.Sprintf("logprob=%.3f\n%s\n", logProb, transcript)), 0o600)
 }
 
 // fastWhisperMaxSeconds is what a 768-frame audio context can hold (about 15 s)

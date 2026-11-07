@@ -136,11 +136,15 @@ func main() {
 	if transcriptionEnabled && !configureVoiceInput(bot, true, env("LAB_WHISPER_URL", ""), env("LAB_PIPER_URL", ""), env("LAB_FFMPEG_BINARY", "/usr/bin/ffmpeg")) {
 		log.Print("secretary_transcription_disabled_missing_whisper_endpoint")
 	}
+	if keys := strings.TrimSpace(os.Getenv("LAB_SECRETARY_JIRA_KEYS")); keys != "" {
+		service.IssuePrefixes = strings.Split(keys, ",")
+	}
 	if client, ok := bot.Speech.(*secretary.HTTPVoiceClient); ok {
 		// The same speech clients also serve Open WebUI's call mode through the
 		// OpenAI-compatible audio endpoints of the secretary.
 		client.FastWhisperURL = strings.TrimSpace(os.Getenv("LAB_WHISPER_FAST_URL"))
 		client.Vocabulary = env("LAB_SECRETARY_VOCABULARY", secretary.DefaultVocabulary)
+		client.CaptureDir = strings.TrimSpace(os.Getenv("LAB_SECRETARY_VOICE_CAPTURE_DIR"))
 		service.Voice = client
 		service.VoiceAudio = bot.Audio
 	}

@@ -2,6 +2,7 @@ package secretary
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -50,6 +51,14 @@ func (s *Service) handleTranscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	text, err := s.Voice.Transcribe(r.Context(), wav)
+	var unsure *LowConfidenceError
+	if errors.As(err, &unsure) {
+		metrics.ObservePhase(VoicePhaseSTT, VoiceResultError, time.Since(started))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "No te he entendido bien; creo que has dicho: " + unsure.Transcript + ". Repítelo.", "text": ""})
+		return
+	}
 	if err != nil {
 		metrics.ObservePhase(VoicePhaseSTT, VoiceResultError, time.Since(started))
 		http.Error(w, "transcription failed", http.StatusBadGateway)

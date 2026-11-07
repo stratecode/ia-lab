@@ -346,6 +346,28 @@ set for synthesis; setting it does not turn on Telegram voice replies, which sta
 Deploy with `playbooks/deploy-voice-call.yml` after the secretary binary; see
 [the voice plan](superpowers/plans/2026-11-07-donna-voice.md) for measurements and options.
 
+### Understanding what was said
+
+Speech recognition is the weakest link, so the voice paths protect against its mistakes:
+
+- **Issue keys.** Whisper writes keys as people say them, so `NormalizeIssueKeys` rewrites
+  "STRAT 166", "estrat ciento sesenta y seis", "PMI guion 67", "PMI 60 y 7" and "pe eme i
+  sesenta y siete" to `STRAT-166`, `PMI-67` and so on before routing. It applies to typed
+  text too and only touches the prefixes in `LAB_SECRETARY_JIRA_KEYS` (default
+  `PMI,STRAT,COC,SW`).
+- **Echo.** A Telegram voice note first gets "Te he entendido: «…»", so a recognition mistake
+  is visible instead of turning into a confusing answer.
+- **Low confidence.** Whisper is asked for `verbose_json`; if the mean `avg_logprob` of the
+  segments is below −1.0 (Whisper's own fallback threshold) nothing is searched. Telegram
+  answers with the guess and asks for a repeat; the audio endpoint answers 422 with the same
+  message. Labels Whisper invents for silence or noise ("[Música]") are removed, and a clip
+  with nothing else counts as no speech.
+- **Diagnostic capture (off by default).** With `-e voice_capture=true`,
+  `playbooks/deploy-voice-call.yml` sets `LAB_SECRETARY_VOICE_CAPTURE_DIR` and every clip
+  and its transcript is kept in `/var/lib/lab-secretary/voice-capture` (mode 0600) for 24 h
+  so the recogniser can be measured on a real voice. This stores audio: turn it off again
+  with `-e voice_capture=false`.
+
 ## Conversation memory
 
 Short-term history is scoped to the operator, channel, and conversation ID. It

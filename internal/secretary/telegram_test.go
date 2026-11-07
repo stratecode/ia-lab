@@ -380,18 +380,19 @@ func TestVoiceTranscribesAndRepliesWithTextOnly(t *testing.T) {
 	if err := bot.processUpdate(context.Background(), Update{Message: message}); err != nil {
 		t.Fatal(err)
 	}
-	wantEvents := []string{"getFile", "download", "sendMessage"}
+	// One message shows what was understood, the other is the answer.
+	wantEvents := []string{"getFile", "download", "sendMessage", "sendMessage"}
 	if strings.Join(state.events, ",") != strings.Join(wantEvents, ",") {
 		t.Fatalf("flow events = %v, want %v", state.events, wantEvents)
 	}
 	if speech.transCalls != 1 || speech.synthCalls != 0 || audio.toWAVCalls != 1 || audio.toOGGCalls != 0 || state.modelCalls != 1 || state.voiceReplies != 0 {
 		t.Fatalf("unexpected flow counts: state=%+v speech=%+v audio=%+v", state, speech, audio)
 	}
-	if len(state.textReplies) != 1 || strings.TrimSpace(state.textReplies[0]) == "" {
-		t.Fatalf("voice request should receive one text answer: %+v", state.textReplies)
+	if len(state.textReplies) != 2 || !strings.HasPrefix(state.textReplies[0], "Te he entendido: «") || strings.TrimSpace(state.textReplies[1]) == "" {
+		t.Fatalf("voice request should echo what was understood and then answer in text: %+v", state.textReplies)
 	}
-	if len(state.parseModes) != 1 || state.parseModes[0] != "HTML" {
-		t.Fatalf("Telegram reply did not enable safe Markdown rendering: %v", state.parseModes)
+	if len(state.parseModes) != 2 || state.parseModes[0] != "HTML" || state.parseModes[1] != "HTML" {
+		t.Fatalf("Telegram replies did not enable safe Markdown rendering: %v", state.parseModes)
 	}
 }
 
@@ -405,10 +406,10 @@ func TestTelegramAudioAttachmentIsTranscribedAndRepliesWithText(t *testing.T) {
 	if err := bot.processUpdate(context.Background(), update); err != nil {
 		t.Fatal(err)
 	}
-	if speech.transCalls != 1 || audio.toWAVCalls != 1 || state.modelCalls != 1 || len(state.textReplies) != 1 {
+	if speech.transCalls != 1 || audio.toWAVCalls != 1 || state.modelCalls != 1 || len(state.textReplies) != 2 {
 		t.Fatalf("Telegram audio attachment was not transcribed and answered: state=%+v speech=%+v audio=%+v", state, speech, audio)
 	}
-	if strings.TrimSpace(state.textReplies[0]) == "" || state.voiceReplies != 0 {
+	if strings.TrimSpace(state.textReplies[1]) == "" || state.voiceReplies != 0 {
 		t.Fatalf("audio attachment should receive one written answer: %+v", state)
 	}
 }
@@ -595,5 +596,20 @@ func TestTelegramTransportErrorNeverContainsBotToken(t *testing.T) {
 	err := b.call(context.Background(), "getMe", nil, nil)
 	if err == nil || strings.Contains(err.Error(), "private-token") {
 		t.Fatalf("unsafe error %v", err)
+	}
+}
+
+func TestLowConfidenceVoiceNoteAsksToRepeatInsteadOfActing(t *testing.T) {
+	bot, speech, _, state := newVoiceTestBot(t, voiceTestConfig{voiceEnabled: true, fileBytes: []byte("ogg-input"), fileSize: 9, duration: 4})
+	speech.transErr = &LowConfidenceError{Transcript: "dame la fira ciento", LogProb: -1.3}
+	message := &Message{From: User{ID: 7}, Chat: Chat{ID: 7, Type: "private"}, Voice: &Voice{FileID: "file-1", Duration: 4, FileSize: 9}}
+	if err := bot.processUpdate(context.Background(), Update{Message: message}); err != nil {
+		t.Fatal(err)
+	}
+	if state.modelCalls != 0 {
+		t.Fatal("an unsure transcript must not reach the model or any source")
+	}
+	if len(state.textReplies) != 1 || !strings.Contains(state.textReplies[0], "dame la fira ciento") || !strings.Contains(state.textReplies[0], "repites") {
+		t.Fatalf("the reply must show the guess and ask to repeat: %+v", state.textReplies)
 	}
 }

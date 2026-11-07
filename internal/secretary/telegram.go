@@ -586,6 +586,16 @@ func (b *Bot) processVoiceWithProgress(ctx context.Context, message *Message, tr
 		sttErr = errors.New("empty speech transcript")
 	}
 	b.observeVoicePhase(ctx, VoicePhaseSTT, sttStarted, sttErr)
+	var unsure *LowConfidenceError
+	if errors.As(sttErr, &unsure) {
+		// Whisper was guessing. Searching Jira with a guess is worse than asking again,
+		// so show what it thought it heard and ask for a repeat.
+		requestResult = VoiceResultError
+		sendStarted := time.Now()
+		sendErr := b.send(ctx, message.Chat.ID, "No estoy segura de haberte entendido; creo que has dicho «"+unsure.Transcript+"». ¿Me lo repites o me lo escribes?")
+		b.observeVoicePhase(ctx, VoicePhaseTelegramSend, sendStarted, sendErr)
+		return sendErr
+	}
 	if sttErr != nil {
 		requestResult = voiceMetricResult(sttErr)
 		sendStarted := time.Now()
@@ -593,6 +603,9 @@ func (b *Bot) processVoiceWithProgress(ctx context.Context, message *Message, tr
 		b.observeVoicePhase(ctx, VoicePhaseTelegramSend, sendStarted, sendErr)
 		return sendErr
 	}
+	// Show what was understood, so a recognition mistake is visible instead of turning
+	// into a confusing answer.
+	_ = b.send(ctx, message.Chat.ID, "Te he entendido: «"+transcript+"»")
 	tracker.Close()
 	observer, interactionTracker := b.interactionObserver(ctx, message.Chat.ID, message.ID)
 	defer interactionTracker.Close()

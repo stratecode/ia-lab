@@ -23,6 +23,12 @@
     # less robust to noise and accents). Swap with -e whisper_call_model=ggml-base-q5_1.bin
     whisper_call_model: ggml-small-q5_1.bin
     whisper_models_dir: /srv/ai-lab/lab-speech/models
+    # Jira project keys whose spoken or loosely typed form ("STRAT 166") is turned into the key.
+    jira_keys: "PMI,STRAT,COC,SW"
+    # Diagnostic only: keep every clip and transcript for 24 h so the recogniser can be
+    # measured on a real voice. Stores audio; turn it off again when done.
+    voice_capture: false
+    voice_capture_dir: /var/lib/lab-secretary/voice-capture
     secretary_env: /etc/lab-secretary/secretary.env
     open_webui_dir: /srv/ai-lab/open-webui
     open_webui_env: /srv/ai-lab/open-webui/open-webui.env
@@ -93,15 +99,26 @@
         - { key: LAB_PIPER_URL, value: "http://127.0.0.1:{{ piper_port }}" }
         - { key: LAB_WHISPER_FAST_URL, value: "http://127.0.0.1:{{ whisper_call_port }}" }
         - { key: LAB_SECRETARY_VOCABULARY, value: "\"{{ voice_vocabulary }}\"" }
+        - { key: LAB_SECRETARY_JIRA_KEYS, value: "{{ jira_keys }}" }
       loop_control:
         label: "{{ item.key }}"
       register: secretary_env_change
+
+    - name: Turn the diagnostic voice capture on or off
+      ansible.builtin.lineinfile:
+        path: "{{ secretary_env }}"
+        regexp: "^LAB_SECRETARY_VOICE_CAPTURE_DIR="
+        line: "LAB_SECRETARY_VOICE_CAPTURE_DIR={{ voice_capture_dir }}"
+        state: "{{ 'present' if voice_capture | bool else 'absent' }}"
+        mode: "0600"
+        backup: true
+      register: capture_change
 
     - name: Restart the secretary when its settings changed
       ansible.builtin.systemd:
         name: lab-secretary
         state: restarted
-      when: secretary_env_change.changed
+      when: secretary_env_change.changed or capture_change.changed
 
     - name: Wait for the secretary
       ansible.builtin.uri:

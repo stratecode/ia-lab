@@ -78,12 +78,15 @@ type Service struct {
 	// Open WebUI's call mode. Both are nil when speech is not configured.
 	Voice      SpeechProcessor
 	VoiceAudio AudioConverter
+	// IssuePrefixes are the Jira project keys whose spoken or loosely typed forms
+	// ("STRAT 166") are rewritten to the key ("STRAT-166") before routing.
+	IssuePrefixes []string
 }
 
 func New(upstream, key, instructions, stateDir string, allowed map[int64]bool) *Service {
 	main := ModelTarget{Name: "main", Upstream: strings.TrimRight(upstream, "/"), Key: key}
 	proposals, _ := OpenJiraProposalStore(stateDir)
-	return &Service{Upstream: main.Upstream, Key: key, Instructions: instructions, StateDir: stateDir, Allowed: allowed, Models: map[string]ModelTarget{"main": main}, Client: &http.Client{Timeout: 120 * time.Second}, webClient: newSafeWebHTTPClient(), history: map[string][]Turn{}, Learning: NewJSONLLearningStore(stateDir), Retention: LearningRetention{TraceDays: 90, CandidateDays: 30}, JiraProposals: proposals, JiraTaskPolicy: ConfidencePolicy{Threshold: .90, MinSamples: 30}}
+	return &Service{Upstream: main.Upstream, Key: key, Instructions: instructions, StateDir: stateDir, Allowed: allowed, Models: map[string]ModelTarget{"main": main}, Client: &http.Client{Timeout: 120 * time.Second}, webClient: newSafeWebHTTPClient(), history: map[string][]Turn{}, Learning: NewJSONLLearningStore(stateDir), Retention: LearningRetention{TraceDays: 90, CandidateDays: 30}, JiraProposals: proposals, JiraTaskPolicy: ConfidencePolicy{Threshold: .90, MinSamples: 30}, IssuePrefixes: DefaultIssuePrefixes}
 }
 
 // SetDiagnosticsEnabled controls only detailed conversation checkpoints.
@@ -324,6 +327,7 @@ func (s *Service) replyWithHistoryContext(ctx context.Context, user int64, chann
 	if text == "" {
 		return "Escribe una consulta de texto.", nil
 	}
+	text = NormalizeIssueKeys(text, s.IssuePrefixes)
 	if duration, ok := parseTimerRequest(text); ok {
 		timer, err := s.createTimer(user, duration)
 		if err != nil {
