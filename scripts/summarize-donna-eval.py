@@ -12,8 +12,13 @@ def load(directory):
     rows = defaultdict(list)
     for path in sorted(directory.glob("*.jsonl")):
         for line in path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
+            if not line.strip():
+                continue
+            try:
                 record = json.loads(line)
+            except json.JSONDecodeError:
+                continue  # a partially written line while the run is still going
+            if "alias" in record:
                 rows[record["alias"]].append(record)
     return rows
 

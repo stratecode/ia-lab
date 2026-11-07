@@ -1,0 +1,5 @@
+alias=main memory_peak_bytes=1255788544
+alias=qwen35-4b memory_peak_bytes=3136933888
+alias=gemma4-e4b memory_peak_bytes=3394453504
+alias=gemma4-e2b memory_peak_bytes=1694048256
+alias=lfm-2.6b memory_peak_bytes=2097778688

@@ -1,0 +1,80 @@
+# Two slots for the principal model so that an unrelated request (for example
+# Open WebUI title generation) does not evict Donna's cached instruction prefix.
+# Measured on 2026-11-07 with scripts/probe-llama-slots.py: with one slot the
+# next Donna request reprocessed all 2057 tokens (12.7 s); with two it reused
+# 1540 and took 4.3 s. The context is doubled so each slot keeps 16384 tokens.
+- name: Give the principal model two slots without changing its per-slot context
+  hosts: lab
+  become: true
+  vars:
+    presets_path: /etc/llama.cpp/models.ini
+    router_url: http://127.0.0.1:8080
+    main_ctx_total: 32768
+    main_parallel: 2
+  tasks:
+    - name: Read the router key from the unit without printing it
+      ansible.builtin.shell: "systemctl cat llama-cpp-main | grep -o -- '--api-key [^ ]*' | cut -d' ' -f2"
+      register: router_key
+      changed_when: false
+      no_log: true
+
+    - name: Apply the slot layout and verify, rolling back on failure
+      block:
+        - name: Set the total context of main
+          community.general.ini_file:
+            path: "{{ presets_path }}"
+            section: main
+            option: ctx-size
+            value: "{{ main_ctx_total }}"
+            backup: true
+            no_extra_spaces: false
+          register: ctx_change
+
+        - name: Set the number of slots of main
+          community.general.ini_file:
+            path: "{{ presets_path }}"
+            section: main
+            option: parallel
+            value: "{{ main_parallel }}"
+            no_extra_spaces: false
+          register: slots_change
+
+        - name: Restart the router when the presets changed
+          ansible.builtin.systemd:
+            name: llama-cpp-main
+            state: restarted
+          when: ctx_change.changed or slots_change.changed
+
+        - name: Wait until main answers a completion
+          ansible.builtin.uri:
+            url: "{{ router_url }}/v1/chat/completions"
+            method: POST
+            headers:
+              Authorization: "Bearer {{ router_key.stdout }}"
+            body_format: json
+            body: { model: main, messages: [{ role: user, content: "Responde solo: ok" }], max_tokens: 8, temperature: 0 }
+            status_code: 200
+            timeout: 120
+          register: probe
+          until: probe.status == 200
+          retries: 40
+          delay: 5
+          no_log: true
+
+      rescue:
+        - name: Restore the previous presets
+          ansible.builtin.copy:
+            src: "{{ ctx_change.backup_file }}"
+            dest: "{{ presets_path }}"
+            remote_src: true
+          when: ctx_change.backup_file is defined
+
+        - name: Restart the restored router
+          ansible.builtin.systemd:
+            name: llama-cpp-main
+            state: restarted
+          when: ctx_change.backup_file is defined
+
+        - name: Report failure
+          ansible.builtin.fail:
+            msg: "The two-slot layout failed verification; the previous presets were restored."

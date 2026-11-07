@@ -14,7 +14,7 @@ DEPTHS=${DEPTHS:-0.2,0.8}
 HF=https://huggingface.co
 THINK_OFF='{"enable_thinking":false}'
 
-# alias | file | download path (empty when already on disk) | chat template kwargs
+# alias | file | download path (empty when already on disk) | chat template kwargs | suites | context sizes
 CANDIDATES=${CANDIDATES:-"
 main|LFM2.5-1.2B-Instruct-Q4_0.gguf||
 qwen3-4b-2507|Qwen3-4B-Instruct-2507-Q4_K_M.gguf|unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf|
@@ -26,7 +26,7 @@ qwen-eval|Qwen3-4B-Q4_K_M.gguf||$THINK_OFF
 mkdir -p "$OUT"
 log() { echo "$(date -Is) $*" | tee -a "$OUT/run.log"; }
 
-while IFS='|' read -r alias file path kwargs; do
+while IFS='|' read -r alias file path kwargs suites sizes; do
   [ -z "$alias" ] && continue
   log "== $alias"
   if [ ! -f "$MODELS/$file" ]; then
@@ -49,7 +49,7 @@ while IFS='|' read -r alias file path kwargs; do
   done
   curl -fs "http://127.0.0.1:$PORT/health" >/dev/null || { log "server for $alias did not start"; journalctl -u donna-eval-server -n 20 --no-pager | tee -a "$OUT/run.log"; continue; }
 
-  args=(--base "http://127.0.0.1:$PORT" --alias "$alias" --instructions "$BASE/repo/skills/secretary-core/instructions.md" --out "$OUT/$alias.jsonl" --context-sizes "$CONTEXT_SIZES" --depths "$DEPTHS")
+  args=(--base "http://127.0.0.1:$PORT" --alias "$alias" --instructions "$BASE/repo/skills/secretary-core/instructions.md" --out "$OUT/$alias.jsonl" --suites "${suites:-quality,cache,context}" --context-sizes "${sizes:-$CONTEXT_SIZES}" --depths "$DEPTHS")
   [ -n "$kwargs" ] && args+=(--template-kwargs "$kwargs")
   nice -n 10 python3 "$BASE/repo/scripts/benchmark-donna-models.py" "${args[@]}" 2>&1 | tee -a "$OUT/run.log" || log "benchmark for $alias failed"
   {
