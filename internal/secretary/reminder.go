@@ -47,6 +47,18 @@ var reminderIntentPhrases = [][]string{
 	{"temporizador"}, {"quiero", "un", "aviso"}, {"necesito", "un", "aviso"},
 }
 
+func init() {
+	// "me pones / me puedes poner / ponerme / puedes ponerme" + a reminder noun.
+	nouns := [][]string{{"un", "aviso"}, {"un", "recordatorio"}, {"una", "alarma"}, {"un", "temporizador"}, {"un", "cronometro"}}
+	leads := [][]string{{"me", "pones"}, {"me", "puedes", "poner"}, {"me", "podrias", "poner"}, {"puedes", "ponerme"}, {"podrias", "ponerme"}, {"ponerme"}, {"me", "pondrias"}, {"me", "programas"}, {"me", "puedes", "programar"}, {"programame"}}
+	for _, lead := range leads {
+		for _, noun := range nouns {
+			phrase := append(append([]string{}, lead...), noun...)
+			reminderIntentPhrases = append(reminderIntentPhrases, phrase)
+		}
+	}
+}
+
 var glued = regexp.MustCompile(`^(\d{1,5})(s|seg|segs|m|min|mins|h|hr|hrs)$`)
 
 func durationUnit(word string) (time.Duration, bool) {
@@ -240,7 +252,9 @@ func formatReminderReason(tokens []speechToken, subjunctive bool) string {
 		switch {
 		case i == 0 && subjunctive:
 			lower := strings.ToLower(core)
-			if irregular, ok := irregularImperative[t.word]; ok {
+			if swapped, ok := personSwap[t.word]; ok {
+				word = swapped
+			} else if irregular, ok := irregularImperative[t.word]; ok {
 				word = irregular
 			} else if strings.HasSuffix(lower, "gue") {
 				word = lower[:len(lower)-3] + "ga"

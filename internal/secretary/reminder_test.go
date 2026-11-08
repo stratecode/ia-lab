@@ -29,6 +29,8 @@ func TestParseReminderRequestUnderstandsNaturalPhrasing(t *testing.T) {
 		{"avisame en 1 hora y 15 minutos", 75 * time.Minute, ""},
 		{"avísame en tres cuartos de hora", 45 * time.Minute, ""},
 		{"en 10 minutos avísame para que apague el horno", 10 * time.Minute, "Apaga el horno"},
+		{"Hola, Donna. Me pones un recordatorio dentro de 5 minutos de que tengo que sacar el vino del congelado", 5 * time.Minute, "Tienes que sacar el vino del congelado"},
+		{"¿Me puedes poner una alarma en 15 minutos para llamar a mi madre?", 15 * time.Minute, "Llamar a tu madre"},
 	}
 	for _, tc := range cases {
 		got, status := parseReminderRequest(tc.text)
