@@ -112,7 +112,7 @@
           url: "https://{{ lab_assistant_domain }}/telegram/webhook"
           secret_token: "{{ telegram_webhook_secret }}"
           drop_pending_updates: "false"
-          allowed_updates: '["message"]'
+          allowed_updates: '["message","callback_query"]'
         status_code: 200
       register: telegram_set_webhook
       no_log: true

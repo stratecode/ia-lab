@@ -70,6 +70,8 @@ type Service struct {
 	webClient                             *http.Client
 	mu                                    sync.Mutex
 	timerMu                               sync.Mutex
+	confirmMu                             sync.Mutex
+	confirmations                         map[string]pendingConfirmation
 	history                               map[string][]Turn
 	voiceMetrics                          *VoiceMetrics
 	voiceMetricsOnce                      sync.Once
@@ -338,9 +340,32 @@ func (s *Service) replyWithHistoryContext(ctx context.Context, user int64, chann
 	if duration, ok := parseTimerRequest(text); ok {
 		timer, err := s.createTimer(user, duration)
 		if err != nil {
+			if strings.Contains(err.Error(), "limit") {
+				return "Ya tienes 10 avisos activos; cancela alguno con /cancel ID antes de crear otro. No he programado nada.", nil
+			}
 			return "", err
 		}
-		return fmt.Sprintf("⏱ Temporizador %s iniciado: %s. Te aviso cuando termine.", timer.ID, formatTimerDuration(duration)), nil
+		note := ""
+		if channel != "telegram" {
+			note = " El aviso te llegará por Telegram."
+		}
+		return fmt.Sprintf("⏱ Temporizador %s iniciado: %s. Te aviso cuando termine.%s", timer.ID, formatTimerDuration(duration), note), nil
+	}
+	switch request, status := parseReminderRequest(text); status {
+	case reminderOK:
+		timer, err := s.createTimerDraft(user, request.Duration, request.Reason)
+		if err != nil {
+			if strings.Contains(err.Error(), "limit") {
+				return "Ya tienes 10 avisos activos; cancela alguno con /cancel ID antes de crear otro. No he programado nada.", nil
+			}
+			return "", err
+		}
+		s.offerConfirmation(user, channel, conversation, confirmTimerKind, timer.ID)
+		return reminderDraftText(timer.ID, request.Duration, request.Reason, channel), nil
+	case reminderUnclear:
+		if !isTimerIntent(text) {
+			return reminderUnclearText, nil
+		}
 	}
 	if isTimerIntent(text) {
 		return "Para el temporizador, indica una duración de 1 segundo a 24 horas; por ejemplo: «temporizador de 10 minutos». Por ahora enviaré un aviso al terminar.", nil
@@ -359,6 +384,12 @@ func (s *Service) replyWithHistoryContext(ctx context.Context, user int64, chann
 		}
 	case "/start", "/help":
 		return "Soy tu secretaria del lab. Puedes escribirme en español o enviarme una nota de voz.\n/new: conversación nueva\n/forget: borrar memoria e historial\n/status: conexiones\n/mapeo: mapear personas, proyectos, emails y aliases con confirmación\n/jira: pendientes\n/reuniones: reuniones recientes\n/resumen: tareas y reuniones\n/timer 10m: temporizador\n/timers: ver temporizadores\n/cancel ID: cancelar temporizador\n/skills: tareas programables\n/programar: programar una skill\n/tareas: ver tareas programadas", nil
+	case "/confirmar-aviso":
+		fields := strings.Fields(text)
+		if len(fields) != 2 {
+			return "Uso: /confirmar-aviso ID", nil
+		}
+		return s.confirmTimerReply(user, fields[1]), nil
 	case "/timers":
 		timers, err := s.timersForUser(user)
 		if err != nil {

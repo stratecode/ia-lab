@@ -456,7 +456,7 @@ func (b *Bot) processUpdate(ctx context.Context, update Update) (returnErr error
 		answer = "No he podido completar la respuesta. Reenvía tu consulta; no he ejecutado acciones externas."
 	}
 	tracker.Close()
-	if err := b.send(ctx, m.Chat.ID, answer); err != nil {
+	if err := b.sendAnswer(ctx, m.Chat.ID, m.From.ID, answer); err != nil {
 		b.event("telegram_send_error")
 		return err
 	}
@@ -652,7 +652,7 @@ func (b *Bot) processVoiceWithProgress(ctx context.Context, message *Message, tr
 		answer = "No he podido completar la respuesta. Reenvía tu consulta por texto; no he ejecutado acciones externas."
 	}
 	sendStarted := time.Now()
-	sendErr := b.send(ctx, message.Chat.ID, answer)
+	sendErr := b.sendAnswer(ctx, message.Chat.ID, message.From.ID, answer)
 	b.observeVoicePhase(ctx, VoicePhaseTelegramSend, sendStarted, sendErr)
 	return sendErr
 }
@@ -813,7 +813,7 @@ func (b *Bot) deliverDueTimers(ctx context.Context) {
 		return
 	}
 	for _, timer := range timers {
-		if err := b.send(ctx, timer.ChatID, "⏰ Temporizador terminado."); err != nil {
+		if err := b.send(ctx, timer.ChatID, timer.alertText()); err != nil {
 			b.event("timer_send_error")
 			continue
 		}

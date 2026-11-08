@@ -76,6 +76,7 @@ when its unit changes and `lab-secretary` when the instructions change.
 | `Ponme un temporizador de 10 minutos` / `/timer 10m` | Persist a one-shot timer and notify this private Telegram chat when it expires |
 | `/timers` | List this operator's active timers and remaining time |
 | `/cancel ID` | Cancel one of this operator's active timers |
+| `/confirmar-aviso ID` | Confirm a reminder Donna understood from natural language (the Telegram button does the same) |
 | `/skills` | List the built-in skills that can be scheduled (read-only) |
 | `/programar SKILL CADENCIA HORA` | Create a disabled draft of a scheduled skill and show what it would do; also accepts natural phrasing such as «prográmame el morning-brief cada día a las 8:30» |
 | `/confirmar-tarea ID` | Activate exactly that draft |
@@ -759,6 +760,35 @@ El despliegue dedicado es `playbooks/deploy-donna-granola-events.yml`. Primero
 debe desplegarse con la clave de webhook vacía; el callback responde `503`
 hasta guardar la clave que Granola devuelve una sola vez al crear el endpoint.
 Después de guardarla en el `.env` privado, vuelve a ejecutar el playbook.
+
+## Avisos en lenguaje natural y confirmación con botón
+
+Donna entiende peticiones como «¿me puedes avisar en 10 minutos para que revise
+la comida que tengo en el horno?» en código, antes del modelo: duración en cifras
+o palabras («diez minutos», «un cuarto de hora», «una hora y media», «2h»), motivo
+opcional y varias formas de pedirlo («avísame», «recuérdame», «ponme un
+temporizador de 5 minutos para la pasta»). El motivo se redacta como imperativo en
+segunda persona: el aviso dice «⏰ Revisa la comida que tienes en el horno.».
+
+**Nada se programa sin confirmar.** Un aviso entendido en lenguaje natural queda como
+borrador y Donna muestra el calendario («¿Te aviso en 10 minutos: «…»?»). En Telegram
+llega con un único botón **✅ Confirmar** (también vale `/confirmar-aviso ID`); en
+Open WebUI se confirma con ese comando. El borrador no dispara nunca, caduca a los
+10 minutos sin confirmar y la cuenta atrás empieza al confirmar. Un segundo pulso no
+reprograma, y solo el propio operador puede confirmar su borrador. El mismo botón
+confirma los borradores de `/programar`. Las órdenes explícitas `/timer 10m` y
+«temporizador de 10 minutos» siguen siendo inmediatas.
+
+Si Donna entiende que es un aviso pero no puede programarlo tal como se pide (a una
+hora concreta, «cuando pase algo», más de 24 horas), lo dice y no programa nada: ya
+no contesta «entendido» sin haber creado el aviso.
+
+**Requisito del webhook.** El botón necesita que Telegram entregue `callback_query`.
+`playbooks/enable-telegram-webhook.yml` lo registra (`allowed_updates` con `message` y
+`callback_query`); hay que ejecutarlo una vez tras desplegar esta versión, aportando la
+confirmación externa que exige (`-e telegram_public_probe_passed=true`) solo después
+de comprobarla. Mientras no se haga, el botón se muestra pero no responde, y el
+mensaje incluye `/confirmar-aviso ID` como alternativa.
 
 ## Tareas programadas y mensajes proactivos (implementadas localmente, desactivadas por defecto)
 

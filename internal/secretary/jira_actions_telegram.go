@@ -16,6 +16,9 @@ func (b *Bot) processJiraCallback(ctx context.Context, query *CallbackQuery) err
 		b.event("telegram_rejected")
 		return nil
 	}
+	if kind, id, ok := isConfirmationData(query.Data); ok {
+		return b.processConfirmCallback(ctx, query, kind, id)
+	}
 	parts := strings.Split(query.Data, ":")
 	if len(parts) == 3 && parts[0] == "djp" {
 		return b.startGranolaJiraProposal(ctx, query, parts[1], parts[2])

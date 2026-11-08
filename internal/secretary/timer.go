@@ -22,6 +22,26 @@ type Timer struct {
 	DueAt     time.Time `json:"due_at"`
 	Delivered bool      `json:"delivered"`
 	Canceled  bool      `json:"canceled"`
+	// Reason is what the alert says ("Revisa la comida"). Empty means the generic text.
+	Reason string `json:"reason,omitempty"`
+	// Draft is a reminder Donna understood from natural language and is waiting
+	// for the operator's confirmation. A draft never fires and expires unconfirmed;
+	// Duration is counted from the confirmation, not from the request.
+	Draft    bool          `json:"draft,omitempty"`
+	Duration time.Duration `json:"duration,omitempty"`
+}
+
+// timerDraftTTL is how long a draft waits for its confirmation button.
+const timerDraftTTL = 10 * time.Minute
+
+func (t Timer) staleDraft(now time.Time) bool { return t.Draft && now.Sub(t.CreatedAt) > timerDraftTTL }
+
+// alertText is the message sent when the timer ends.
+func (t Timer) alertText() string {
+	if t.Reason == "" {
+		return "⏰ Temporizador terminado."
+	}
+	return "⏰ " + strings.TrimRight(t.Reason, ".") + "."
 }
 
 var timerRequest = regexp.MustCompile(`(?i)^(?:/timer\s+|(?:(?:pon(?:me)?\s+)?(?:un\s+)?temporizador(?:\s+de)?\s+)|(?:av[ií]same\s+en\s+))(\d+)\s*(s|seg(?:undo)?s?|m|min(?:uto)?s?|h|hora?s?|['’′])(?:\s*[.!])?$`)
@@ -101,6 +121,19 @@ func newTimerID() (string, error) {
 }
 
 func (s *Service) createTimer(user int64, duration time.Duration) (Timer, error) {
+	return s.createTimerWithReason(user, duration, "")
+}
+
+func (s *Service) createTimerWithReason(user int64, duration time.Duration, reason string) (Timer, error) {
+	return s.createTimerOpts(user, duration, reason, false)
+}
+
+// createTimerDraft stores a reminder that does nothing until confirmTimer.
+func (s *Service) createTimerDraft(user int64, duration time.Duration, reason string) (Timer, error) {
+	return s.createTimerOpts(user, duration, reason, true)
+}
+
+func (s *Service) createTimerOpts(user int64, duration time.Duration, reason string, draft bool) (Timer, error) {
 	s.timerMu.Lock()
 	defer s.timerMu.Unlock()
 	timers, err := s.readTimersLocked()
@@ -109,7 +142,7 @@ func (s *Service) createTimer(user int64, duration time.Duration) (Timer, error)
 	}
 	active := 0
 	for _, timer := range timers {
-		if timer.UserID == user && !timer.Canceled && !timer.Delivered {
+		if timer.UserID == user && !timer.Canceled && !timer.Delivered && !timer.staleDraft(time.Now()) {
 			active++
 		}
 	}
@@ -121,7 +154,7 @@ func (s *Service) createTimer(user int64, duration time.Duration) (Timer, error)
 		return Timer{}, err
 	}
 	now := time.Now().UTC()
-	timer := Timer{ID: id, UserID: user, ChatID: user, CreatedAt: now, DueAt: now.Add(duration)}
+	timer := Timer{ID: id, UserID: user, ChatID: user, CreatedAt: now, DueAt: now.Add(duration), Reason: reason, Draft: draft, Duration: duration}
 	timers = append(timers, timer)
 	if err := s.writeTimersLocked(timers); err != nil {
 		return Timer{}, err
@@ -136,7 +169,7 @@ func (s *Service) timersForUser(user int64) ([]Timer, error) {
 	}
 	active := make([]Timer, 0, len(timers))
 	for _, timer := range timers {
-		if timer.UserID == user && !timer.Canceled && !timer.Delivered {
+		if timer.UserID == user && !timer.Canceled && !timer.Delivered && !timer.Draft {
 			active = append(active, timer)
 		}
 	}
@@ -166,7 +199,7 @@ func (s *Service) dueTimers(now time.Time) ([]Timer, error) {
 	}
 	due := make([]Timer, 0)
 	for _, timer := range timers {
-		if !timer.Canceled && !timer.Delivered && !timer.DueAt.After(now) {
+		if !timer.Canceled && !timer.Delivered && !timer.Draft && !timer.DueAt.After(now) {
 			due = append(due, timer)
 		}
 	}
@@ -213,4 +246,56 @@ func formatTimerDuration(d time.Duration) string {
 		}
 		return fmt.Sprintf("%d %s", seconds, unit)
 	}
+}
+
+type timerConfirmation int
+
+const (
+	timerConfirmed timerConfirmation = iota
+	timerAlreadyActive
+	timerDraftExpired
+	timerDraftMissing
+)
+
+// confirmTimer activates the operator's own draft. The countdown starts now.
+func (s *Service) confirmTimer(user int64, id string) (Timer, timerConfirmation, error) {
+	s.timerMu.Lock()
+	defer s.timerMu.Unlock()
+	timers, err := s.readTimersLocked()
+	if err != nil {
+		return Timer{}, timerDraftMissing, err
+	}
+	now := time.Now().UTC()
+	for i := range timers {
+		if timers[i].ID != id || timers[i].UserID != user || timers[i].Canceled || timers[i].Delivered {
+			continue
+		}
+		if !timers[i].Draft {
+			return timers[i], timerAlreadyActive, nil
+		}
+		if timers[i].staleDraft(now) {
+			timers[i].Canceled = true
+			return Timer{}, timerDraftExpired, s.writeTimersLocked(timers)
+		}
+		timers[i].Draft = false
+		timers[i].DueAt = now.Add(timers[i].Duration)
+		return timers[i], timerConfirmed, s.writeTimersLocked(timers)
+	}
+	return Timer{}, timerDraftMissing, nil
+}
+
+// confirmTimerReply is the shared answer for a button press or /confirmar-aviso.
+func (s *Service) confirmTimerReply(user int64, id string) string {
+	timer, status, err := s.confirmTimer(user, id)
+	switch {
+	case err != nil:
+		return "No he podido confirmar el aviso; no he programado nada."
+	case status == timerConfirmed:
+		return reminderSetText(timer.ID, timer.Duration, timer.Reason)
+	case status == timerAlreadyActive:
+		return "Ese aviso ya estaba programado."
+	case status == timerDraftExpired:
+		return "Ese aviso caducó sin confirmar y no se programó. Pídemelo otra vez."
+	}
+	return "No encuentro un aviso tuyo pendiente de confirmar con ese ID."
 }

@@ -189,6 +189,7 @@ func (s *Service) scheduleFromRequest(user int64, channel, conversation string, 
 	if err != nil {
 		return scheduledCreateError(err)
 	}
+	s.offerConfirmation(user, channel, conversation, confirmTaskKind, task.ID)
 	return scheduleDraftPreview(task, defaulted)
 }
 
