@@ -294,12 +294,16 @@ func (c *Connectors) JiraQueryResult(ctx context.Context, query string) (Capabil
 		return CapabilityResult{}, nil
 	}
 	evidence := make([]EvidenceRef, 0, len(result.Issues))
+	due := map[string]string{}
 	for _, issue := range result.Issues {
 		evidence = append(evidence, EvidenceRef{Provider: "Jira", ID: issue.Key, Title: issue.Fields.Summary, RetrievedAt: time.Now()})
+		if issue.Fields.Due != "" && classifyJiraIssue(issue) != bucketDone {
+			due[issue.Key] = issue.Fields.Due
+		}
 	}
 	return CapabilityResult{
 		Text:        formatJiraIssues("Jira · incidencias encontradas mediante Jira REST/JQL:", result.Issues),
-		ResultCount: len(result.Issues), Evidence: evidence,
+		ResultCount: len(result.Issues), Evidence: evidence, Due: due,
 		Compact:      jiraCompactFor(c.Config.Jira.OperatorAccountID, jql, result),
 		DirectAnswer: len(result.Issues) == 1 && strings.EqualFold(jiraIssueKeyMention.FindString(strings.ToUpper(query)), result.Issues[0].Key),
 	}, nil

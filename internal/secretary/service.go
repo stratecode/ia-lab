@@ -81,6 +81,10 @@ type Service struct {
 	// IssuePrefixes are the Jira project keys whose spoken or loosely typed forms
 	// ("STRAT 166") are rewritten to the key ("STRAT-166") before routing.
 	IssuePrefixes []string
+	// ScheduledTasks holds operator-scheduled skills. It is nil unless the
+	// proactive feature is explicitly enabled, which keeps every schedule
+	// command inert on a default deployment.
+	ScheduledTasks *ScheduledTaskStore
 }
 
 func New(upstream, key, instructions, stateDir string, allowed map[int64]bool) *Service {
@@ -338,6 +342,9 @@ func (s *Service) replyWithHistoryContext(ctx context.Context, user int64, chann
 	if isTimerIntent(text) {
 		return "Para el temporizador, indica una duración de 1 segundo a 24 horas; por ejemplo: «temporizador de 10 minutos». Por ahora enviaré un aviso al terminar.", nil
 	}
+	if answer, handled := s.scheduledCommand(user, channel, conversation, text); handled {
+		return answer, nil
+	}
 	if strings.HasPrefix(strings.ToLower(text), "/mapeo") {
 		return s.guidedMapping(ctx, user, channel, conversation, text, progress, emitInteraction)
 	}
@@ -348,7 +355,7 @@ func (s *Service) replyWithHistoryContext(ctx context.Context, user int64, chann
 			return answer, nil
 		}
 	case "/start", "/help":
-		return "Soy tu secretaria del lab. Puedes escribirme en español o enviarme una nota de voz.\n/new: conversación nueva\n/forget: borrar memoria e historial\n/status: conexiones\n/mapeo: mapear personas, proyectos, emails y aliases con confirmación\n/jira: pendientes\n/reuniones: reuniones recientes\n/resumen: tareas y reuniones\n/timer 10m: temporizador\n/timers: ver temporizadores\n/cancel ID: cancelar temporizador", nil
+		return "Soy tu secretaria del lab. Puedes escribirme en español o enviarme una nota de voz.\n/new: conversación nueva\n/forget: borrar memoria e historial\n/status: conexiones\n/mapeo: mapear personas, proyectos, emails y aliases con confirmación\n/jira: pendientes\n/reuniones: reuniones recientes\n/resumen: tareas y reuniones\n/timer 10m: temporizador\n/timers: ver temporizadores\n/cancel ID: cancelar temporizador\n/skills: tareas programables\n/programar: programar una skill\n/tareas: ver tareas programadas", nil
 	case "/timers":
 		timers, err := s.timersForUser(user)
 		if err != nil {

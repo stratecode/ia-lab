@@ -16,6 +16,10 @@ type CapabilityResult struct {
 	// Compact is a short, code-built rendering of Text for list-like answers.
 	// It is used instead of model synthesis unless the operator asks for detail.
 	Compact string
+	// Due maps an evidence ID (a Jira key) to its due date, YYYY-MM-DD, when the
+	// provider reported one. Scheduled skills read deadlines from here instead of
+	// parsing prose.
+	Due map[string]string
 }
 
 type EvidenceRef struct {
