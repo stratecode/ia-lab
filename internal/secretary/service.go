@@ -85,6 +85,9 @@ type Service struct {
 	// proactive feature is explicitly enabled, which keeps every schedule
 	// command inert on a default deployment.
 	ScheduledTasks *ScheduledTaskStore
+	// ProactiveOutbox queues scheduled-skill results. Open WebUI messages wait
+	// here until the next authenticated conversation shows them.
+	ProactiveOutbox *ProactiveOutbox
 }
 
 func New(upstream, key, instructions, stateDir string, allowed map[int64]bool) *Service {
@@ -1665,6 +1668,17 @@ func (s *Service) Handler() http.Handler {
 				http.Error(w, "pending notifications unavailable", http.StatusServiceUnavailable)
 				return
 			}
+			proactiveNotifications, proactiveMessage, proactiveErr := s.proactivePendingMessage(operator)
+			if proactiveErr != nil {
+				http.Error(w, "pending notifications unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			if proactiveMessage != "" {
+				if pendingMessage != "" {
+					pendingMessage += "\n\n---\n\n"
+				}
+				pendingMessage += proactiveMessage
+			}
 			last := len(messages) - 1
 			if string(messages[last]["role"]) != `"user"` {
 				http.Error(w, "last message must be from user", http.StatusBadRequest)
@@ -1803,6 +1817,7 @@ func (s *Service) Handler() http.Handler {
 				if err := s.acknowledgeGranola(operator, pendingNotifications); err != nil {
 					return
 				}
+				s.acknowledgeProactive(operator, proactiveNotifications)
 			} else {
 				w.Header().Set("Content-Type", "application/json")
 				if err := json.NewEncoder(w).Encode(map[string]any{"id": "secretary-routed", "object": "chat.completion", "model": target.Name, "choices": []any{map[string]any{"index": 0, "message": Turn{Role: "assistant", Content: answer}, "finish_reason": "stop"}}}); err != nil {
@@ -1811,6 +1826,7 @@ func (s *Service) Handler() http.Handler {
 				if err := s.acknowledgeGranola(operator, pendingNotifications); err != nil {
 					return
 				}
+				s.acknowledgeProactive(operator, proactiveNotifications)
 			}
 			return
 		}

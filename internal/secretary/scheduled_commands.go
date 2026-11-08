@@ -281,6 +281,11 @@ func (s *Service) scheduledTaskList(user int64) string {
 		}
 		lines = append(lines, line)
 	}
+	if s.ProactiveOutbox != nil {
+		if uncertain, err := s.ProactiveOutbox.Uncertain(user); err == nil && len(uncertain) > 0 {
+			lines = append(lines, fmt.Sprintf("⚠ %d aviso(s) con envío incierto: no sé si llegaron a Telegram. Revísalo; no los reenvío por mi cuenta.", len(uncertain)))
+		}
+	}
 	return strings.Join(lines, "\n")
 }
 

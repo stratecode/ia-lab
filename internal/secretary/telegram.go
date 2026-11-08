@@ -149,11 +149,11 @@ func (b *Bot) call(ctx context.Context, method string, payload any, out any) (re
 	req.Header.Set("Content-Type", "application/json")
 	res, err := conversationHTTP(ctx, b.Client, req, "telegram."+method)
 	if err != nil {
-		return errors.New("Telegram transport unavailable")
+		return errTelegramTransport
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		return fmt.Errorf("Telegram HTTP %d", res.StatusCode)
+		return telegramHTTPError{Status: res.StatusCode}
 	}
 	var envelope struct {
 		OK     bool            `json:"ok"`
@@ -167,6 +167,41 @@ func (b *Bot) call(ctx context.Context, method string, payload any, out any) (re
 	}
 	return nil
 }
+
+// errTelegramTransport means the request may have reached Telegram: the outcome
+// of the call is unknown.
+var errTelegramTransport = errors.New("Telegram transport unavailable")
+
+type telegramHTTPError struct{ Status int }
+
+func (e telegramHTTPError) Error() string { return fmt.Sprintf("Telegram HTTP %d", e.Status) }
+
+const proactiveSendTimeout = 20 * time.Second
+
+// Send delivers one proactive message as a single Telegram message and says
+// exactly what is known about the outcome. A rejection is retryable; a
+// transport error or 5xx may have been accepted, so it is reported as uncertain.
+func (b *Bot) Send(ctx context.Context, chatID int64, text string) ProactiveSendOutcome {
+	text = truncateTextRunes(strings.TrimSpace(text), 3500)
+	if text == "" {
+		return SendFailed
+	}
+	ctx, cancel := context.WithTimeout(ctx, proactiveSendTimeout)
+	defer cancel()
+	err := b.call(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": telegramHTML(text), "parse_mode": "HTML"}, nil)
+	if err == nil {
+		return SendDelivered
+	}
+	var httpErr telegramHTTPError
+	if errors.As(err, &httpErr) && httpErr.Status >= 400 && httpErr.Status < 500 {
+		return SendFailed
+	}
+	if err.Error() == "Telegram request rejected" || err.Error() == "invalid Telegram endpoint" {
+		return SendFailed
+	}
+	return SendUncertain
+}
+
 func (b *Bot) event(name string) {
 	if b.OnEvent != nil {
 		b.OnEvent(name)

@@ -41,6 +41,7 @@ type VoiceMetrics struct {
 	responseWords    *prometheus.HistogramVec
 	answerAdjust     *prometheus.CounterVec
 	modelTokens      *prometheus.CounterVec
+	proactive        *prometheus.CounterVec
 }
 
 func NewVoiceMetrics() *VoiceMetrics {
@@ -106,7 +107,11 @@ func NewVoiceMetrics() *VoiceMetrics {
 			Help: "Prompt and completion tokens reported by the model backend for secretary requests.",
 		}, []string{"kind"}),
 	}
-	registry.MustRegister(metrics.phaseDuration, metrics.phaseCalls, metrics.requestDuration, metrics.interactions, metrics.interactionTime, metrics.memoryRetrieval, metrics.memoryHits, metrics.traceWriteError, metrics.maintenanceError, metrics.guardrail, metrics.responseWords, metrics.answerAdjust, metrics.modelTokens)
+	metrics.proactive = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "lab_secretary_proactive_total",
+		Help: "Scheduled-skill and proactive-message events by closed event name; never message content.",
+	}, []string{"event"})
+	registry.MustRegister(metrics.phaseDuration, metrics.phaseCalls, metrics.requestDuration, metrics.interactions, metrics.interactionTime, metrics.memoryRetrieval, metrics.memoryHits, metrics.traceWriteError, metrics.maintenanceError, metrics.guardrail, metrics.responseWords, metrics.answerAdjust, metrics.modelTokens, metrics.proactive)
 	for _, category := range guardrailCategories {
 		metrics.guardrail.WithLabelValues(category)
 	}
@@ -286,4 +291,21 @@ func boundedVoiceResult(result VoiceResult) string {
 	default:
 		return "other"
 	}
+}
+
+// proactiveEvents is the closed set of proactive event names; anything else is
+// dropped so a label can never carry task, summary or message text.
+var proactiveEvents = map[string]bool{
+	"proactive_claimed": true, "proactive_queued": true, "proactive_suppressed": true, "proactive_skill_error": true,
+	"proactive_delivered": true, "proactive_send_failed": true, "proactive_send_uncertain": true, "proactive_expired": true,
+	"proactive_deferred_quiet_hours": true, "proactive_deferred_daily_limit": true, "proactive_refused_destination": true,
+	"proactive_state_error": true, "proactive_shown_openwebui": true,
+}
+
+// ObserveProactive counts one proactive event by its closed name.
+func (m *VoiceMetrics) ObserveProactive(event string) {
+	if m == nil || !proactiveEvents[event] {
+		return
+	}
+	m.proactive.WithLabelValues(event).Inc()
 }

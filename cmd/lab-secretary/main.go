@@ -164,6 +164,20 @@ func main() {
 	if err != nil {
 		log.Fatal("Telegram mode configuration failed")
 	}
+	var proactiveSender secretary.ProactiveSender
+	if mode != "disabled" {
+		proactiveSender = bot
+	}
+	proactive, err := buildProactive(os.Getenv("LAB_SECRETARY_PROACTIVE_ENABLED"), service, proactiveSender, allowed, func(event string) { log.Print(event) })
+	if err != nil {
+		log.Fatal("valid proactive messaging configuration required")
+	}
+	if proactive != nil {
+		// Same process context for Telegram webhook and disabled modes: it ends with the service.
+		go proactive.Run(ctx)
+	} else {
+		log.Print("proactive_disabled")
+	}
 	server := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	if mode != "disabled" {
 		go func() {

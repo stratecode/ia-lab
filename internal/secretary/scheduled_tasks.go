@@ -469,7 +469,9 @@ func (s *ScheduledTaskStore) ClaimDue(now time.Time, limit int) ([]ClaimedRun, e
 			dirtyRuns = true
 			continue
 		}
-		if run.Status == RunRunning || run.Status == RunPending {
+		// A pending run already has its result queued in the outbox; only a run
+		// that was executing when the process died is resumed.
+		if run.Status == RunRunning {
 			run.Attempt++
 			run.Status, run.StartedAt = RunRunning, now.UTC()
 			dirtyRuns = true
@@ -560,6 +562,29 @@ func findTask(tasks []ScheduledTask, id string) (ScheduledTask, bool) {
 		}
 	}
 	return ScheduledTask{}, false
+}
+
+// QueueRun marks a running run as handed to the outbox. It is no longer resumed
+// by ClaimDue; the outbox item owns its delivery until FinishRun.
+func (s *ScheduledTaskStore) QueueRun(runID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	runs, err := s.loadRuns()
+	if err != nil {
+		return err
+	}
+	for i := range runs {
+		if runs[i].ID != runID {
+			continue
+		}
+		if runs[i].Status.finished() {
+			return errors.New("run already finished")
+		}
+		runs[i].Status = RunPending
+		delete(s.inflight, runID)
+		return s.saveRuns(runs)
+	}
+	return errors.New("scheduled run not found")
 }
 
 // FinishRun records the final status of a run. Finishing twice is rejected so a
