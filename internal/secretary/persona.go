@@ -175,3 +175,40 @@ func noDataAnswer(seed string, now time.Time) string {
 		"De eso no tengo nada delante. ¿Lo miro en Jira o en Granola?",
 		"Ahí me falta información. ¿Miro Jira, Granola o las dos?")
 }
+
+// ProactiveOrigin says why Donna would write first. Her character allows exactly
+// two reasons; anything else is a conversation she does not start.
+type ProactiveOrigin string
+
+const (
+	// OriginScheduled is a skill the operator explicitly scheduled and confirmed.
+	OriginScheduled ProactiveOrigin = "scheduled"
+	// OriginEvent is an operator-enabled event notification (for example a Granola follow-up).
+	OriginEvent ProactiveOrigin = "event"
+)
+
+type ProactiveDecision string
+
+const (
+	DecisionSend     ProactiveDecision = "send"
+	DecisionSuppress ProactiveDecision = "suppress"
+	DecisionDefer    ProactiveDecision = "defer_quiet_hours"
+	DecisionRefuse   ProactiveDecision = "refuse"
+)
+
+// decideProactive is the rule "Donna sends only operator-enabled scheduled or
+// event notices, inside policy; she never invents urgency or starts an unrelated
+// conversation". A suppressed (no change) result is never sent, a notice outside
+// the send window waits, and any origin other than the two allowed ones is refused.
+func decideProactive(origin ProactiveOrigin, suppressed bool, now time.Time, loc *time.Location) ProactiveDecision {
+	if origin != OriginScheduled && origin != OriginEvent {
+		return DecisionRefuse
+	}
+	if suppressed {
+		return DecisionSuppress
+	}
+	if !inSendWindow(now, loc) {
+		return DecisionDefer
+	}
+	return DecisionSend
+}

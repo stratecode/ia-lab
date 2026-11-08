@@ -1,0 +1,5 @@
+---
+# Scheduled skills and proactive messages are opt-in. Leave this false until the
+# synthetic canary in docs/secretary-operation.md has passed; turning it back to
+# false stops the scheduler without deleting any scheduled state.
+lab_secretary_proactive_enabled: false

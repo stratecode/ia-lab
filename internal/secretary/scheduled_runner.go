@@ -163,7 +163,8 @@ func (p *ProactiveScheduler) execute(ctx context.Context, claim ClaimedRun) {
 		p.event("proactive_skill_error")
 		return
 	}
-	if result.Suppress || strings.TrimSpace(result.Text) == "" {
+	loc, _ := time.LoadLocation(proactiveTimezone)
+	if decideProactive(OriginScheduled, result.Suppress || strings.TrimSpace(result.Text) == "", p.now(), loc) == DecisionSuppress {
 		p.finishRun(run.ID, RunSkipped, boundedLabel(result.SuppressReason))
 		p.event("proactive_suppressed")
 		return
@@ -234,7 +235,7 @@ func (p *ProactiveScheduler) deliver(ctx context.Context) {
 			return
 		}
 		group := byOperator[operator]
-		if !inSendWindow(now, loc) {
+		if decideProactive(OriginScheduled, false, now, loc) != DecisionSend {
 			p.event("proactive_deferred_quiet_hours")
 			continue
 		}

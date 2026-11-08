@@ -1,6 +1,7 @@
 package secretary
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -126,5 +127,54 @@ func TestStatusQuestionsWithoutASourceGetAnHonestAnswer(t *testing.T) {
 	withCharacter(t, false)
 	if got := noDataAnswer("x", now); got != "No tengo información sobre eso. ¿Consulto Jira o Granola?" {
 		t.Errorf("neutral answer = %q", got)
+	}
+}
+
+func TestProactiveDecisionAllowsOnlyOperatorEnabledNoticesInsideThePolicy(t *testing.T) {
+	loc, _ := time.LoadLocation(proactiveTimezone)
+	at := func(h, m int) time.Time { return time.Date(2026, 11, 9, h, m, 0, 0, loc) }
+	cases := []struct {
+		name       string
+		origin     ProactiveOrigin
+		suppressed bool
+		now        time.Time
+		want       ProactiveDecision
+	}{
+		{"scheduled notice in the morning", OriginScheduled, false, at(8, 30), DecisionSend},
+		{"event notice at the last allowed minute", OriginEvent, false, at(20, 59), DecisionSend},
+		{"no-change result is never sent", OriginScheduled, true, at(9, 0), DecisionSuppress},
+		{"quiet hours before the window wait", OriginScheduled, false, at(7, 59), DecisionDefer},
+		{"quiet hours from 21:00 wait", OriginScheduled, false, at(21, 0), DecisionDefer},
+		{"suppression wins even in quiet hours", OriginScheduled, true, at(3, 0), DecisionSuppress},
+		{"an unrelated unsolicited message is refused", ProactiveOrigin("chitchat"), false, at(9, 0), DecisionRefuse},
+		{"an empty origin is refused", ProactiveOrigin(""), false, at(9, 0), DecisionRefuse},
+	}
+	for _, tc := range cases {
+		if got := decideProactive(tc.origin, tc.suppressed, tc.now, loc); got != tc.want {
+			t.Errorf("%s: got %s want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestProactiveRuleIsStatedConsistentlyForModelAndHumans(t *testing.T) {
+	instructions, err := os.ReadFile("../../skills/secretary-core/instructions.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(instructions)
+	if strings.Contains(text, "no envíes avisos espontáneos") {
+		t.Fatal("the old blanket rule contradicts scheduled notices")
+	}
+	for _, want := range []string{"programado y\nconfirmado", "nunca inventas urgencia"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("instructions lack %q", want)
+		}
+	}
+	doc, err := os.ReadFile("../../docs/donna-character.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(doc), "nunca envía avisos espontáneos") || !strings.Contains(string(doc), "Escribe primero solo con permiso expreso") {
+		t.Fatal("the character document must carry the same rule as the code")
 	}
 }

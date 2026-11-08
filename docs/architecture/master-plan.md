@@ -78,6 +78,18 @@ execution foundation, but is retired on the host. The sections below preserve
 its historical architecture and validation; they do not describe active host
 services. Current host truth lives in `../principal-model-operation.md`.
 
+### Scheduled skills and proactive messaging — code implemented, activation pending
+
+Fran can schedule two built-in, read-only skills (`morning-brief`, `deadline-watch`)
+through the shared conversation service. A durable scheduler claims due occurrences
+once per minute, runs one skill at a time with at most one principal-model call,
+queues the result in a private outbox, and delivers it to Telegram only in the
+operator's private chat between 08:00 and 21:00 Europe/Madrid, at most three messages
+per local day, never resending an uncertain send. Open WebUI shows queued notices on
+the next authenticated conversation. The feature is off by default
+(`LAB_SECRETARY_PROACTIVE_ENABLED=false`); see
+[secretary operation](../secretary-operation.md#tareas-programadas-y-mensajes-proactivos-implementadas-localmente-desactivadas-por-defecto).
+
 ## Positioning
 
 The platform is an `initiative-driven` execution system for governed AI-assisted work.

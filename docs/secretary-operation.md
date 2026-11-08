@@ -76,6 +76,11 @@ when its unit changes and `lab-secretary` when the instructions change.
 | `Ponme un temporizador de 10 minutos` / `/timer 10m` | Persist a one-shot timer and notify this private Telegram chat when it expires |
 | `/timers` | List this operator's active timers and remaining time |
 | `/cancel ID` | Cancel one of this operator's active timers |
+| `/skills` | List the built-in skills that can be scheduled (read-only) |
+| `/programar SKILL CADENCIA HORA` | Create a disabled draft of a scheduled skill and show what it would do; also accepts natural phrasing such as «prográmame el morning-brief cada día a las 8:30» |
+| `/confirmar-tarea ID` | Activate exactly that draft |
+| `/tareas` | List this operator's scheduled tasks, their state and next run |
+| `/pausar-tarea ID`, `/reanudar-tarea ID`, `/cancelar-tarea ID` | Pause, resume (without replaying what was missed) or permanently cancel one task |
 
 All text prompts in Open WebUI now use the same secretary router as Telegram;
 they are no longer forwarded directly to the model. Open WebUI requests are
@@ -754,6 +759,79 @@ El despliegue dedicado es `playbooks/deploy-donna-granola-events.yml`. Primero
 debe desplegarse con la clave de webhook vacía; el callback responde `503`
 hasta guardar la clave que Granola devuelve una sola vez al crear el endpoint.
 Después de guardarla en el `.env` privado, vuelve a ejecutar el playbook.
+
+## Tareas programadas y mensajes proactivos (implementadas localmente, desactivadas por defecto)
+
+Fran puede programar flujos de solo lectura que Donna ejecuta a una hora fija y
+cuyo resultado llega como un mensaje corto. Es la única forma, junto con las
+notificaciones de Granola, en que Donna escribe primero: nunca por iniciativa
+propia ni para abrir una conversación sin relación.
+
+**Skills.** Hay exactamente dos, compiladas en el binario (sin código externo,
+shell, escritura ni URLs arbitrarias): `morning-brief` (tareas abiertas de Jira y
+reuniones recientes de Granola) y `deadline-watch` (tareas vencidas o que vencen
+en dos días; calla si no hay ninguna). Cada ejecución usa como mucho una llamada
+al modelo principal, no deja entradas en el historial de ningún chat y adjunta
+hasta cinco referencias de las fuentes. Si una fuente falla, el mensaje lo dice;
+si no hay nada que contar, no se envía.
+
+**Programar.** `/programar morning-brief diaria 08:30` crea un **borrador
+desactivado** y muestra skill, recurrencia, hora, zona (`Europe/Madrid` por
+defecto, o un nombre IANA), canal, fuentes y límites. Nada se ejecuta hasta
+`/confirmar-tarea ID`. Cadencias: `diaria`, `laborables` o `una vez AAAA-MM-DD HH:MM`;
+no se admiten expresiones cron. Si falta skill, recurrencia u hora, Donna hace
+una sola pregunta y no crea nada. El destinatario y el operador salen siempre del
+canal autenticado, nunca del texto. Máximo 20 tareas por operador.
+
+**Entrega y límites.** Solo entre las 08:00 y las 21:00 (`Europe/Madrid`) y como
+mucho tres mensajes proactivos por día local; los avisos relacionados se agrupan
+en un único mensaje. Telegram recibe el mensaje únicamente en el chat privado del
+operador. Open WebUI no puede recibir mensajes con la pestaña cerrada: los avisos
+quedan en cola y aparecen, hasta tres por turno, en la siguiente conversación
+autenticada. Un aviso que lleva más de 24 horas esperando caduca en lugar de llegar
+tarde; una ocurrencia perdida porque el servicio estuvo parado más de 6 horas se
+registra como omitida y no se repite. El cambio de hora de verano/invierno
+mantiene la hora local; una hora que no existe se mueve al primer instante válido.
+
+**Estados y fallos.** Cada ejecución pasa por `pending`, `running`, `delivered`,
+`skipped`, `failed` o `uncertain`. Un fallo conocido antes de que Telegram acepte
+el mensaje se reintenta hasta tres veces. Si Telegram pudo haberlo aceptado (corte
+o tiempo de espera, error 5xx, caída del proceso a mitad del envío) el estado es
+`uncertain`: **no se reenvía solo**, y `/tareas` lo muestra para que Fran compruebe
+si llegó. Tras un reinicio, una ocurrencia reclamada se reanuda sin crear una
+segunda ejecución lógica.
+
+**Estado y retención.** Todo se guarda con permisos privados y escritura atómica
+bajo `scheduled-tasks/` y `proactive-outbox/` del directorio de estado (separados
+de `timers.json`, que sigue siendo independiente). Se conservan 30 días de
+ejecuciones y avisos entregados. Los registros y las métricas solo contienen
+nombres de evento cerrados, IDs, recuentos y estados, nunca texto de mensajes;
+métrica `lab_secretary_proactive_total{event}`.
+
+**Activación.** `LAB_SECRETARY_PROACTIVE_ENABLED` (variable de Ansible
+`lab_secretary_proactive_enabled`) es `false` por defecto. Con ella apagada no
+arranca ningún planificador, no se crea ningún estado y `/programar`, `/tareas` y
+el resto responden que las tareas programadas no están activadas (`/skills` sigue
+listando las skills). Con ella encendida, el servicio se niega a arrancar si no hay
+exactamente un operador en `LAB_TELEGRAM_ALLOWED_USERS`. Desplegar el binario con
+`deploy-secretary-runtime.yml` no cambia esta variable.
+
+**Canario previo a activarla.**
+
+1. `./scripts/test-orchestrator-go.sh`: las pruebas usan Jira y Granola sintéticos y
+   cubren cambio de hora, reinicio, envío incierto, horario, límite diario y
+   ausencia de texto en métricas y registros.
+2. Activa la variable con `ansible-playbook playbooks/deploy-secretary.yml -e lab_secretary_proactive_enabled=true`.
+3. En el chat privado de Telegram: `/programar deadline-watch una vez AAAA-MM-DD HH:MM`
+   con una hora próxima dentro del horario, `/confirmar-tarea ID`, y comprueba con
+   `/tareas` y la llegada del mensaje (o su ausencia si no hay vencimientos). Los datos
+   son los reales de Jira, solo lectura.
+4. Repite en Open WebUI y comprueba que el aviso aparece en la siguiente conversación.
+
+**Rollback.** Vuelve a ejecutar el despliegue con `-e lab_secretary_proactive_enabled=false`
+(o deja el valor por defecto): el planificador deja de arrancar y las órdenes quedan
+inertes **sin borrar** las tareas ni la cola; al reactivarlo continúan. Borrar el
+estado es una decisión aparte y explícita sobre `scheduled-tasks/` y `proactive-outbox/`.
 
 ## Propuestas de tareas Jira (implementadas localmente, pendientes de activación)
 
