@@ -178,6 +178,19 @@ func main() {
 	} else {
 		log.Print("proactive_disabled")
 	}
+	var checkinSender secretary.CheckinSender
+	if mode != "disabled" {
+		checkinSender = bot
+	}
+	checkins, err := buildCheckins(os.Getenv("LAB_SECRETARY_CHECKINS_ENABLED"), service, checkinSender, allowed)
+	if err != nil {
+		log.Fatal("valid check-ins configuration required")
+	}
+	if checkins != nil {
+		go checkins.Run(ctx)
+	} else {
+		log.Print("checkins_disabled")
+	}
 	server := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	if mode != "disabled" {
 		go func() {

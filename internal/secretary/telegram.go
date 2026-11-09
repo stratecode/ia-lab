@@ -32,12 +32,15 @@ type Voice struct {
 	FileSize int64  `json:"file_size"`
 }
 type Message struct {
-	ID    int64  `json:"message_id"`
-	From  User   `json:"from"`
-	Chat  Chat   `json:"chat"`
-	Text  string `json:"text"`
-	Voice *Voice `json:"voice,omitempty"`
-	Audio *Voice `json:"audio,omitempty"`
+	ID   int64  `json:"message_id"`
+	From User   `json:"from"`
+	Chat Chat   `json:"chat"`
+	Text string `json:"text"`
+	// ReplyTo is the message this one answers; check-in answers are tied to the
+	// question through it.
+	ReplyTo *Message `json:"reply_to_message,omitempty"`
+	Voice   *Voice   `json:"voice,omitempty"`
+	Audio   *Voice   `json:"audio,omitempty"`
 }
 
 type CallbackQuery struct {
@@ -200,6 +203,31 @@ func (b *Bot) Send(ctx context.Context, chatID int64, text string) ProactiveSend
 		return SendFailed
 	}
 	return SendUncertain
+}
+
+// SendCheckin sends one check-in question and returns Telegram's message id.
+func (b *Bot) SendCheckin(ctx context.Context, chatID int64, text string) (int64, ProactiveSendOutcome) {
+	text = truncateTextRunes(strings.TrimSpace(text), 3500)
+	if text == "" {
+		return 0, SendFailed
+	}
+	ctx, cancel := context.WithTimeout(ctx, proactiveSendTimeout)
+	defer cancel()
+	var sent struct {
+		MessageID int64 `json:"message_id"`
+	}
+	err := b.call(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": telegramHTML(text), "parse_mode": "HTML"}, &sent)
+	if err == nil {
+		return sent.MessageID, SendDelivered
+	}
+	var httpErr telegramHTTPError
+	if errors.As(err, &httpErr) && httpErr.Status >= 400 && httpErr.Status < 500 {
+		return 0, SendFailed
+	}
+	if err.Error() == "Telegram request rejected" || err.Error() == "invalid Telegram endpoint" {
+		return 0, SendFailed
+	}
+	return 0, SendUncertain
 }
 
 func (b *Bot) event(name string) {
@@ -433,6 +461,15 @@ func (b *Bot) processUpdate(ctx context.Context, update Update) (returnErr error
 		}
 		b.event("telegram_reply_sent")
 		return nil
+	}
+	if j := b.Service.Journal; j != nil && m.ReplyTo != nil && m.Chat.ID == m.From.ID {
+		if recorded, err := j.Answer(m.ReplyTo.ID, m.Text, time.Now()); err != nil {
+			b.event("journal_state_error")
+			return b.send(ctx, m.Chat.ID, "No he podido apuntar tu respuesta. Reenvíala.")
+		} else if recorded {
+			b.event("journal_answer_recorded")
+			return b.send(ctx, m.Chat.ID, "Anotado.")
+		}
 	}
 	if b.Service.JiraActions != nil {
 		principal := JiraActionPrincipal{OperatorID: m.From.ID, Channel: "telegram", ConversationID: strconv.FormatInt(m.Chat.ID, 10)}

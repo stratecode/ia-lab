@@ -87,6 +87,9 @@ type Service struct {
 	// proactive feature is explicitly enabled, which keeps every schedule
 	// command inert on a default deployment.
 	ScheduledTasks *ScheduledTaskStore
+	// Journal holds the operator's hourly check-in answers. It is nil unless the
+	// check-in feature flag is on.
+	Journal *WorkJournal
 	// ProactiveOutbox queues scheduled-skill results. Open WebUI messages wait
 	// here until the next authenticated conversation shows them.
 	ProactiveOutbox *ProactiveOutbox
@@ -373,6 +376,9 @@ func (s *Service) replyWithHistoryContext(ctx context.Context, user int64, chann
 	if answer, handled := s.scheduledCommand(user, channel, conversation, text); handled {
 		return answer, nil
 	}
+	if answer, handled := s.journalCommand(text); handled {
+		return answer, nil
+	}
 	if strings.HasPrefix(strings.ToLower(text), "/mapeo") {
 		return s.guidedMapping(ctx, user, channel, conversation, text, progress, emitInteraction)
 	}
@@ -383,7 +389,7 @@ func (s *Service) replyWithHistoryContext(ctx context.Context, user int64, chann
 			return answer, nil
 		}
 	case "/start", "/help":
-		return "Soy tu secretaria del lab. Puedes escribirme en español o enviarme una nota de voz.\n/new: conversación nueva\n/forget: borrar memoria e historial\n/status: conexiones\n/mapeo: mapear personas, proyectos, emails y aliases con confirmación\n/jira: pendientes\n/reuniones: reuniones recientes\n/resumen: tareas y reuniones\n/timer 10m: temporizador\n/timers: ver temporizadores\n/cancel ID: cancelar temporizador\n/skills: tareas programables\n/programar: programar una skill\n/tareas: ver tareas programadas", nil
+		return "Soy tu secretaria del lab. Puedes escribirme en español o enviarme una nota de voz.\n/new: conversación nueva\n/forget: borrar memoria e historial\n/status: conexiones\n/mapeo: mapear personas, proyectos, emails y aliases con confirmación\n/jira: pendientes\n/reuniones: reuniones recientes\n/resumen: tareas y reuniones\n/timer 10m: temporizador\n/timers: ver temporizadores\n/cancel ID: cancelar temporizador\n/skills: tareas programables\n/programar: programar una skill\n/tareas: ver tareas programadas\n/diario: check-ins de trabajo (estado, pausa, parar, ver)", nil
 	case "/confirmar-aviso":
 		fields := strings.Fields(text)
 		if len(fields) != 2 {

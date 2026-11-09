@@ -258,3 +258,33 @@ func TestProactiveEnabledBuildsSchedulerForTheBoundOperatorOnly(t *testing.T) {
 		t.Fatalf("tasks=%v", tasks)
 	}
 }
+
+func TestCheckinsDisabledByDefaultAndStrict(t *testing.T) {
+	for _, value := range []string{"", "false", "FALSE"} {
+		if on, err := parseCheckinsEnabled(value); err != nil || on {
+			t.Fatalf("%q must be off: %v %v", value, on, err)
+		}
+	}
+	if on, err := parseCheckinsEnabled("true"); err != nil || !on {
+		t.Fatal("true enables")
+	}
+	if _, err := parseCheckinsEnabled("yes"); err == nil {
+		t.Fatal("unknown values are a startup error")
+	}
+	svc := &secretary.Service{StateDir: t.TempDir()}
+	if scheduler, err := buildCheckins("false", svc, nil, map[int64]bool{1: true}); scheduler != nil || err != nil || svc.Journal != nil {
+		t.Fatal("disabled mode must touch nothing")
+	}
+	if _, err := buildCheckins("true", svc, nil, map[int64]bool{1: true}); err == nil {
+		t.Fatal("check-ins need Telegram")
+	}
+	if _, err := buildCheckins("true", svc, noopCheckinSender{}, map[int64]bool{1: true, 2: true}); err == nil {
+		t.Fatal("check-ins need exactly one operator")
+	}
+}
+
+type noopCheckinSender struct{}
+
+func (noopCheckinSender) SendCheckin(context.Context, int64, string) (int64, secretary.ProactiveSendOutcome) {
+	return 1, secretary.SendDelivered
+}

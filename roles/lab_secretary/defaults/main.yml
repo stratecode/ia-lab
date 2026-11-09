@@ -3,3 +3,5 @@
 # synthetic canary in docs/secretary-operation.md has passed; turning it back to
 # false stops the scheduler without deleting any scheduled state.
 lab_secretary_proactive_enabled: false
+# Hourly work check-ins (weekdays 09-19, two weeks). Opt-in; see docs/secretary-operation.md.
+lab_secretary_checkins_enabled: false

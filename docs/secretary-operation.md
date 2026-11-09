@@ -912,3 +912,32 @@ pruebas Python de la Action. El despliegue dedicado se prepara con
 fuera del repositorio, junto con las allowlists `DONNA_JIRA_ALLOWED_PROJECTS` y
 `DONNA_JIRA_ALLOWED_ISSUE_TYPES`. La importación y asignación de la Action en
 Open WebUI sigue siendo un paso explícito de administración.
+
+## Check-ins de trabajo cada hora (desactivados por defecto)
+
+Donna puede preguntarte cada hora qué estás haciendo y qué estás dejando sin
+tocar, y apuntar tus respuestas en un diario para aprender cómo trabajas durante
+dos semanas. Solo hace de **registro**: no interpreta, no resume y no actúa sobre
+Jira; aprender de él es un paso posterior que se pide a propósito.
+
+- **Activación.** `lab_secretary_checkins_enabled` (variable de Ansible) o
+  `LAB_SECRETARY_CHECKINS_ENABLED=true`. Vacío o `false` = apagado: no se abre el
+  almacén, `/diario` responde que no está activo y no arranca ningún proceso. Un valor
+  que no sea `true`/`false` es un error de arranque. Exige un único operador
+  vinculado y Telegram. Es independiente de `LAB_SECRETARY_PROACTIVE_ENABLED`.
+- **Cuándo.** De lunes a viernes, de 9:00 a 18:59 (Europe/Madrid), en los primeros 20
+  minutos de cada hora, una vez por franja, durante 14 días desde el primer check-in.
+  Una pregunta sin respuesta caduca a los 55 minutos y se apunta como «sin respuesta».
+  Tiene presupuesto propio, aparte del límite de 3 mensajes diarios de las tareas
+  programadas. El texto es fijo (3 variantes): no hay llamada al modelo.
+- **Cómo contestar.** Respondiendo (función «Responder» de Telegram) al mensaje del
+  check-in; solo esa respuesta se captura, así que un mensaje normal nunca se apunta por
+  error. `/diario texto` apunta una nota libre desde cualquier canal.
+- **Control.** `/diario` (estado), `/diario pausa 2h|30m` (máx. 24 h), `/diario parar`,
+  `/diario reanudar`, `/diario ver` (últimos 10 apuntes), `/diario olvidar confirmar`
+  (borra todo; sin `confirmar` no hace nada y borrarlo no reinicia las preguntas).
+- **Datos.** `work-journal/journal.json` en el directorio de estado (0700/0600), texto
+  literal limitado a 1000 caracteres. No sale del lab: el diario no se envía al modelo ni
+  a servicios externos. Al terminar las dos semanas Donna avisa una vez y deja de preguntar.
+- **Límite conocido.** Las notas de voz no se capturan como respuesta todavía; Slack
+  queda como segundo canal futuro (hoy Donna no tiene canal de Slack).

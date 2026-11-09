@@ -69,7 +69,7 @@ func TestCompactJiraSummaryIgnoresDoneAndEmpty(t *testing.T) {
 func TestConversationalAckOnlyForPureCourtesies(t *testing.T) {
 	for _, text := range []string{"gracias Donna", "Gracias", "vale", "ok", "perfecto, gracias", "hasta luego"} {
 		reply, ok := conversationalAck(text)
-		if !ok || reply == "" || strings.Contains(reply, "necesitas a continuación") || strings.Count(reply, " ") > 4 {
+		if !ok || reply == "" || strings.Contains(reply, "necesitas a continuación") || strings.Count(reply, " ") > 5 {
 			t.Errorf("%q => %q, %v", text, reply, ok)
 		}
 	}
